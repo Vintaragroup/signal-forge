@@ -1,0 +1,117 @@
+x-signalforge-env: &signalforge-env
+  OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+  MONGO_URI: ${MONGO_URI:-mongodb://mongo:27017/signalforge}
+  LINKEDIN_COOKIE: ${LINKEDIN_COOKIE:-}
+  X_API_KEY: ${X_API_KEY:-}
+  APIFY_TOKEN: ${APIFY_TOKEN:-}
+  SERPAPI_KEY: ${SERPAPI_KEY:-}
+  SIGNALFORGE_ENV: ${SIGNALFORGE_ENV:-local}
+  VAULT_PATH: /vault
+
+services:
+  mongo:
+    image: mongo:8.2.7
+    container_name: signalforge-mongo
+    restart: unless-stopped
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo-data:/data/db
+    env_file:
+      - .env.example
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  lead_scraper:
+    build:
+      context: ./services/lead_scraper
+    container_name: signalforge-lead-scraper
+    env_file:
+      - .env.example
+    environment: *signalforge-env
+    volumes:
+      - ./vault:/vault
+      - ./data:/data
+    depends_on:
+      mongo:
+        condition: service_healthy
+
+  lead_enricher:
+    build:
+      context: ./services/lead_enricher
+    container_name: signalforge-lead-enricher
+    env_file:
+      - .env.example
+    environment: *signalforge-env
+    volumes:
+      - ./vault:/vault
+      - ./data:/data
+    depends_on:
+      mongo:
+        condition: service_healthy
+
+  social_processor:
+    build:
+      context: ./services/social_processor
+    container_name: signalforge-social-processor
+    env_file:
+      - .env.example
+    environment: *signalforge-env
+    volumes:
+      - ./vault:/vault
+      - ./data:/data
+    depends_on:
+      mongo:
+        condition: service_healthy
+
+  post_generator:
+    build:
+      context: ./services/post_generator
+    container_name: signalforge-post-generator
+    env_file:
+      - .env.example
+    environment: *signalforge-env
+    volumes:
+      - ./vault:/vault
+      - ./data:/data
+    depends_on:
+      mongo:
+        condition: service_healthy
+
+  api:
+    build:
+      context: .
+      dockerfile: services/api/Dockerfile
+    container_name: signalforge-api
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env.example
+    environment: *signalforge-env
+    volumes:
+      - ./vault:/vault
+      - ./data:/data
+    depends_on:
+      mongo:
+        condition: service_healthy
+
+  web:
+    build:
+      context: ./services/web
+    container_name: signalforge-web
+    restart: unless-stopped
+    ports:
+      - "5174:5173"
+    environment:
+      VITE_API_BASE_URL: http://localhost:8000
+    depends_on:
+      api:
+        condition: service_started
+
+volumes:
+  mongo-data:

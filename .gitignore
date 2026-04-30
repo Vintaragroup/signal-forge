@@ -1,0 +1,56 @@
+.env
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.DS_Store
+data/raw/*
+data/processed/*
+data/exports/*
+!data/raw/.gitkeep
+!data/raw/contractor_listings_seed.json
+!data/processed/.gitkeep
+!data/exports/.gitkeep
+*.log
+node_modules/
+dist/
+.npm-cache/
+
+# Vault generated data (keep structure, ignore content)
+
+vault/reports/*
+!vault/reports/.gitkeep
+
+vault/logs/*
+!vault/logs/.gitkeep
+
+vault/messages/*
+!vault/messages/.gitkeep
+
+vault/meetings/*
+!vault/meetings/.gitkeep
+
+vault/deals/*
+!vault/deals/.gitkeep
+
+vault/followups/*
+!vault/followups/.gitkeep
+
+# Vite / frontend
+services/web/dist/
+services/web/node_modules/
+
+# Python build
+*.egg-info/
+build/
+
+# Docker
+*.pid
+*.sock
+
+# MongoDB dumps
+*.bson
+*.dump

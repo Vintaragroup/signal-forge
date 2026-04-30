@@ -1,0 +1,1 @@
+"""Shared SignalForge core contracts."""

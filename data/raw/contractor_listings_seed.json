@@ -1,0 +1,79 @@
+{
+  "source": "google_search_v1",
+  "source_mode": "local_structured_dataset",
+  "description": "Seed dataset that simulates structured contractor listings captured from local search results. It is intentionally local and requires no external APIs.",
+  "listings": [
+    {
+      "business_name": "Austin Roof Works",
+      "business_type": "roofing contractor",
+      "city": "Austin",
+      "state": "TX",
+      "website": "https://austinroofworks.example",
+      "source_url": "https://www.google.com/search?q=roofing+contractor+Austin+TX",
+      "source_rank": 1
+    },
+    {
+      "business_name": "Capital City Roofing Co",
+      "business_type": "roofing contractor",
+      "city": "Austin",
+      "state": "TX",
+      "website": "https://capitalcityroofing.example",
+      "source_url": "https://www.google.com/search?q=roofing+contractor+Austin+TX",
+      "source_rank": 2
+    },
+    {
+      "business_name": "Hill Country Roof Pros",
+      "business_type": "roofing contractor",
+      "city": "Austin",
+      "state": "TX",
+      "website": "",
+      "source_url": "https://www.google.com/search?q=roofing+contractor+Austin+TX",
+      "source_rank": 3
+    },
+    {
+      "business_name": "Lone Star Exterior Systems",
+      "business_type": "roofing contractor",
+      "city": "Austin",
+      "state": "TX",
+      "website": "https://lonestarexteriors.example",
+      "source_url": "https://www.google.com/search?q=roofing+contractor+Austin+TX",
+      "source_rank": 4
+    },
+    {
+      "business_name": "Front Range Plumbing Services",
+      "business_type": "plumbing contractor",
+      "city": "Denver",
+      "state": "CO",
+      "website": "https://frontrangeplumbing.example",
+      "source_url": "https://www.google.com/search?q=plumbing+contractor+Denver+CO",
+      "source_rank": 1
+    },
+    {
+      "business_name": "Mile High Pipe & Drain",
+      "business_type": "plumbing contractor",
+      "city": "Denver",
+      "state": "CO",
+      "website": "",
+      "source_url": "https://www.google.com/search?q=plumbing+contractor+Denver+CO",
+      "source_rank": 2
+    },
+    {
+      "business_name": "Queen City HVAC Pros",
+      "business_type": "hvac contractor",
+      "city": "Charlotte",
+      "state": "NC",
+      "website": "https://queencityhvac.example",
+      "source_url": "https://www.google.com/search?q=hvac+contractor+Charlotte+NC",
+      "source_rank": 1
+    },
+    {
+      "business_name": "Piedmont Heating & Air",
+      "business_type": "hvac contractor",
+      "city": "Charlotte",
+      "state": "NC",
+      "website": "https://piedmonthvac.example",
+      "source_url": "https://www.google.com/search?q=hvac+contractor+Charlotte+NC",
+      "source_rank": 2
+    }
+  ]
+}
