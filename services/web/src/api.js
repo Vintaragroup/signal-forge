@@ -29,6 +29,26 @@ export const api = {
       method: "POST",
       body: JSON.stringify(payload),
     }),
+  approvalRequests: (params = {}) => request(`/approval-requests?${new URLSearchParams(params)}`),
+  decideApprovalRequest: (id, payload) =>
+    request(`/approval-requests/${encodeURIComponent(id)}/decision`, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  agentTasks: (params = {}) => request(`/agent-tasks?${new URLSearchParams(params)}`),
+  createAgentTask: (payload) =>
+    request("/agent-tasks", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  runAgentTask: (id) =>
+    request(`/agent-tasks/${encodeURIComponent(id)}/run`, {
+      method: "POST",
+    }),
+  cancelAgentTask: (id) =>
+    request(`/agent-tasks/${encodeURIComponent(id)}/cancel`, {
+      method: "POST",
+    }),
   agents: () => request("/agents"),
   runAgent: (payload) =>
     request("/agents/run", {

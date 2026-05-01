@@ -6,6 +6,8 @@ import {
   FileText,
   Gauge,
   Mail,
+  ClipboardCheck,
+  ListChecks,
   RefreshCw,
   Users,
 } from "lucide-react";
@@ -14,6 +16,8 @@ import Header from "./components/Header.jsx";
 import OverviewPage from "./pages/OverviewPage.jsx";
 import PipelinePage from "./pages/PipelinePage.jsx";
 import MessagesPage from "./pages/MessagesPage.jsx";
+import ApprovalQueuePage from "./pages/ApprovalQueuePage.jsx";
+import AgentTasksPage from "./pages/AgentTasksPage.jsx";
 import AgentsPage from "./pages/AgentsPage.jsx";
 import DealsPage from "./pages/DealsPage.jsx";
 import ReportsPage from "./pages/ReportsPage.jsx";
@@ -23,6 +27,8 @@ const NAV_ITEMS = [
   { id: "overview", label: "Overview", icon: Gauge },
   { id: "pipeline", label: "Pipeline", icon: Users },
   { id: "messages", label: "Messages", icon: Mail },
+  { id: "approvals", label: "Approvals", icon: ClipboardCheck },
+  { id: "agent-tasks", label: "Agent Tasks", icon: ListChecks },
   { id: "agents", label: "Agent Console", icon: Bot },
   { id: "deals", label: "Deals", icon: Building2 },
   { id: "reports", label: "Reports", icon: FileText },
@@ -55,6 +61,8 @@ export default function App() {
   const Page = useMemo(() => {
     if (activePage === "pipeline") return PipelinePage;
     if (activePage === "messages") return MessagesPage;
+    if (activePage === "approvals") return ApprovalQueuePage;
+    if (activePage === "agent-tasks") return AgentTasksPage;
     if (activePage === "agents") return AgentsPage;
     if (activePage === "deals") return DealsPage;
     if (activePage === "reports") return ReportsPage;

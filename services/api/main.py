@@ -57,6 +57,19 @@ class AgentRunRequest(BaseModel):
     limit: int = 10
 
 
+class AgentTaskCreateRequest(BaseModel):
+    agent_name: Literal["outreach", "followup", "content", "fan_engagement"]
+    module: str
+    task_type: str = "agent_dry_run"
+    priority: int = 5
+    input_summary: dict[str, Any] = {}
+
+
+class ApprovalDecisionRequest(BaseModel):
+    decision: Literal["approve", "reject", "convert_to_draft", "needs_revision"]
+    note: str = ""
+
+
 def utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -208,6 +221,31 @@ def latest_agent_logs(limit: int = 8) -> list[dict]:
 
 def latest_agent_runs(db, limit: int = 25) -> list[dict]:
     return list(db.agent_runs.find({}).sort([("started_at", -1)]).limit(limit))
+
+
+def find_agent_task(db, task_id: str) -> dict | None:
+    query: dict[str, Any] = {"_id": task_id}
+    if ObjectId.is_valid(task_id):
+        query = {"$or": [{"_id": ObjectId(task_id)}, {"_id": task_id}]}
+    return db.agent_tasks.find_one(query)
+
+
+def validate_agent_task(agent_name: str, module: str) -> None:
+    if agent_name not in AGENT_CLASSES or AGENT_CLASSES.get(agent_name) is None:
+        raise HTTPException(status_code=400, detail="Unsupported agent.")
+    if SUPPORTED_MODULES and module not in SUPPORTED_MODULES:
+        raise HTTPException(status_code=400, detail="Unsupported module.")
+
+
+def agent_task_query(status: str, agent_name: str, module: str) -> dict:
+    query: dict[str, Any] = {}
+    if status:
+        query["status"] = status
+    if agent_name:
+        query["agent_name"] = agent_name
+    if module:
+        query["module"] = module
+    return query
 
 
 def report_file(path: Path, label: str) -> dict:
@@ -393,6 +431,119 @@ def enrich_approval_requests(records: list[dict], db) -> list[dict]:
         request["linked_message"] = linked_message
         enriched.append(request)
     return enriched
+
+
+def find_approval_request(db, approval_id: str) -> dict | None:
+    query: dict[str, Any] = {"_id": approval_id}
+    if ObjectId.is_valid(approval_id):
+        query = {"$or": [{"_id": ObjectId(approval_id)}, {"_id": approval_id}]}
+    return db.approval_requests.find_one(query)
+
+
+def approval_status_for_decision(decision: str) -> str:
+    if decision == "approve":
+        return "approved"
+    if decision == "reject":
+        return "rejected"
+    if decision == "convert_to_draft":
+        return "converted_to_draft"
+    return "needs_revision"
+
+
+def approval_record_label(record: dict | None) -> str:
+    if not record:
+        return "Unknown"
+    return clean_text(record.get("name") or record.get("recipient_name") or record.get("company") or record.get("company_name")) or "Unknown"
+
+
+def create_message_draft_from_approval(db, request: dict, note: str, decided_at: datetime) -> dict:
+    existing = db.message_drafts.find_one({"approval_request_id": str(request.get("_id"))})
+    if existing:
+        return existing
+
+    enriched = enrich_approval_requests([dict(request)], db)[0]
+    linked_contact = enriched.get("linked_contact")
+    linked_lead = enriched.get("linked_lead")
+    target_type = clean_text(request.get("target_type")) or ("contact" if linked_contact else "lead" if linked_lead else "approval")
+    target_record = linked_contact or linked_lead or {}
+    recipient = approval_record_label(target_record) if target_record else clean_text(request.get("target")) or "Approval Request"
+    target_id = clean_text(target_record.get("_id") if target_record else request.get("linked_target_id") or request.get("target"))
+    target_key = clean_text(target_record.get("contact_key") or target_record.get("company_slug") if target_record else request.get("target"))
+    draft_key = slugify(f"approval-{request.get('_id')}-{recipient}")
+    reasoning = clean_text(request.get("reason_for_review") or request.get("summary"))
+    body_parts = [
+        "Converted from approval request for human review.",
+        f"Request type: {clean_text(request.get('request_type')) or 'approval_request'}",
+    ]
+    if reasoning:
+        body_parts.append(f"Reasoning summary: {reasoning}")
+    if note:
+        body_parts.append(f"Operator note: {note}")
+    body_parts.append("No message has been sent by SignalForge.")
+    draft = {
+        "draft_key": draft_key,
+        "module": clean_text(request.get("module")),
+        "target_type": target_type,
+        "target_id": target_id,
+        "target_key": target_key,
+        "recipient_name": recipient,
+        "company": clean_text(target_record.get("company") or target_record.get("company_name") if target_record else request.get("target")),
+        "subject_line": f"Review converted approval for {recipient}",
+        "message_body": "\n\n".join(body_parts),
+        "review_status": "needs_review",
+        "send_status": "not_sent",
+        "source": "approval_queue",
+        "approval_request_id": str(request.get("_id")),
+        "generated_by_agent": clean_text(request.get("agent_name")),
+        "agent_run_id": clean_text(request.get("run_id")),
+        "agent_step_name": clean_text(request.get("agent_step_name")),
+        "gpt_confidence": request.get("gpt_confidence"),
+        "gpt_reasoning_summary": reasoning,
+        "created_at": decided_at,
+        "updated_at": decided_at,
+    }
+    db.message_drafts.insert_one(draft)
+    return draft
+
+
+def create_artifact_draft_from_approval(db, request: dict, note: str, decided_at: datetime) -> dict:
+    existing = db.agent_artifacts.find_one({"approval_request_id": str(request.get("_id")), "artifact_type": "approval_queue_draft"})
+    if existing:
+        return existing
+    artifact = {
+        "run_id": clean_text(request.get("run_id")),
+        "agent_name": clean_text(request.get("agent_name")),
+        "module": clean_text(request.get("module")),
+        "artifact_type": "approval_queue_draft",
+        "label": f"Converted approval draft: {clean_text(request.get('title')) or clean_text(request.get('request_type'))}",
+        "approval_request_id": str(request.get("_id")),
+        "review_status": "needs_review",
+        "source": "approval_queue",
+        "content": {
+            "request_type": request.get("request_type"),
+            "title": request.get("title"),
+            "summary": request.get("summary"),
+            "reasoning_summary": request.get("reason_for_review") or request.get("summary"),
+            "operator_note": note,
+            "gpt_confidence": request.get("gpt_confidence"),
+            "generated_by_agent": request.get("generated_by_agent") or request.get("agent_name"),
+            "agent_run_id": request.get("agent_run_id") or request.get("run_id"),
+            "agent_step_name": request.get("agent_step_name"),
+            "simulation_only": True,
+            "outbound_actions_taken": 0,
+        },
+        "created_at": decided_at,
+    }
+    db.agent_artifacts.insert_one(artifact)
+    return artifact
+
+
+def convert_approval_to_draft(db, request: dict, note: str, decided_at: datetime) -> tuple[str, dict]:
+    request_type = clean_text(request.get("request_type"))
+    target_type = clean_text(request.get("target_type"))
+    if request_type == "gpt_message_generation_review" or target_type in {"contact", "lead", "message"}:
+        return "message_draft", create_message_draft_from_approval(db, request, note, decided_at)
+    return "artifact_draft", create_artifact_draft_from_approval(db, request, note, decided_at)
 
 
 def append_message_review_log(draft: dict, decision: str, note: str, reviewed_at: datetime) -> None:
@@ -845,6 +996,250 @@ def review_message(message_id: str, payload: MessageReviewRequest) -> dict:
         append_message_review_log(draft, payload.decision, payload.note, reviewed_at)
         updated = db.message_drafts.find_one({"_id": draft["_id"]})
         return {"item": serialize(updated), "message": "Review saved. No message sent."}
+    finally:
+        client.close()
+
+
+@app.get("/approval-requests")
+def approval_requests(
+    status: str = "open",
+    request_type: str = "",
+    agent_name: str = "",
+    module: str = "",
+    limit: int = Query(100, ge=1, le=500),
+) -> dict:
+    client = get_client()
+    try:
+        db = get_database(client)
+        query: dict[str, Any] = {}
+        if status:
+            query["status"] = status
+        if request_type:
+            query["request_type"] = request_type
+        if agent_name:
+            query["agent_name"] = agent_name
+        if module:
+            query["module"] = module
+        records = list(db.approval_requests.find(query).sort([("created_at", -1)]).limit(limit))
+        records = enrich_approval_requests(records, db)
+        return {"items": serialize(records), "simulation_only": True}
+    finally:
+        client.close()
+
+
+@app.get("/agent-tasks")
+def agent_tasks(
+    status: str = "",
+    agent_name: str = "",
+    module: str = "",
+    limit: int = Query(100, ge=1, le=500),
+) -> dict:
+    client = get_client()
+    try:
+        db = get_database(client)
+        records = list(
+            db.agent_tasks.find(agent_task_query(status, agent_name, module))
+            .sort([("priority", -1), ("created_at", -1)])
+            .limit(limit)
+        )
+        return {"items": serialize(records), "simulation_only": True}
+    finally:
+        client.close()
+
+
+@app.post("/agent-tasks")
+def create_agent_task(payload: AgentTaskCreateRequest) -> dict:
+    validate_agent_task(payload.agent_name, payload.module)
+    now = utc_now()
+    task = {
+        "agent_name": payload.agent_name,
+        "module": payload.module,
+        "task_type": clean_text(payload.task_type) or "agent_dry_run",
+        "status": "queued",
+        "priority": payload.priority,
+        "input_summary": {
+            **(payload.input_summary or {}),
+            "dry_run": True,
+            "simulation_only": True,
+        },
+        "created_at": now,
+        "started_at": None,
+        "completed_at": None,
+        "linked_run_id": None,
+        "outbound_actions_taken": 0,
+        "simulation_only": True,
+    }
+    client = get_client()
+    try:
+        db = get_database(client)
+        result = db.agent_tasks.insert_one(task)
+        created = db.agent_tasks.find_one({"_id": result.inserted_id})
+        return serialize({"item": created, "message": "Agent task queued. No outbound action taken.", "simulation_only": True})
+    finally:
+        client.close()
+
+
+@app.post("/agent-tasks/{task_id}/run")
+def run_agent_task(task_id: str) -> dict:
+    client = get_client()
+    started_at = utc_now()
+    try:
+        db = get_database(client)
+        task = find_agent_task(db, task_id)
+        if not task:
+            raise HTTPException(status_code=404, detail="Agent task not found.")
+        if task.get("status") in {"running", "completed", "cancelled"}:
+            raise HTTPException(status_code=400, detail="Agent task cannot be run from its current status.")
+
+        agent_name = clean_text(task.get("agent_name"))
+        module = clean_text(task.get("module"))
+        validate_agent_task(agent_name, module)
+        db.agent_tasks.update_one(
+            {"_id": task["_id"]},
+            {"$set": {"status": "running", "started_at": started_at, "updated_at": started_at, "outbound_actions_taken": 0}},
+        )
+
+        try:
+            agent_cls = AGENT_CLASSES[agent_name]
+            limit = int((task.get("input_summary") or {}).get("limit") or 10)
+            agent = agent_cls(
+                module=module,
+                dry_run=True,
+                mongo_uri=mongo_uri(),
+                vault_path=vault_path(),
+                limit=max(1, min(limit, 50)),
+            )
+            result = agent.run()
+            run = db.agent_runs.find_one({"run_id": result.get("run_id")})
+            run_status = clean_text(run.get("status") if run else "completed") or "completed"
+            final_status = "waiting_for_approval" if run_status == "waiting_for_approval" else "completed"
+            completed_at = utc_now()
+            update = {
+                "status": final_status,
+                "completed_at": completed_at,
+                "updated_at": completed_at,
+                "linked_run_id": result.get("run_id"),
+                "output_summary": {
+                    "agent_run_status": run_status,
+                    "planned_action_count": len(result.get("actions") or []),
+                    "log_path": result.get("log_path"),
+                    "simulation_only": True,
+                    "outbound_actions_taken": 0,
+                },
+                "error": None,
+                "outbound_actions_taken": 0,
+            }
+            db.agent_tasks.update_one({"_id": task["_id"]}, {"$set": update})
+            updated = db.agent_tasks.find_one({"_id": task["_id"]})
+            return serialize(
+                {
+                    "item": updated,
+                    "run": run,
+                    "result": result,
+                    "message": "Agent task dry-run completed. No outbound action taken.",
+                    "simulation_only": True,
+                }
+            )
+        except Exception as exc:
+            failed_at = utc_now()
+            db.agent_tasks.update_one(
+                {"_id": task["_id"]},
+                {
+                    "$set": {
+                        "status": "failed",
+                        "completed_at": failed_at,
+                        "updated_at": failed_at,
+                        "error": f"{exc.__class__.__name__}: {exc}",
+                        "outbound_actions_taken": 0,
+                    }
+                },
+            )
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+    finally:
+        client.close()
+
+
+@app.post("/agent-tasks/{task_id}/cancel")
+def cancel_agent_task(task_id: str) -> dict:
+    client = get_client()
+    cancelled_at = utc_now()
+    try:
+        db = get_database(client)
+        task = find_agent_task(db, task_id)
+        if not task:
+            raise HTTPException(status_code=404, detail="Agent task not found.")
+        if task.get("status") in {"completed", "cancelled", "running"}:
+            raise HTTPException(status_code=400, detail="Agent task cannot be cancelled from its current status.")
+        db.agent_tasks.update_one(
+            {"_id": task["_id"]},
+            {
+                "$set": {
+                    "status": "cancelled",
+                    "completed_at": cancelled_at,
+                    "updated_at": cancelled_at,
+                    "outbound_actions_taken": 0,
+                    "simulation_only": True,
+                }
+            },
+        )
+        updated = db.agent_tasks.find_one({"_id": task["_id"]})
+        return serialize({"item": updated, "message": "Agent task cancelled. No outbound action taken.", "simulation_only": True})
+    finally:
+        client.close()
+
+
+@app.post("/approval-requests/{approval_id}/decision")
+def decide_approval_request(approval_id: str, payload: ApprovalDecisionRequest) -> dict:
+    client = get_client()
+    decided_at = utc_now()
+    try:
+        db = get_database(client)
+        request = find_approval_request(db, approval_id)
+        if not request:
+            raise HTTPException(status_code=404, detail="Approval request not found.")
+
+        created_record_type = None
+        created_record = None
+        if payload.decision == "convert_to_draft":
+            created_record_type, created_record = convert_approval_to_draft(db, request, payload.note, decided_at)
+
+        event = {
+            "decision": payload.decision,
+            "status": approval_status_for_decision(payload.decision),
+            "note": payload.note,
+            "decided_at": decided_at,
+            "source": "web_dashboard",
+            "created_record_type": created_record_type,
+            "created_record_id": str(created_record.get("_id")) if created_record and created_record.get("_id") else None,
+            "simulation_only": True,
+        }
+        update = {
+            "status": approval_status_for_decision(payload.decision),
+            "decision": payload.decision,
+            "operator_note": payload.note,
+            "decided_at": decided_at,
+            "resolved_at": decided_at,
+            "updated_at": decided_at,
+            "created_record_type": created_record_type,
+            "created_record_id": str(created_record.get("_id")) if created_record and created_record.get("_id") else None,
+            "outbound_actions_taken": 0,
+            "simulation_only": True,
+        }
+        db.approval_requests.update_one(
+            {"_id": request["_id"]},
+            {"$set": update, "$push": {"decision_events": event}},
+        )
+        updated = db.approval_requests.find_one({"_id": request["_id"]})
+        enriched = enrich_approval_requests([updated], db)[0] if updated else None
+        return serialize(
+            {
+                "item": enriched,
+                "created_record_type": created_record_type,
+                "created_record": created_record,
+                "message": "Approval decision saved. No outbound action taken.",
+                "simulation_only": True,
+            }
+        )
     finally:
         client.close()
 

@@ -83,10 +83,11 @@ function Timeline({ steps }) {
 }
 
 export default function AgentsPage() {
+  const initialRunId = () => new URLSearchParams(window.location.hash.split("?")[1] || "").get("run") || "";
   const [agents, setAgents] = useState([]);
   const [modules, setModules] = useState([]);
   const [runs, setRuns] = useState([]);
-  const [selectedRunId, setSelectedRunId] = useState("");
+  const [selectedRunId, setSelectedRunId] = useState(initialRunId);
   const [selectedRun, setSelectedRun] = useState(null);
   const [running, setRunning] = useState(false);
   const [notice, setNotice] = useState("");
@@ -109,7 +110,7 @@ export default function AgentsPage() {
   }
 
   useEffect(() => {
-    loadRuns();
+    loadRuns(initialRunId());
   }, []);
 
   useEffect(() => {
@@ -348,6 +349,12 @@ export default function AgentsPage() {
                         <div className="md:col-span-3"><span className="font-medium text-slate-800">Message:</span> {recordLabel(item.linked_message)}</div>
                       </div>
                     ) : null}
+                    <a
+                      href={`#approvals?request=${encodeURIComponent(item._id)}`}
+                      className="mt-3 inline-flex h-8 items-center rounded-lg border border-slate-200 px-3 text-xs font-medium text-slate-700 transition hover:border-blue-200 hover:text-blue-700"
+                    >
+                      Open in Approval Queue
+                    </a>
                   </div>
                 ))}
                 {!approvals.length ? <div className="text-sm text-slate-500">No approval requests were created for this run.</div> : null}

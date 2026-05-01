@@ -62,11 +62,41 @@ Dashboard pages:
 - Overview
 - Pipeline / CRM
 - Messages
+- Approvals
+- Agent Tasks
 - Agents
 - Deals
 - Reports
 
-Message review actions in the dashboard update MongoDB and append vault logs. They do not send messages. Agent actions are dry-run only.
+Message review and approval queue actions in the dashboard update MongoDB and append local records only. They do not send messages, publish content, post comments, schedule work, or call external platforms. Agent actions are dry-run only.
+
+## Approval Queue v1
+
+The dashboard Approval Queue gives operators one place to review GPT-created approval requests and other agent review items. Operators can approve, reject, mark needs revision, or convert an approval request into a review-only draft.
+
+Approval decisions only control internal workflow state:
+
+- `approve` marks the request approved.
+- `reject` marks the request rejected.
+- `needs_revision` stores the operator note and marks the request for revision.
+- `convert_to_draft` creates either a `message_draft` or an `approval_queue_draft` artifact with `review_status=needs_review` when applicable.
+
+No approval queue decision sends messages, posts content, scrapes data, schedules posts, creates calendar events, or calls external CRM/platform APIs.
+
+## Agent Task Queue v1
+
+The dashboard Agent Tasks page lets operators create, queue, run, and cancel agent tasks without using CLI dry-runs directly. Tasks are stored in MongoDB in the `agent_tasks` collection and link to the resulting Agent Console run when executed.
+
+Supported agents:
+
+- `outreach`
+- `followup`
+- `content`
+- `fan_engagement`
+
+Task runs use the same dry-run/GPT-safe agent behavior as the Agent Console. A task can become `waiting_for_approval` when the linked agent run creates open approval requests. The task page links to the Agent Console run and to the Approval Queue for follow-up review.
+
+Running a task does not send messages, publish content, post comments, scrape platforms, schedule posts, create calendar events, or call external CRM/platform APIs.
 
 ## System Overview
 

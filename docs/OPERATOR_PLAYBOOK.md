@@ -322,7 +322,44 @@ Agent Console actions remain simulation-only. They do not send email, SMS, DMs, 
 
 If GPT is enabled, supported agents may add GPT steps, artifacts, drafts, and approval requests to the same run timeline. Low-confidence GPT output creates an approval request instead of being treated as ready. All GPT-generated drafts remain `send_status=not_sent` until a human sends outside SignalForge and logs that manual action.
 
-## 18. Use Dashboard Detail Timelines
+## 18. Queue Agent Tasks
+
+Use the dashboard Agent Tasks page to create and run agent work from the browser instead of only using CLI dry-runs. Each task is stored in the `agent_tasks` collection with agent, module, task type, status, priority, input summary, timestamps, and linked Agent Console run id.
+
+Supported agents:
+
+- `outreach`
+- `followup`
+- `content`
+- `fan_engagement`
+
+Task statuses:
+
+- `queued`
+- `running`
+- `waiting_for_approval`
+- `completed`
+- `failed`
+- `cancelled`
+
+Run only starts the current dry-run/GPT-safe agent behavior. Cancel only changes internal queue state before the task is completed. Agent Tasks do not send email, SMS, DMs, comments, or social posts. They do not scrape platforms, schedule posts, create calendar events, issue invoices, or call external CRM/platform APIs.
+
+When a task links to an Agent Console run, use that run to inspect steps, artifacts, related records, warnings, and approvals. If the task is `waiting_for_approval`, use the Approval Queue to resolve the internal review items.
+
+## 19. Review The Approval Queue
+
+Use the dashboard Approval Queue to review GPT-created approval requests and agent review items from a single view. The queue shows request type, agent, module, confidence, reasoning summary, linked contact/lead/message, created time, decision buttons, and operator notes.
+
+Supported decisions:
+
+- `approve`: marks the approval request approved.
+- `reject`: marks the request rejected.
+- `needs_revision`: marks the request `needs_revision` and stores the operator note.
+- `convert_to_draft`: creates a review-only `message_draft` or `approval_queue_draft` artifact when the request has enough local context.
+
+Approval Queue decisions are internal workflow state only. They do not send email, SMS, DMs, comments, or social posts. They do not scrape platforms, schedule posts, create calendar events, issue invoices, or call external CRM/platform APIs.
+
+## 20. Use Dashboard Detail Timelines
 
 The dashboard Messages page supports full message review from the browser:
 
@@ -334,7 +371,7 @@ The dashboard Messages page supports full message review from the browser:
 
 The Pipeline / CRM detail drawer shows linked lifecycle activity for contacts and leads, including import, scoring, drafting, approval, manual send logging, response logging, booked-call signals, and deal outcomes.
 
-## 19. Stop The Stack
+## 21. Stop The Stack
 
 ```bash
 make down
