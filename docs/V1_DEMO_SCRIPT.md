@@ -4,6 +4,22 @@ This demo shows SignalForge from contact import to closed-won revenue reporting.
 
 Estimated time: 10-15 minutes.
 
+## Fast Dashboard Demo Mode
+
+For a clean no-prep walkthrough, open the dashboard and click `Start Demo` on Overview, or open the Demo Mode page.
+
+Demo Mode uses browser-seeded synthetic contacts, leads, drafts, responses, and deals. Every record is labeled Demo Mode and the dashboard shows `Demo Mode - No real messages will be sent`.
+
+Guided flow:
+
+1. Run Outreach
+2. Review Drafts
+3. Approve Message
+4. Simulate Response
+5. Show Deal Outcome
+
+Demo Mode does not write to MongoDB, run agents, call GPT, send messages, create calendar events, issue invoices, or call CRM/platform APIs. Use the steps below when you want to demo the full local data pipeline.
+
 ## 1. Start The Stack
 
 ```bash

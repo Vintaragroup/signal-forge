@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { ArrowRight, Bot, Building2, DollarSign, Handshake, Mail, MessageSquare, Target, Users } from "lucide-react";
+import { ArrowRight, Bot, Building2, Clapperboard, DollarSign, Handshake, Mail, MessageSquare, Target, Users } from "lucide-react";
 import { api } from "../api.js";
 import StatCard from "../components/StatCard.jsx";
 import PipelineFunnel from "../components/PipelineFunnel.jsx";
@@ -41,9 +41,29 @@ export default function OverviewPage() {
   }
 
   const kpis = overview?.kpis || {};
+  const demoMode = api.demoEnabled();
+
+  async function startDemo() {
+    await api.startDemo();
+    window.location.hash = "demo";
+  }
 
   return (
     <div className="space-y-5">
+      <section className={demoMode ? "rounded-lg border border-blue-200 bg-blue-50 p-5 shadow-sm" : "rounded-lg border border-slate-200 bg-white p-5 shadow-sm"}>
+        <div className="flex flex-wrap items-start justify-between gap-4">
+          <div>
+            <div className="text-xs font-semibold uppercase text-slate-400">Guided demo</div>
+            <h2 className="mt-1 text-xl font-semibold text-slate-950">Demo Mode - No real messages will be sent</h2>
+            <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-600">Start a clean walkthrough with seeded synthetic contacts, leads, drafts, responses, and deals. Demo records stay separate from live MongoDB data in your browser.</p>
+          </div>
+          <button type="button" onClick={startDemo} className="inline-flex h-10 items-center gap-2 rounded-lg bg-blue-600 px-4 text-sm font-semibold text-white transition hover:bg-blue-700">
+            <Clapperboard className="h-4 w-4" />
+            Start Demo
+          </button>
+        </div>
+      </section>
+
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
         {kpiConfig.map(([key, label, Icon, tone]) => (
           <StatCard
@@ -62,7 +82,7 @@ export default function OverviewPage() {
         <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
           <div className="mb-4 flex items-center justify-between">
             <h2 className="text-sm font-semibold text-slate-950">Responses By Status</h2>
-            <StatusBadge value="live data" />
+            <StatusBadge value={demoMode ? "Demo Mode" : "live data"} />
           </div>
           <div className="grid gap-3 sm:grid-cols-2">
             {Object.entries(overview?.responses_by_status || {}).map(([status, count]) => (

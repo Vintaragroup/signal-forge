@@ -297,6 +297,7 @@ export default function MessagesPage() {
         <div>
           <span className="font-medium text-slate-900">{row.subject_line || "-"}</span>
           <div className="mt-1 flex flex-wrap gap-1.5">
+            {row.is_demo ? <StatusBadge value="Demo Mode" /> : null}
             {row.source === "gpt" ? <StatusBadge value="source=gpt" /> : null}
             {row.agent_run_id ? <span className="text-xs text-slate-500">run {shortId(row.agent_run_id)}</span> : null}
           </div>

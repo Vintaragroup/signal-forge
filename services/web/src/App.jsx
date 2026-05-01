@@ -1,8 +1,10 @@
 import { useEffect, useMemo, useState } from "react";
 import {
+  Activity,
   BarChart3,
   Bot,
   Building2,
+  Clapperboard,
   FileText,
   Gauge,
   Mail,
@@ -15,17 +17,20 @@ import {
 import Sidebar from "./components/Sidebar.jsx";
 import Header from "./components/Header.jsx";
 import OverviewPage from "./pages/OverviewPage.jsx";
+import DemoModePage from "./pages/DemoModePage.jsx";
 import WorkflowPage from "./pages/WorkflowPage.jsx";
 import PipelinePage from "./pages/PipelinePage.jsx";
 import MessagesPage from "./pages/MessagesPage.jsx";
 import ApprovalQueuePage from "./pages/ApprovalQueuePage.jsx";
 import AgentTasksPage from "./pages/AgentTasksPage.jsx";
 import AgentsPage from "./pages/AgentsPage.jsx";
+import GptDiagnosticsPage from "./pages/GptDiagnosticsPage.jsx";
 import DealsPage from "./pages/DealsPage.jsx";
 import ReportsPage from "./pages/ReportsPage.jsx";
 import { api } from "./api.js";
 
 const NAV_ITEMS = [
+  { id: "demo", label: "Demo Mode", icon: Clapperboard },
   { id: "workflow", label: "Workflow", icon: Workflow },
   { id: "overview", label: "Overview", icon: Gauge },
   { id: "pipeline", label: "Pipeline", icon: Users },
@@ -33,6 +38,7 @@ const NAV_ITEMS = [
   { id: "approvals", label: "Approvals", icon: ClipboardCheck },
   { id: "agent-tasks", label: "Agent Tasks", icon: ListChecks },
   { id: "agents", label: "Agent Console", icon: Bot },
+  { id: "gpt-diagnostics", label: "GPT Diagnostics", icon: Activity },
   { id: "deals", label: "Deals", icon: Building2 },
   { id: "reports", label: "Reports", icon: FileText },
 ];
@@ -42,6 +48,7 @@ export default function App() {
   const [activePage, setActivePage] = useState(initialPage);
   const [health, setHealth] = useState(null);
   const [gptRuntime, setGptRuntime] = useState(null);
+  const [demoMode, setDemoMode] = useState(api.demoEnabled());
   const [lastRefresh, setLastRefresh] = useState(new Date());
 
   async function refreshHealth() {
@@ -61,13 +68,33 @@ export default function App() {
     return () => window.removeEventListener("hashchange", syncHash);
   }, []);
 
+  useEffect(() => {
+    const syncDemo = () => setDemoMode(api.demoEnabled());
+    window.addEventListener("signalforge-demo-change", syncDemo);
+    return () => window.removeEventListener("signalforge-demo-change", syncDemo);
+  }, []);
+
+  async function toggleDemoMode() {
+    if (api.demoEnabled()) {
+      await api.stopDemo();
+      setDemoMode(false);
+      window.location.hash = "overview";
+    } else {
+      await api.startDemo();
+      setDemoMode(true);
+      window.location.hash = "demo";
+    }
+  }
+
   const Page = useMemo(() => {
+    if (activePage === "demo") return DemoModePage;
     if (activePage === "workflow") return WorkflowPage;
     if (activePage === "pipeline") return PipelinePage;
     if (activePage === "messages") return MessagesPage;
     if (activePage === "approvals") return ApprovalQueuePage;
     if (activePage === "agent-tasks") return AgentTasksPage;
     if (activePage === "agents") return AgentsPage;
+    if (activePage === "gpt-diagnostics") return GptDiagnosticsPage;
     if (activePage === "deals") return DealsPage;
     if (activePage === "reports") return ReportsPage;
     return OverviewPage;
@@ -92,6 +119,8 @@ export default function App() {
             health={health}
             gptRuntime={gptRuntime}
             lastRefresh={lastRefresh}
+            demoMode={demoMode}
+            onToggleDemo={toggleDemoMode}
             action={
               <button
                 type="button"
@@ -103,6 +132,7 @@ export default function App() {
               </button>
             }
           />
+          {demoMode ? <div className="border-b border-blue-200 bg-blue-50 px-5 py-2 text-center text-sm font-semibold text-blue-900 lg:px-8">Demo Mode - No real messages will be sent</div> : null}
           <div className="mx-auto max-w-[1500px] px-5 py-5 lg:px-8">
             <Page />
           </div>

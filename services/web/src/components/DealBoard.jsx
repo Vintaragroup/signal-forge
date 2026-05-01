@@ -21,7 +21,10 @@ export default function DealBoard({ deals = [] }) {
                   <div className="mt-1 text-xs text-slate-500">{deal.person || deal.module || "-"}</div>
                   <div className="mt-3 flex items-center justify-between gap-2">
                     <span className="text-sm font-semibold text-slate-900">${Number(deal.deal_value || 0).toLocaleString()}</span>
-                    <StatusBadge value={deal.module || "unknown"} />
+                    <div className="flex flex-wrap justify-end gap-1.5">
+                      {deal.is_demo ? <StatusBadge value="Demo Mode" /> : null}
+                      <StatusBadge value={deal.module || "unknown"} />
+                    </div>
                   </div>
                 </article>
               ))}

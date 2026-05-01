@@ -39,6 +39,7 @@ Legend:
 | Simulation-only agents | Yes | Yes | Yes | Yes | Yes | No | CLI and Agent Console run dry-run agents and record observed runs. |
 | Agent task queue | Yes | No | Yes | Yes | Yes | No | Agents are now run from the dashboard via Agent Tasks. Dashboard Agent Tasks creates queued `agent_tasks`, runs current dry-run/GPT-safe agents, links to Agent Console runs, and supports internal cancellation. |
 | GPT/OpenAI agent runtime | Yes | Yes | Yes | Yes | Yes | No | Implemented for outreach, follow-up, content, and fan engagement planning behind `GPT_AGENT_ENABLED=false` by default. Requires `OPENAI_API_KEY`; all GPT output is review-only and records artifacts, drafts, or approval requests. |
+| GPT diagnostics | Yes | Yes | Partly | Yes | Yes | No | Dashboard GPT Diagnostics, `GET /diagnostics/gpt`, and `scripts/gpt_diagnostics.py` report safe runtime status, recent sanitized GPT steps, and GPT-related system approval errors without returning secrets or raw prompts. Optional `--live-test` sends only `Return the word OK.` |
 | Social signal processing runtime | No | Partly | Yes | Yes | Partly | Partly | Placeholder service checks vault/Mongo; real ingestion/classification is not implemented. |
 | Post/content generation runtime | No | Partly | Yes | Yes | Partly | Partly | Placeholder service checks vault/Mongo; real content generation is not implemented. |
 | Backup/export guidance | No | Yes | No | Yes | Yes | No | Documented in `docs/V1_BACKUP_AND_EXPORT.md`; no Makefile wrapper yet. |
@@ -46,4 +47,4 @@ Legend:
 
 ## Safety Boundary
 
-SignalForge v1 does not send messages, publish content, create calendar events, issue invoices, call CRM APIs, run GPT-powered agents by default, or use external enrichment/scraping APIs. The GPT runtime is implemented but gated unless `GPT_AGENT_ENABLED=true` and `OPENAI_API_KEY` are configured. The dashboard and CLI may update local MongoDB records, create review-only GPT artifacts/drafts/approval requests, and append local vault logs only.
+SignalForge v1 does not send messages, publish content, create calendar events, issue invoices, call CRM APIs, run GPT-powered agents by default, or use external enrichment/scraping APIs. The GPT runtime is implemented but gated unless `GPT_AGENT_ENABLED=true` and `OPENAI_API_KEY` are configured. GPT diagnostics never return API keys or raw prompts; the optional live diagnostics test makes only a minimal OpenAI `OK` request when explicitly invoked. The dashboard and CLI may update local MongoDB records, create review-only GPT artifacts/drafts/approval requests, write sanitized diagnostics steps, and append local vault logs only.

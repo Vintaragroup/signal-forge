@@ -41,6 +41,24 @@ OPENAI_MODEL=gpt-4o-mini
 
 GPT cannot send emails, SMS, DMs, comments, social posts, calendar invites, invoices, CRM updates, enrichment calls, scraping jobs, or publishing/scheduling actions. Every GPT output requires human review before any real-world action happens outside SignalForge.
 
+## GPT Diagnostics v1
+
+Operators can inspect safe GPT runtime diagnostics from the dashboard GPT Diagnostics page or from the CLI:
+
+```bash
+docker compose run --rm api python scripts/gpt_diagnostics.py
+```
+
+Diagnostics show whether GPT is enabled, the configured model, whether an API key is present, whether the local GPT client module is available, the last recorded GPT success/error, recent GPT agent steps, and recent GPT-related system approval errors. The API endpoint is `GET /diagnostics/gpt`.
+
+The diagnostics endpoint and CLI never print or return `OPENAI_API_KEY`, never expose raw prompts, and never send messages or modify agent behavior. A live OpenAI connectivity check only runs when explicitly requested:
+
+```bash
+docker compose run --rm api python scripts/gpt_diagnostics.py --live-test
+```
+
+The live test sends only `Return the word OK.` and records a sanitized `gpt_diagnostic_live_test` step in MongoDB.
+
 ## Web Dashboard v1
 
 SignalForge now includes a local React dashboard for operating the system visually.
@@ -59,16 +77,26 @@ The dashboard uses the FastAPI service at `http://localhost:8000`, reads existin
 
 Dashboard pages:
 
+- Demo Mode
 - Overview
 - Pipeline / CRM
 - Messages
 - Approvals
 - Agent Tasks
 - Agents
+- GPT Diagnostics
 - Deals
 - Reports
 
 Message review and approval queue actions in the dashboard update MongoDB and append local records only. They do not send messages, publish content, post comments, schedule work, or call external platforms. Agent actions are dry-run only.
+
+## Demo Mode v1
+
+Demo Mode provides a clean browser-only walkthrough for first-time operators. Start it from the Overview page or the Demo Mode navigation item.
+
+Demo Mode preloads synthetic contacts, leads, drafts, responses, and deals in browser storage. It labels records as Demo Mode, shows the banner `Demo Mode - No real messages will be sent`, and walks through Run Outreach, Review Drafts, Approve Message, Simulate Response, and Show Deal Outcome.
+
+Demo Mode does not write to MongoDB, does not run agents, does not call GPT, and does not send or schedule anything. Exit Demo returns the dashboard to live local data.
 
 ## Approval Queue v1
 

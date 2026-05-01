@@ -322,6 +322,24 @@ Agent Console actions remain simulation-only. They do not send email, SMS, DMs, 
 
 If GPT is enabled, supported agents may add GPT steps, artifacts, drafts, and approval requests to the same run timeline. Low-confidence GPT output creates an approval request instead of being treated as ready. All GPT-generated drafts remain `send_status=not_sent` until a human sends outside SignalForge and logs that manual action.
 
+### GPT Diagnostics
+
+Use the dashboard GPT Diagnostics page or the CLI to verify GPT runtime configuration without exposing secrets:
+
+```bash
+docker compose run --rm api python scripts/gpt_diagnostics.py
+```
+
+Diagnostics report whether GPT is enabled, the configured model, whether an API key is present, whether the local GPT client module is available, recent GPT agent steps, recent GPT-related system approval errors, the last recorded GPT success, and the last recorded GPT error. The API endpoint is `GET /diagnostics/gpt`.
+
+The diagnostics view never returns `OPENAI_API_KEY`, does not expose raw prompts, does not send messages, and does not change agent behavior. To run the optional live connectivity check, use:
+
+```bash
+docker compose run --rm api python scripts/gpt_diagnostics.py --live-test
+```
+
+The live test sends only `Return the word OK.` to OpenAI and stores a sanitized `gpt_diagnostic_live_test` step. Do not use `--live-test` unless you intentionally want to make that single OpenAI request.
+
 ### Approval Queue Classification
 
 Approval requests include classification fields so the dashboard can separate real operator work from diagnostics:

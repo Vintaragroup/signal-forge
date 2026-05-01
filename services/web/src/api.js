@@ -1,3 +1,16 @@
+import {
+  approveDemoMessage,
+  demoItems,
+  demoOverview,
+  getDemoState,
+  isDemoModeEnabled,
+  runDemoOutreach,
+  showDemoDealOutcome,
+  simulateDemoResponse,
+  startDemoMode,
+  stopDemoMode,
+} from "./demoMode.js";
+
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "http://localhost:8000";
 
 async function request(path, options = {}) {
@@ -20,15 +33,25 @@ async function request(path, options = {}) {
 export const api = {
   health: () => request("/health"),
   gptRuntimeSettings: () => request("/settings/gpt-runtime"),
-  overview: () => request("/stats/overview"),
-  contacts: (params = {}) => request(`/contacts?${new URLSearchParams(params)}`),
-  leads: (params = {}) => request(`/leads?${new URLSearchParams(params)}`),
-  messages: (params = {}) => request(`/messages?${new URLSearchParams(params)}`),
+  gptDiagnostics: () => request("/diagnostics/gpt"),
+  demoState: async () => getDemoState(),
+  demoEnabled: isDemoModeEnabled,
+  startDemo: async () => startDemoMode(),
+  stopDemo: async () => stopDemoMode(),
+  runDemoOutreach: async () => runDemoOutreach(),
+  simulateDemoResponse: async (id) => simulateDemoResponse(id),
+  showDemoDealOutcome: async () => showDemoDealOutcome(),
+  overview: () => (isDemoModeEnabled() ? Promise.resolve(demoOverview()) : request("/stats/overview")),
+  contacts: (params = {}) => (isDemoModeEnabled() ? Promise.resolve({ items: demoItems("contacts") }) : request(`/contacts?${new URLSearchParams(params)}`)),
+  leads: (params = {}) => (isDemoModeEnabled() ? Promise.resolve({ items: demoItems("leads") }) : request(`/leads?${new URLSearchParams(params)}`)),
+  messages: (params = {}) => (isDemoModeEnabled() ? Promise.resolve({ items: demoItems("messages") }) : request(`/messages?${new URLSearchParams(params)}`)),
   reviewMessage: (id, payload) =>
-    request(`/messages/${encodeURIComponent(id)}/review`, {
-      method: "POST",
-      body: JSON.stringify(payload),
-    }),
+    isDemoModeEnabled()
+      ? Promise.resolve({ item: approveDemoMessage(id), message: "Demo approval saved. No message sent." })
+      : request(`/messages/${encodeURIComponent(id)}/review`, {
+          method: "POST",
+          body: JSON.stringify(payload),
+        }),
   approvalRequests: (params = {}) => request(`/approval-requests?${new URLSearchParams(params)}`),
   decideApprovalRequest: (id, payload) =>
     request(`/approval-requests/${encodeURIComponent(id)}/decision`, {
@@ -57,7 +80,7 @@ export const api = {
     }),
   agentRuns: (params = {}) => request(`/agent-runs?${new URLSearchParams(params)}`),
   agentRunDetail: (id) => request(`/agent-runs/${encodeURIComponent(id)}`),
-  deals: (params = {}) => request(`/deals?${new URLSearchParams(params)}`),
+  deals: (params = {}) => (isDemoModeEnabled() ? Promise.resolve({ items: demoItems("deals") }) : request(`/deals?${new URLSearchParams(params)}`)),
   reports: () => request("/reports"),
 };
 

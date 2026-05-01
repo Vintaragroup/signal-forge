@@ -21,6 +21,7 @@ export default function StatusBadge({ value }) {
     normalized.includes("follow")
   ) tone = "amber";
   if (normalized.includes("booked") || normalized.includes("negotiation") || normalized.includes("interested")) tone = "blue";
+  if (normalized.includes("demo")) tone = "blue";
   if (normalized.includes("gpt") || normalized.includes("nurture") || normalized.includes("research")) tone = "purple";
   if (normalized.includes("test") || normalized.includes("synthetic") || normalized.includes("system")) tone = "slate";
 

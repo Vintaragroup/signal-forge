@@ -195,6 +195,103 @@ def gpt_runtime_status() -> dict:
     }
 
 
+def gpt_client_available() -> bool:
+    try:
+        from agents import gpt_client  # noqa: F401
+    except Exception:
+        return False
+    return True
+
+
+def safe_gpt_step_summary(step: dict) -> dict:
+    output = step.get("output") or {}
+    return {
+        "run_id": step.get("run_id"),
+        "agent_name": step.get("agent_name"),
+        "module": step.get("module"),
+        "step_name": step.get("step_name"),
+        "status": step.get("status"),
+        "timestamp": step.get("timestamp"),
+        "enabled": output.get("enabled"),
+        "used_gpt": output.get("used_gpt"),
+        "confidence": output.get("confidence"),
+        "reasoning_summary": clean_text(output.get("reasoning_summary")),
+        "output_length": output.get("output_length"),
+        "error": clean_text(output.get("error")),
+    }
+
+
+def safe_gpt_approval_error_summary(request: dict) -> dict:
+    apply_approval_defaults(request)
+    return {
+        "_id": request.get("_id"),
+        "run_id": request.get("run_id"),
+        "agent_name": request.get("agent_name"),
+        "module": request.get("module"),
+        "request_type": request.get("request_type"),
+        "status": request.get("status"),
+        "title": request.get("title"),
+        "severity": request.get("severity"),
+        "request_origin": request.get("request_origin"),
+        "user_facing_summary": request.get("user_facing_summary"),
+        "technical_reason": request.get("technical_reason"),
+        "created_at": request.get("created_at"),
+    }
+
+
+def gpt_diagnostics_status(db=None) -> dict:
+    runtime = gpt_runtime_status()
+    diagnostics = {
+        "gpt_agent_enabled": runtime["enabled"],
+        "openai_model": runtime["model"],
+        "has_api_key": runtime["has_api_key"],
+        "api_key_source": "env" if runtime["has_api_key"] else "missing",
+        "client_available": gpt_client_available(),
+        "last_gpt_error_summary": None,
+        "last_gpt_error_at": None,
+        "last_successful_gpt_call_at": None,
+        "recent_gpt_agent_steps": [],
+        "recent_system_approval_errors": [],
+        "safety_mode": GPT_SAFETY_MODE,
+    }
+    if db is None:
+        return diagnostics
+
+    gpt_steps = list(db.agent_steps.find({"step_name": {"$regex": "^gpt_"}}).sort([("timestamp", -1)]).limit(10))
+    diagnostics["recent_gpt_agent_steps"] = [safe_gpt_step_summary(step) for step in gpt_steps]
+
+    error_steps = [step for step in gpt_steps if clean_text((step.get("output") or {}).get("error")) or step.get("status") == "failed"]
+    if error_steps:
+        latest_error = error_steps[0]
+        output = latest_error.get("output") or {}
+        diagnostics["last_gpt_error_summary"] = clean_text(output.get("error") or output.get("reasoning_summary") or latest_error.get("status"))
+        diagnostics["last_gpt_error_at"] = latest_error.get("timestamp")
+
+    success_step = next((step for step in gpt_steps if (step.get("output") or {}).get("used_gpt") is True and not clean_text((step.get("output") or {}).get("error"))), None)
+    if success_step:
+        diagnostics["last_successful_gpt_call_at"] = success_step.get("timestamp")
+
+    approval_errors = list(
+        db.approval_requests.find(
+            {
+                "$or": [
+                    {"request_origin": "system"},
+                    {"severity": "error"},
+                    {"request_type": {"$regex": "^gpt_"}, "severity": "error"},
+                ]
+            }
+        )
+        .sort([("created_at", -1)])
+        .limit(10)
+    )
+    diagnostics["recent_system_approval_errors"] = [safe_gpt_approval_error_summary(request) for request in approval_errors]
+    if diagnostics["last_gpt_error_summary"] is None and approval_errors:
+        latest_approval = approval_errors[0]
+        diagnostics["last_gpt_error_summary"] = clean_text(latest_approval.get("technical_reason") or latest_approval.get("user_facing_summary") or latest_approval.get("summary"))
+        diagnostics["last_gpt_error_at"] = latest_approval.get("created_at")
+    return diagnostics
+
+
 def count_response_events(messages: list[dict], outcome: str) -> int:
     total = 0
     for message in messages:
@@ -813,6 +910,16 @@ def health() -> dict:
 @app.get("/settings/gpt-runtime")
 def gpt_runtime_settings() -> dict:
     return gpt_runtime_status()
+
+
+@app.get("/diagnostics/gpt")
+def gpt_diagnostics() -> dict:
+    client = get_client()
+    try:
+        db = get_database(client)
+        return serialize(gpt_diagnostics_status(db))
+    finally:
+        client.close()
 
 
 @app.get("/vault")

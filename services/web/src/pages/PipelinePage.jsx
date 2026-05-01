@@ -164,6 +164,7 @@ export default function PipelinePage() {
 
   const columns = [
     { key: "display", label: "Name" },
+    { key: "demo", label: "Mode", render: (row) => (row.is_demo ? <StatusBadge value="Demo Mode" /> : <StatusBadge value="live data" />) },
     { key: "type", label: "Type", render: (row) => <StatusBadge value={row.type} /> },
     { key: "module", label: "Module", render: (row) => <StatusBadge value={row.module || "unknown"} /> },
     { key: "score", label: "Score" },
