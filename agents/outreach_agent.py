@@ -15,11 +15,11 @@ class OutreachAgent(BaseAgent):
     def plan_actions(self, leads: list[dict]) -> list[dict[str, str]]:
         gpt_actions = self.plan_gpt_actions(leads)
         if gpt_actions is not None:
-            return gpt_actions
+            return self.add_tool_research_actions(gpt_actions, "outreach lead discovery signals")
 
         if not leads:
             if self.contacts:
-                return [
+                return self.add_tool_research_actions([
                     {
                         "title": f"Review imported contact for {contact.get('company') or contact.get('name')}",
                         "target": contact.get("company") or contact.get("name") or self.module,
@@ -27,8 +27,8 @@ class OutreachAgent(BaseAgent):
                         "planned_action": f"Prepare a human-reviewed outreach angle. Segment: {contact.get('segment', 'unscored')}; score: {contact.get('contact_score', '-')}. Do not send anything automatically.",
                     }
                     for contact in self.contacts
-                ]
-            return [self.no_data_action()]
+                ], "outreach contact research")
+            return self.add_tool_research_actions([self.no_data_action()], "outreach seed leads")
 
         actions = []
         for lead in leads:
@@ -52,7 +52,7 @@ class OutreachAgent(BaseAgent):
                     "planned_action": f"{planned} Offer angle: {offer}. Draft available: {bool(outreach)}.",
                 }
             )
-        return actions
+        return self.add_tool_research_actions(actions, "outreach lead discovery signals")
 
     def plan_gpt_actions(self, leads: list[dict]) -> list[dict[str, str]] | None:
         targets = self.gpt_targets(leads)

@@ -1,5 +1,6 @@
 import os
 import re
+import inspect
 from collections import Counter, defaultdict
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
@@ -64,6 +65,7 @@ class AgentRunRequest(BaseModel):
     module: str
     dry_run: bool = True
     limit: int = 10
+    use_tools: bool = False
 
 
 class AgentTaskCreateRequest(BaseModel):
@@ -705,6 +707,23 @@ def convert_approval_to_draft(db, request: dict, note: str, decided_at: datetime
     return "artifact_draft", create_artifact_draft_from_approval(db, request, note, decided_at)
 
 
+def instantiate_agent(agent_cls, *, module: str, dry_run: bool, mongo_uri: str, vault_path: Path, limit: int, use_tools: bool = False):
+    kwargs = {
+        "module": module,
+        "dry_run": dry_run,
+        "mongo_uri": mongo_uri,
+        "vault_path": vault_path,
+        "limit": limit,
+    }
+    try:
+        parameters = inspect.signature(agent_cls).parameters
+        if "use_tools" in parameters:
+            kwargs["use_tools"] = use_tools
+    except (TypeError, ValueError):
+        pass
+    return agent_cls(**kwargs)
+
+
 def find_scraped_candidate(db, candidate_id: str) -> dict | None:
     query: dict[str, Any] = {"_id": candidate_id}
     if ObjectId.is_valid(candidate_id):
@@ -1269,11 +1288,15 @@ def approval_requests(
 
 
 @app.get("/tool-runs")
-def tool_runs(limit: int = Query(100, ge=1, le=500), status: str = "") -> dict:
+def tool_runs(limit: int = Query(100, ge=1, le=500), status: str = "", agent_run_id: str = "") -> dict:
     client = get_client()
     try:
         db = get_database(client)
-        query = {"status": status} if status else {}
+        query: dict[str, Any] = {}
+        if status:
+            query["status"] = status
+        if agent_run_id:
+            query["linked_agent_run_id"] = agent_run_id
         items = list(db.tool_runs.find(query).sort([("created_at", -1)]).limit(limit))
         return {"items": serialize(items), "count": len(items), "simulation_only": True}
     finally:
@@ -1281,11 +1304,15 @@ def tool_runs(limit: int = Query(100, ge=1, le=500), status: str = "") -> dict:
 
 
 @app.get("/scraped-candidates")
-def scraped_candidates(status: str = "", limit: int = Query(100, ge=1, le=500)) -> dict:
+def scraped_candidates(status: str = "", agent_run_id: str = "", limit: int = Query(100, ge=1, le=500)) -> dict:
     client = get_client()
     try:
         db = get_database(client)
-        query = {"status": status} if status else {}
+        query: dict[str, Any] = {}
+        if status:
+            query["status"] = status
+        if agent_run_id:
+            query["linked_agent_run_id"] = agent_run_id
         items = list(db.scraped_candidates.find(query).sort([("created_at", -1)]).limit(limit))
         return {"items": serialize(items), "count": len(items), "simulation_only": True}
     finally:
@@ -1310,6 +1337,8 @@ def decide_scraped_candidate(candidate_id: str, payload: ScrapedCandidateDecisio
             "updated_at": decided_at,
             "outbound_actions_taken": 0,
         }
+        if decision.startswith("convert_to_") and candidate.get("status") != "approved":
+            raise HTTPException(status_code=400, detail="Scraped candidate must be approved before local conversion.")
         created_record = None
         if decision == "convert_to_contact":
             created_record = create_contact_from_candidate(db, candidate, decided_at)
@@ -1319,6 +1348,18 @@ def decide_scraped_candidate(candidate_id: str, payload: ScrapedCandidateDecisio
             update_fields.update({"created_record_type": "lead", "created_record_id": str(created_record.get("_id"))})
         event = {"decision": decision, "note": clean_text(payload.note), "decided_at": decided_at, "outbound_actions_taken": 0}
         db.scraped_candidates.update_one({"_id": candidate.get("_id")}, {"$set": update_fields, "$push": {"decision_events": event}})
+        approval_request_id = clean_text(candidate.get("approval_request_id"))
+        if approval_request_id:
+            approval_update = {
+                "status": "approved" if decision in {"approve", "convert_to_contact", "convert_to_lead"} else "rejected",
+                "decision": decision,
+                "decision_note": clean_text(payload.note),
+                "resolved_at": decided_at,
+            }
+            approval_query: dict[str, Any] = {"_id": approval_request_id}
+            if ObjectId.is_valid(approval_request_id):
+                approval_query = {"$or": [{"_id": ObjectId(approval_request_id)}, {"_id": approval_request_id}]}
+            db.approval_requests.update_one(approval_query, {"$set": approval_update})
         updated = find_scraped_candidate(db, candidate_id) or {**candidate, **update_fields}
         return {
             "item": serialize(updated),
@@ -1405,12 +1446,14 @@ def run_agent_task(task_id: str) -> dict:
         try:
             agent_cls = AGENT_CLASSES[agent_name]
             limit = int((task.get("input_config") or {}).get("limit") or 10)
-            agent = agent_cls(
+            agent = instantiate_agent(
+                agent_cls,
                 module=module,
                 dry_run=True,
                 mongo_uri=mongo_uri(),
                 vault_path=vault_path(),
                 limit=max(1, min(limit, 50)),
+                use_tools=bool((task.get("input_config") or {}).get("use_tools")),
             )
             result = agent.run()
             run = db.agent_runs.find_one({"run_id": result.get("run_id")})
@@ -1593,12 +1636,14 @@ def run_agent(payload: AgentRunRequest) -> dict:
         raise HTTPException(status_code=400, detail="Unsupported module.")
 
     try:
-        agent = agent_cls(
+        agent = instantiate_agent(
+            agent_cls,
             module=payload.module,
             dry_run=True,
             mongo_uri=mongo_uri(),
             vault_path=vault_path(),
             limit=max(1, min(payload.limit, 50)),
+            use_tools=payload.use_tools,
         )
         result = agent.run()
         client = get_client()
@@ -1663,6 +1708,8 @@ def agent_run_detail(run_id: str) -> dict:
         artifacts = list(db.agent_artifacts.find({"run_id": actual_run_id}).sort("created_at", 1))
         approvals = list(db.approval_requests.find({"run_id": actual_run_id}).sort("created_at", -1))
         approvals = enrich_approval_requests(approvals, db)
+        tool_runs = list(db.tool_runs.find({"linked_agent_run_id": actual_run_id}).sort("created_at", -1).limit(25))
+        scraped = list(db.scraped_candidates.find({"linked_agent_run_id": actual_run_id}).sort("created_at", -1).limit(25))
 
         related_contacts = []
         for value in run.get("related_contacts") or []:
@@ -1707,6 +1754,8 @@ def agent_run_detail(run_id: str) -> dict:
                 "steps": steps,
                 "artifacts": artifacts,
                 "approval_requests": approvals,
+                "tool_runs": tool_runs,
+                "scraped_candidates": scraped,
                 "related": {
                     "contacts": related_contacts,
                     "leads": related_leads,

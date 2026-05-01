@@ -3,6 +3,8 @@ from fastapi.testclient import TestClient
 
 import main
 from main import app
+from tools.base_tool import BaseTool
+from tools.browser_scroll_tool import BrowserScrollTool
 from tools.contact_extraction_tool import extract_contact_fields
 from tools.source_validator_tool import classify_source
 from tools.web_search_tool import WebSearchTool
@@ -81,6 +83,8 @@ class FakeDatabase:
     def __init__(self):
         self.tool_runs = FakeCollection([])
         self.scraped_candidates = FakeCollection([])
+        self.approval_requests = FakeCollection([])
+        self.agent_artifacts = FakeCollection([])
         self.contacts = FakeCollection([])
         self.leads = FakeCollection([])
 
@@ -102,6 +106,8 @@ def test_mock_search_creates_review_candidates():
     assert result["simulation_only"] is True
     assert len(result["candidate_ids"]) == 2
     assert len(db.tool_runs.documents) == 1
+    assert len(db.approval_requests.documents) == 2
+    assert len(db.agent_artifacts.documents) == 1
     assert db.tool_runs.documents[0]["mode"] == "mock_read_only"
     assert all(candidate["status"] == "needs_review" for candidate in db.scraped_candidates.documents)
     assert all(candidate["outbound_actions_taken"] == 0 for candidate in db.scraped_candidates.documents)
@@ -142,6 +148,7 @@ def test_source_validator_classifies_urls():
     assert classify_source("https://example-roofing.com/services", "roofing contact")["source_quality"] == "direct_business_website"
     assert classify_source("https://www.yelp.com/biz/apex-roofing")["source_quality"] == "directory_listing"
     assert classify_source("https://instagram.com/apexroofing")["source_quality"] == "social_profile"
+    assert classify_source("https://apex.example.com", "Copyright 2020 Apex Roofing")["source_quality"] == "stale_source"
     assert classify_source("")["source_quality"] == "low_confidence"
 
 
@@ -160,7 +167,7 @@ def test_candidate_approval_does_not_create_contact_or_lead(monkeypatch):
     assert db.leads.documents == []
 
 
-def test_candidate_conversion_requires_explicit_decision(monkeypatch):
+def test_candidate_conversion_requires_prior_approval(monkeypatch):
     db = FakeDatabase()
     candidate_id = ObjectId()
     db.scraped_candidates.insert_one(
@@ -177,6 +184,13 @@ def test_candidate_conversion_requires_explicit_decision(monkeypatch):
     patch_database(monkeypatch, db)
     client = TestClient(app)
 
+    blocked = client.post(f"/scraped-candidates/{candidate_id}/decision", json={"decision": "convert_to_lead", "note": "Add to local pipeline"})
+    assert blocked.status_code == 400
+    assert db.leads.documents == []
+
+    approved = client.post(f"/scraped-candidates/{candidate_id}/decision", json={"decision": "approve", "note": "Looks real"})
+    assert approved.status_code == 200
+
     response = client.post(f"/scraped-candidates/{candidate_id}/decision", json={"decision": "convert_to_lead", "note": "Add to local pipeline"})
 
     assert response.status_code == 200
@@ -186,3 +200,22 @@ def test_candidate_conversion_requires_explicit_decision(monkeypatch):
     assert db.leads.documents[0]["company_name"] == "Apex Roofing"
     assert db.leads.documents[0]["outreach_status"] == "not_started"
     assert db.contacts.documents == []
+
+
+def test_tool_run_stores_no_secrets():
+    db = FakeDatabase()
+    BaseTool().record_tool_run(db, {"query": "roofing", "api_key": "secret", "token": "hidden"}, {"candidate_count": 0})
+
+    stored_input = db.tool_runs.documents[0]["input"]
+    assert stored_input == {"query": "roofing"}
+
+
+def test_browser_scroll_reports_disabled_without_playwright(monkeypatch):
+    monkeypatch.setattr("tools.browser_scroll_tool.robots_allowed", lambda _url: True)
+    db = FakeDatabase()
+    result = BrowserScrollTool().run("https://example.com", db=db)
+
+    assert result["simulation_only"] is True
+    assert result["candidate_ids"] == []
+    assert "Playwright" in result["error"]
+    assert db.tool_runs.documents[0]["status"] == "failed"

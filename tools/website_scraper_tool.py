@@ -5,7 +5,7 @@ from html.parser import HTMLParser
 from urllib import error, request
 from urllib.parse import urlparse
 
-from tools.base_tool import BaseTool, clean_text, utc_now
+from tools.base_tool import BaseTool, clean_text, robots_allowed, utc_now
 from tools.contact_extraction_tool import extract_contact_fields
 from tools.source_validator_tool import classify_source
 
@@ -59,6 +59,8 @@ class WebsiteScraperTool(BaseTool):
             raise ValueError("Only public http/https URLs are supported.")
         if any(term in public_url.lower() for term in ("login", "signin", "account", "checkout", "captcha")):
             raise ValueError("Protected, login, checkout, or captcha URLs are not supported.")
+        if not robots_allowed(public_url):
+            raise ValueError("robots.txt does not allow this read-only fetch.")
 
     def parse_html(self, html: str, source_url: str) -> dict:
         parser = PublicPageParser()
@@ -92,11 +94,12 @@ class WebsiteScraperTool(BaseTool):
             html = response.read(1_000_000).decode("utf-8", errors="ignore")
         return self.parse_html(html, public_url)
 
-    def run(self, public_url: str, db=None) -> dict:
+    def run(self, public_url: str, db=None, agent_name: str | None = None, agent_run_id: str | None = None) -> dict:
         input_payload = {"public_url": public_url}
         try:
             output = self.fetch(public_url)
-            tool_run_id = self.record_tool_run(db, input_payload, {"source_url": public_url, "title": output.get("title"), "source_quality": output.get("source_quality")})
+            output_summary = {"source_url": public_url, "title": output.get("title"), "source_quality": output.get("source_quality"), "confidence": output.get("confidence"), "extracted_fields": output.get("extracted_fields")}
+            tool_run_id = self.record_tool_run(db, input_payload, output_summary, agent_name=agent_name, agent_run_id=agent_run_id)
             candidate = {
                 **output.get("extracted_fields", {}),
                 "source_url": output["source_url"],
@@ -105,8 +108,9 @@ class WebsiteScraperTool(BaseTool):
                 "raw_summary": output["visible_text_summary"],
                 "fetched_at": output["fetched_at"],
             }
-            candidate_ids = self.insert_candidates(db, [candidate], tool_run_id)
-            return {"tool_run_id": tool_run_id, "candidate_ids": candidate_ids, "scrape": output, "simulation_only": True}
+            candidate_ids = self.insert_candidates(db, [candidate], tool_run_id, agent_name=agent_name, agent_run_id=agent_run_id)
+            artifact_id = self.create_tool_artifact(db, tool_run_id, {"input": input_payload, "output": output, "candidate_ids": candidate_ids}, agent_name, agent_run_id)
+            return {"tool_run_id": tool_run_id, "candidate_ids": candidate_ids, "artifact_id": artifact_id, "scrape": output, "simulation_only": True}
         except Exception as exc:
-            self.record_tool_run(db, input_payload, {}, status="failed", error=f"{exc.__class__.__name__}: {exc}")
+            self.record_tool_run(db, input_payload, {}, status="failed", error=f"{exc.__class__.__name__}: {exc}", agent_name=agent_name, agent_run_id=agent_run_id)
             return {"tool_run_id": None, "candidate_ids": [], "error": f"{exc.__class__.__name__}: {exc}", "simulation_only": True}

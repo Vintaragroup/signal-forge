@@ -115,20 +115,21 @@ No approval queue decision sends messages, posts content, scrapes data, schedule
 
 Approval requests are classified by origin and severity so the dashboard can keep real operator work separate from diagnostics. The default Approval Queue shows actionable approvals only; use the queue filters for GPT, system issues, or test/synthetic records. GPT runtime tests may create synthetic approval requests to verify safety behavior. Review them with `python scripts/cleanup_test_approvals.py --dry-run`, or archive and remove them with `python scripts/cleanup_test_approvals.py --archive`.
 
-## Agent Tool Layer v1 - Phase 1
+## Agent Tool Layer v1
 
-SignalForge now includes a separate read-only research tool layer under `tools/`. Phase 1 includes mock web search, public website scraping, contact-field extraction, and source validation. It records `tool_runs` and review-only `scraped_candidates` for operator inspection.
+SignalForge now includes a read-only research tool layer under `tools/`. It includes deterministic mock web search, public website scraping, optional Playwright browser scrolling for public pages, contact-field extraction, and source validation. Tool runs record sanitized `tool_runs`, review-only `scraped_candidates`, `agent_artifacts`, and approval requests for operator inspection.
 
 Run tools from Docker with:
 
 ```bash
 docker compose run --rm api python scripts/run_tool.py web_search --query "roofing contractor" --module contractor_growth --location "Austin, TX" --limit 3
 docker compose run --rm api python scripts/run_tool.py website_scraper --url https://example.com
+docker compose run --rm api python scripts/run_tool.py browser_scroll --url https://example.com
 ```
 
-The dashboard Research / Tools page shows tool history and scraped candidates. Operators can approve, reject, convert to contact, or convert to lead. Conversion requires an explicit operator decision; approval alone does not create contact or lead records.
+The dashboard Research / Tools page shows tool history, inputs, source URLs, extracted fields, linked agent runs, approval links, and scraped candidates. Operators can approve or reject candidates. Local conversion to contact or lead is blocked until the candidate has first been approved.
 
-Phase 1 does not add a real search API, browser scrolling, agent-wide integration, login, form submission, posting, messaging, captcha bypass, protected/private scraping, or any outbound action.
+Outreach and content agents can optionally run the tool layer from the Agent Console. Tool-enabled agent runs create research artifacts and approval requests only. They do not convert candidates, send messages, submit forms, post content, bypass captcha, scrape protected/private areas, or take any outbound action. `SERPAPI_KEY` is reserved for future support; v1 remains deterministic unless explicitly extended later.
 
 ## Agent Task Queue v1
 

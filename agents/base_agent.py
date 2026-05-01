@@ -51,6 +51,7 @@ class BaseAgent:
         mongo_uri: str | None = None,
         vault_path: str | Path | None = None,
         limit: int = 10,
+        use_tools: bool | None = None,
     ) -> None:
         if module not in SUPPORTED_MODULES:
             supported = ", ".join(sorted(SUPPORTED_MODULES))
@@ -62,6 +63,7 @@ class BaseAgent:
         self.mongo_uri = mongo_uri or os.getenv("MONGO_URI", DEFAULT_MONGO_URI)
         self.vault_path = Path(vault_path or os.getenv("VAULT_PATH", str(DEFAULT_VAULT_PATH)))
         self.limit = limit
+        self.use_tools = bool(use_tools) if use_tools is not None else os.getenv("SIGNALFORGE_AGENT_TOOLS_ENABLED", "").lower() == "true"
         self.started_at = datetime.now(timezone.utc)
         self.contacts: list[dict[str, Any]] = []
         self.message_drafts: list[dict[str, Any]] = []
@@ -195,6 +197,7 @@ class BaseAgent:
             "dry_run": self.dry_run,
             "limit": self.limit,
             "simulation_only": True,
+            "tool_layer_enabled": self.use_tools,
         }
         run_doc = {
             "_id": run_object_id,
@@ -393,6 +396,48 @@ class BaseAgent:
             "reason": "The agent queried MongoDB but did not find module-specific records.",
             "planned_action": "Review module strategy docs, add sample source data, then run the relevant pipeline before taking action.",
         }
+
+    def add_tool_research_actions(self, actions: list[dict[str, str]], query: str | None = None) -> list[dict[str, str]]:
+        if not self.use_tools or self.db is None or not self.run_id:
+            return actions
+        from tools.web_search_tool import WebSearchTool
+
+        search_query = query or f"{self.module_config['label']} research signals"
+        result = WebSearchTool().run(
+            search_query,
+            self.module,
+            "",
+            min(max(self.limit, 1), 3),
+            db=self.db,
+            agent_name=self.agent_name,
+            agent_run_id=self.run_id,
+        )
+        self.record_step(
+            self.db,
+            self.run_id,
+            20,
+            "tool_research_web_search",
+            {"query": search_query, "module": self.module, "limit": min(max(self.limit, 1), 3)},
+            "Create read-only research artifacts and scraped candidates for human review only.",
+            {
+                "tool_run_id": result.get("tool_run_id"),
+                "candidate_count": len(result.get("candidate_ids") or []),
+                "artifact_id": result.get("artifact_id"),
+                "outbound_actions_taken": 0,
+            },
+            artifact_refs=[result.get("artifact_id")] if result.get("artifact_id") else [],
+        )
+        if not result.get("candidate_ids"):
+            return actions
+        return [
+            {
+                "title": f"Review {len(result.get('candidate_ids') or [])} tool research candidate(s)",
+                "target": self.module,
+                "reason": "SignalForge Tool Layer v1 found read-only research candidates.",
+                "planned_action": f"Review scraped candidates before any local conversion. Tool run: {result.get('tool_run_id')}. No outbound action taken.",
+            },
+            *actions,
+        ]
 
     def write_run_log(
         self,

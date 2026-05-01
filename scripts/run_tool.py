@@ -10,6 +10,7 @@ if str(API_DIR) not in sys.path:
     sys.path.insert(0, str(API_DIR))
 
 from main import get_client, get_database
+from tools.browser_scroll_tool import BrowserScrollTool
 from tools.web_search_tool import WebSearchTool
 from tools.website_scraper_tool import WebsiteScraperTool
 
@@ -27,18 +28,24 @@ def main() -> None:
     scraper_parser = subparsers.add_parser("website_scraper", help="Fetch a public website and create a review candidate.")
     scraper_parser.add_argument("--url", required=True)
 
+    scroll_parser = subparsers.add_parser("browser_scroll", help="Use Playwright, when installed, to scroll a public page and capture visible text sections.")
+    scroll_parser.add_argument("--url", required=True)
+    scroll_parser.add_argument("--max-sections", type=int, default=8)
+
     args = parser.parse_args()
     client = get_client()
     try:
         db = get_database(client)
         if args.tool == "web_search":
             result = WebSearchTool().run(args.query, args.module, args.location, args.limit, db=db)
-        else:
+        if args.tool == "website_scraper":
             result = WebsiteScraperTool().run(args.url, db=db)
+        if args.tool == "browser_scroll":
+            result = BrowserScrollTool().run(args.url, max_sections=args.max_sections, db=db)
     finally:
         client.close()
 
-    print("SignalForge Tool Layer v1 - Phase 1")
+    print("SignalForge Tool Layer v1")
     print("Safety: read-only research. No forms, login, posting, messaging, captcha bypass, or protected scraping.")
     print(f"Tool run: {result.get('tool_run_id') or 'not recorded'}")
     print(f"Candidates created: {len(result.get('candidate_ids') or [])}")

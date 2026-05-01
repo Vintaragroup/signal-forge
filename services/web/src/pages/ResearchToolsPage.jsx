@@ -15,6 +15,11 @@ function percent(value) {
   return `${Math.round(number * 100)}%`;
 }
 
+function compactJson(value) {
+  const json = JSON.stringify(value || {}, null, 2);
+  return json.length > 260 ? `${json.slice(0, 260)}...` : json;
+}
+
 export default function ResearchToolsPage() {
   const [toolRuns, setToolRuns] = useState([]);
   const [candidates, setCandidates] = useState([]);
@@ -66,7 +71,7 @@ export default function ResearchToolsPage() {
           <div>
             <div className="text-xs font-semibold uppercase text-slate-400">Read-only Research</div>
             <h2 className="mt-1 text-xl font-semibold text-slate-950">Research / Tools</h2>
-            <p className="mt-2 text-sm leading-6 text-slate-600">Tool outputs stay separate from human approvals until an operator reviews them here.</p>
+            <p className="mt-2 text-sm leading-6 text-slate-600">Tool outputs create review records and approval requests before any local conversion.</p>
           </div>
           <div className="flex flex-wrap gap-2">
             <StatusBadge value={`${stats.visible} visible`} />
@@ -83,7 +88,7 @@ export default function ResearchToolsPage() {
         <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
           <div>
             <h3 className="text-sm font-semibold text-slate-950">Scraped Candidates</h3>
-            <p className="mt-1 text-xs text-slate-500">Approving marks a candidate reviewed. Conversion creates a local contact or lead record only after this click.</p>
+            <p className="mt-1 text-xs text-slate-500">Approve a candidate first, then convert it locally when it is ready for the pipeline.</p>
           </div>
           <div className="flex flex-wrap gap-2">
             <select
@@ -114,8 +119,11 @@ export default function ResearchToolsPage() {
           columns={[
             { key: "company", label: "Candidate", render: (row) => <div className="font-medium text-slate-900">{row.company || row.name || "Research Candidate"}</div> },
             { key: "source_quality", label: "Source", render: (row) => <StatusBadge value={row.source_quality || "unknown"} /> },
+            { key: "source_url", label: "URL", render: (row) => row.source_url ? <a href={row.source_url} className="max-w-52 truncate text-blue-700 hover:underline" target="_blank" rel="noreferrer">{row.source_url}</a> : "-" },
+            { key: "fields", label: "Extracted Fields", render: (row) => <pre className="max-w-72 whitespace-pre-wrap text-xs text-slate-600">{compactJson(row.extracted_fields)}</pre> },
             { key: "confidence", label: "Confidence", render: (row) => percent(row.confidence) },
             { key: "contact", label: "Public Contact", render: (row) => <span>{row.email || row.phone || "-"}</span> },
+            { key: "approval", label: "Approval", render: (row) => row.approval_request_id ? <a href={`#approvals?request=${encodeURIComponent(row.approval_request_id)}`} className="text-blue-700 hover:underline">Open</a> : "-" },
             { key: "status", label: "Status", render: (row) => <StatusBadge value={row.status || "needs_review"} /> },
             {
               key: "actions",
@@ -128,10 +136,10 @@ export default function ResearchToolsPage() {
                   <button type="button" disabled={busyId === row._id} onClick={() => decide(row, "reject")} className="inline-flex h-8 items-center gap-1 rounded-lg border border-slate-200 px-2 text-xs font-semibold text-slate-700 hover:border-red-200 hover:text-red-700 disabled:opacity-50">
                     <X className="h-3.5 w-3.5" /> Reject
                   </button>
-                  <button type="button" disabled={busyId === row._id} onClick={() => decide(row, "convert_to_contact")} className="inline-flex h-8 items-center gap-1 rounded-lg border border-slate-200 px-2 text-xs font-semibold text-slate-700 hover:border-blue-200 hover:text-blue-700 disabled:opacity-50">
+                  <button type="button" disabled={busyId === row._id || row.status !== "approved"} onClick={() => decide(row, "convert_to_contact")} className="inline-flex h-8 items-center gap-1 rounded-lg border border-slate-200 px-2 text-xs font-semibold text-slate-700 hover:border-blue-200 hover:text-blue-700 disabled:opacity-50">
                     <UserPlus className="h-3.5 w-3.5" /> Contact
                   </button>
-                  <button type="button" disabled={busyId === row._id} onClick={() => decide(row, "convert_to_lead")} className="inline-flex h-8 items-center gap-1 rounded-lg border border-slate-200 px-2 text-xs font-semibold text-slate-700 hover:border-blue-200 hover:text-blue-700 disabled:opacity-50">
+                  <button type="button" disabled={busyId === row._id || row.status !== "approved"} onClick={() => decide(row, "convert_to_lead")} className="inline-flex h-8 items-center gap-1 rounded-lg border border-slate-200 px-2 text-xs font-semibold text-slate-700 hover:border-blue-200 hover:text-blue-700 disabled:opacity-50">
                     <Target className="h-3.5 w-3.5" /> Lead
                   </button>
                 </div>
@@ -151,8 +159,12 @@ export default function ResearchToolsPage() {
         <DataTable
           columns={[
             { key: "tool_name", label: "Tool", render: (row) => <span className="font-medium text-slate-900">{row.tool_name}</span> },
+            { key: "input", label: "Input", render: (row) => <pre className="max-w-72 whitespace-pre-wrap text-xs text-slate-600">{compactJson(row.input)}</pre> },
             { key: "mode", label: "Mode", render: (row) => <StatusBadge value={row.mode || "read_only"} /> },
             { key: "status", label: "Status", render: (row) => <StatusBadge value={row.status} /> },
+            { key: "source_url", label: "Source URL", render: (row) => row.source_url ? <a href={row.source_url} className="max-w-52 truncate text-blue-700 hover:underline" target="_blank" rel="noreferrer">{row.source_url}</a> : "-" },
+            { key: "fields", label: "Extracted Fields", render: (row) => <pre className="max-w-72 whitespace-pre-wrap text-xs text-slate-600">{compactJson(row.extracted_fields)}</pre> },
+            { key: "agent", label: "Agent Run", render: (row) => row.linked_agent_run_id ? <a href={`#agents?run=${encodeURIComponent(row.linked_agent_run_id)}`} className="text-blue-700 hover:underline">Open</a> : "-" },
             { key: "created_at", label: "Created", render: (row) => formatDate(row.created_at) },
             { key: "outbound", label: "Outbound", render: (row) => row.outbound_actions_taken || 0 },
           ]}

@@ -16,11 +16,11 @@ class ContentAgent(BaseAgent):
     def plan_actions(self, leads: list[dict]) -> list[dict[str, str]]:
         gpt_actions = self.plan_gpt_actions(leads)
         if gpt_actions is not None:
-            return gpt_actions
+            return self.add_tool_research_actions(gpt_actions, "content research signals")
 
         if not leads:
             if self.contacts:
-                return [
+                return self.add_tool_research_actions([
                     {
                         "title": f"Content idea from {contact.get('company') or contact.get('name')}",
                         "target": contact.get("company") or contact.get("name") or self.module,
@@ -28,15 +28,15 @@ class ContentAgent(BaseAgent):
                         "planned_action": f"Draft one educational post idea for human review. Segment: {contact.get('segment', 'unscored')}; score: {contact.get('contact_score', '-')}.",
                     }
                     for contact in self.contacts[:8]
-                ]
-            return [
+                ], "content contact research")
+            return self.add_tool_research_actions([
                 {
                     "title": "Create starter content themes",
                     "target": self.module,
                     "reason": "No module-specific Mongo records were found.",
                     "planned_action": "Use module strategy docs to draft three educational posts, one checklist, and one campaign explainer for human review.",
                 }
-            ]
+            ], "content starter research")
 
         actions = []
         for lead in leads[:8]:
@@ -51,7 +51,7 @@ class ContentAgent(BaseAgent):
                     "planned_action": f"Draft a short post explaining the problem behind this signal and softly connect it to: {offer}.",
                 }
             )
-        return actions
+        return self.add_tool_research_actions(actions, "content research signals")
 
     def plan_gpt_actions(self, leads: list[dict]) -> list[dict[str, str]] | None:
         context = self.safe_gpt_context(leads)

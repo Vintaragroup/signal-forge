@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+
 from tools.base_tool import BaseTool, clean_text, slugify, utc_now
 
 
@@ -46,12 +48,17 @@ class WebSearchTool(BaseTool):
             )
         return candidates
 
-    def run(self, query: str, module: str, location: str = "", limit: int = 5, db=None) -> dict:
-        input_payload = {"query": query, "module": module, "location": location, "limit": limit, "mode": "mock"}
+    def run(self, query: str, module: str, location: str = "", limit: int = 5, db=None, agent_name: str | None = None, agent_run_id: str | None = None) -> dict:
+        mode = "mock"
+        if os.getenv("SERPAPI_KEY"):
+            mode = "mock_serpapi_configured_future_support"
+        input_payload = {"query": query, "module": module, "location": location, "limit": limit, "mode": mode, "serpapi_configured": bool(os.getenv("SERPAPI_KEY"))}
         candidates = self.search(query, module, location, limit)
-        tool_run_id = self.record_tool_run(db, input_payload, {"candidate_count": len(candidates), "mode": "mock"})
-        candidate_ids = self.insert_candidates(db, candidates, tool_run_id)
-        return {"tool_run_id": tool_run_id, "candidate_ids": candidate_ids, "candidates": candidates, "simulation_only": True}
+        output_summary = {"candidate_count": len(candidates), "mode": mode, "source_url": candidates[0].get("source_url") if candidates else None, "confidence": candidates[0].get("confidence") if candidates else None, "source_quality": candidates[0].get("source_quality") if candidates else None}
+        tool_run_id = self.record_tool_run(db, input_payload, output_summary, agent_name=agent_name, agent_run_id=agent_run_id)
+        candidate_ids = self.insert_candidates(db, candidates, tool_run_id, agent_name=agent_name, agent_run_id=agent_run_id)
+        artifact_id = self.create_tool_artifact(db, tool_run_id, {"input": input_payload, "candidate_count": len(candidates), "candidate_ids": candidate_ids, "candidates": candidates}, agent_name, agent_run_id)
+        return {"tool_run_id": tool_run_id, "candidate_ids": candidate_ids, "artifact_id": artifact_id, "candidates": candidates, "simulation_only": True}
 
 
 def run_mock_search(query: str, module: str, location: str = "", limit: int = 5, db=None) -> dict:

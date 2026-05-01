@@ -27,6 +27,17 @@ export default function AgentActivityCard({ agent, modules = [], onRun, running 
         <PlayCircle className="h-4 w-4" />
         Dry Run
       </button>
+      {agent.name === "outreach" || agent.name === "content" ? (
+        <button
+          type="button"
+          disabled={!agent.available || running}
+          onClick={() => onRun(agent.name, defaultModule, true)}
+          className="ml-2 mt-4 inline-flex h-9 items-center gap-2 rounded-lg border border-slate-200 px-3 text-sm font-medium text-slate-700 transition hover:border-blue-200 hover:text-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          <PlayCircle className="h-4 w-4" />
+          With Tools
+        </button>
+      ) : null}
     </div>
   );
 }

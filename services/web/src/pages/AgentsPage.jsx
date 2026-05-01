@@ -32,6 +32,11 @@ function JsonBlock({ value }) {
   );
 }
 
+function compactJson(value) {
+  const json = JSON.stringify(value || {}, null, 2);
+  return json.length > 220 ? `${json.slice(0, 220)}...` : json;
+}
+
 function Timeline({ steps }) {
   if (!steps?.length) {
     return <div className="rounded-lg border border-slate-200 bg-slate-50 p-4 text-sm text-slate-500">No agent steps recorded yet.</div>;
@@ -118,11 +123,11 @@ export default function AgentsPage() {
     api.agentRunDetail(selectedRunId).then(setSelectedRun).catch(() => setSelectedRun(null));
   }, [selectedRunId]);
 
-  async function runAgent(agent, module) {
+  async function runAgent(agent, module, useTools = false) {
     setRunning(true);
     setNotice("");
     try {
-      const result = await api.runAgent({ agent, module, dry_run: true, limit: 10 });
+      const result = await api.runAgent({ agent, module, dry_run: true, limit: 10, use_tools: useTools });
       setNotice(`${result.message} Run ID: ${result.run?.run_id || result.result?.run_id}`);
       await loadRuns(result.run?.run_id || result.result?.run_id);
     } catch (error) {
@@ -136,6 +141,8 @@ export default function AgentsPage() {
   const steps = selectedRun?.steps || [];
   const approvals = selectedRun?.approval_requests || [];
   const artifacts = selectedRun?.artifacts || [];
+  const toolRuns = selectedRun?.tool_runs || [];
+  const scrapedCandidates = selectedRun?.scraped_candidates || [];
   const related = selectedRun?.related || {};
   const openApprovalCount = approvals.filter((item) => item.status === "open").length;
   const gptSteps = steps.filter(isGptStep);
@@ -322,6 +329,48 @@ export default function AgentsPage() {
               <StatusBadge value={`${steps.length} steps`} />
             </div>
             <Timeline steps={steps} />
+          </section>
+
+          <section className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <h2 className="text-sm font-semibold text-slate-950">Tool Runs</h2>
+              <a href="#research-tools" className="inline-flex h-8 items-center rounded-lg border border-slate-200 px-3 text-xs font-medium text-slate-700 transition hover:border-blue-200 hover:text-blue-700">Open Research / Tools</a>
+            </div>
+            <div className="mt-3 space-y-2">
+              {toolRuns.map((item) => (
+                <div key={item._id} className="rounded-lg border border-slate-200 p-3">
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div>
+                      <div className="text-sm font-medium text-slate-900">{item.tool_name}</div>
+                      <div className="mt-1 text-xs text-slate-500">{item.source_url || item._id}</div>
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      <StatusBadge value={item.status} />
+                      <StatusBadge value={item.mode || "read_only"} />
+                    </div>
+                  </div>
+                  <div className="mt-3 grid gap-3 md:grid-cols-2">
+                    <pre className="rounded-lg bg-slate-50 p-3 text-xs text-slate-600">{compactJson(item.input)}</pre>
+                    <pre className="rounded-lg bg-slate-50 p-3 text-xs text-slate-600">{compactJson(item.extracted_fields || item.output_summary)}</pre>
+                  </div>
+                </div>
+              ))}
+              {!toolRuns.length ? <div className="text-sm text-slate-500">No tool runs are linked to this agent run.</div> : null}
+            </div>
+            {scrapedCandidates.length ? (
+              <div className="mt-4 grid gap-2 md:grid-cols-2">
+                {scrapedCandidates.slice(0, 6).map((item) => (
+                  <div key={item._id} className="rounded-lg bg-slate-50 p-3 text-xs text-slate-600">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="font-medium text-slate-900">{item.company || item.name || "Research Candidate"}</span>
+                      <StatusBadge value={item.status || "needs_review"} />
+                    </div>
+                    <div className="mt-2 truncate">{item.source_url || item._id}</div>
+                    {item.approval_request_id ? <a href={`#approvals?request=${encodeURIComponent(item.approval_request_id)}`} className="mt-2 inline-flex text-blue-700 hover:underline">Open approval</a> : null}
+                  </div>
+                ))}
+              </div>
+            ) : null}
           </section>
 
           <div className="grid gap-5 xl:grid-cols-2">

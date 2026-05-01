@@ -6,7 +6,7 @@ Agents can read MongoDB, inspect module context, print planned actions, and writ
 
 GPT Agent Runtime v1 is available behind an explicit environment gate. It is disabled by default and remains human-reviewed when enabled.
 
-Agent Tool Layer v1 Phase 1 is available under `tools/`, but it is not integrated into autonomous agent runs. Operators may run the tools manually through `scripts/run_tool.py` and review the resulting `scraped_candidates` in the dashboard Research / Tools page.
+Agent Tool Layer v1 is available under `tools/`. Operators may run tools manually through `scripts/run_tool.py`, and outreach/content agents may optionally use the tool layer during dry-runs to create research artifacts, scraped candidates, and approval requests. Tool-enabled runs are visible in the Agent Console Tool Runs section and the dashboard Research / Tools page.
 
 Agents read module-matched records from `leads`, `contacts`, and `message_drafts`. Imported contacts come from `scripts/import_contacts.py`; scored contacts come from `scripts/score_contacts.py`; draft notes come from `scripts/draft_messages.py`; review decisions come from `scripts/review_message.py`; manual send logs come from `scripts/log_manual_send.py`; response outcomes come from `scripts/log_response.py`; meeting prep notes come from `scripts/generate_meeting_prep.py`; deal outcomes come from `scripts/log_deal_outcome.py`. When no matching leads exist, agents can create contact-based planning actions for human review and prefer `high_priority` contacts first.
 
@@ -55,7 +55,7 @@ When enabled, GPT can:
 
 GPT cannot send email, SMS, DMs, comments, social posts, publish content, scrape platforms, schedule posts, create calendar events, issue invoices, or call external CRM/platform APIs. Operators must review and approve every GPT output before taking any real-world action outside SignalForge.
 
-Tool Layer Phase 1 is also read-only. It does not submit forms, login, post, message, bypass captcha, scrape protected/private pages, use a real search API, or create contacts/leads without an explicit operator conversion decision.
+Tool Layer v1 is also read-only. It does not submit forms, login, post, message, bypass captcha, scrape protected/private pages, use a real search API, or create contacts/leads without prior operator approval. Agents never convert scraped candidates; operators do that locally from the dashboard after approval.
 
 Import a provided contact list before an agent run:
 

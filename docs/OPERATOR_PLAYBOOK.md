@@ -38,7 +38,7 @@ GPT cannot send emails, SMS, DMs, comments, social posts, publish content, scrap
 
 ## 1B. Optional Research / Tools Review
 
-Agent Tool Layer v1 Phase 1 is available for safe local research review. It is separate from agent automation and does not run real search APIs.
+Agent Tool Layer v1 is available for safe local research review. It can be run manually from Docker or optionally from outreach/content agent dry-runs. It does not run real search APIs in v1; `SERPAPI_KEY` is reserved for future support.
 
 Mock search example:
 
@@ -52,9 +52,15 @@ Public website scrape example:
 docker compose run --rm api python scripts/run_tool.py website_scraper --url https://example.com
 ```
 
-Review the resulting records in the dashboard Research / Tools page. Tool output lands in `scraped_candidates` with `status=needs_review`. Approve only marks a candidate reviewed. Use Convert to Contact or Convert to Lead only when you want to create a local record from that candidate.
+Public browser-scroll example, when Playwright is installed in the API environment:
 
-Tool Layer Phase 1 is read-only: no form submission, login, posting, messaging, captcha bypass, protected/private scraping, external CRM update, or outbound action.
+```bash
+docker compose run --rm api python scripts/run_tool.py browser_scroll --url https://example.com
+```
+
+Review the resulting records in the dashboard Research / Tools page. Tool output lands in `scraped_candidates` with `status=needs_review` and creates an approval request. Approve the candidate first; only approved candidates can be converted into local contacts or leads.
+
+Tool Layer v1 is read-only: no form submission, login, posting, messaging, captcha bypass, protected/private scraping, external CRM update, or outbound action. Agent tool usage creates research artifacts and approval requests only.
 
 ## 2. Run The Lead Pipeline
 
