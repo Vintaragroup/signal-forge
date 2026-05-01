@@ -324,7 +324,7 @@ If GPT is enabled, supported agents may add GPT steps, artifacts, drafts, and ap
 
 ## 18. Queue Agent Tasks
 
-Use the dashboard Agent Tasks page to create and run agent work from the browser instead of only using CLI dry-runs. Each task is stored in the `agent_tasks` collection with agent, module, task type, status, priority, input summary, timestamps, and linked Agent Console run id.
+Agents are now run from the dashboard via Agent Tasks. Use the dashboard Agent Tasks page to create and run agent work from the browser instead of only using CLI dry-runs. Each task is stored in the `agent_tasks` collection with `agent_name`, `module`, `task_type`, `status`, `priority`, `input_config`, timestamps, `linked_run_id`, and `result_summary`.
 
 Supported agents:
 
@@ -332,6 +332,19 @@ Supported agents:
 - `followup`
 - `content`
 - `fan_engagement`
+
+Task types:
+
+- `run_outreach`
+- `run_followup`
+- `generate_content`
+- `engage_fans`
+
+Priorities:
+
+- `low`
+- `normal`
+- `high`
 
 Task statuses:
 

@@ -37,7 +37,7 @@ Legend:
 | Revenue/performance report | Yes | Yes | No | No | Yes | No | `scripts/generate_revenue_report.py`, `make revenue-report`, and dashboard Reports page. |
 | Obsidian vault audit layer | Partly | Yes | No | Yes | Yes | No | Vault notes, logs, drafts, review queue, meetings, deals, and reports remain readable markdown. |
 | Simulation-only agents | Yes | Yes | Yes | Yes | Yes | No | CLI and Agent Console run dry-run agents and record observed runs. |
-| Agent task queue | Yes | No | Yes | Yes | Yes | No | Dashboard Agent Tasks creates queued `agent_tasks`, runs current dry-run/GPT-safe agents, links to Agent Console runs, and supports internal cancellation. |
+| Agent task queue | Yes | No | Yes | Yes | Yes | No | Agents are now run from the dashboard via Agent Tasks. Dashboard Agent Tasks creates queued `agent_tasks`, runs current dry-run/GPT-safe agents, links to Agent Console runs, and supports internal cancellation. |
 | GPT/OpenAI agent runtime | Yes | Yes | Yes | Yes | Yes | No | Implemented for outreach, follow-up, content, and fan engagement planning behind `GPT_AGENT_ENABLED=false` by default. Requires `OPENAI_API_KEY`; all GPT output is review-only and records artifacts, drafts, or approval requests. |
 | Social signal processing runtime | No | Partly | Yes | Yes | Partly | Partly | Placeholder service checks vault/Mongo; real ingestion/classification is not implemented. |
 | Post/content generation runtime | No | Partly | Yes | Yes | Partly | Partly | Placeholder service checks vault/Mongo; real content generation is not implemented. |

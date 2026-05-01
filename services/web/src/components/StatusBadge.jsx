@@ -1,28 +1,27 @@
 export default function StatusBadge({ value }) {
   const normalized = String(value || "not_set").toLowerCase();
-  const tone =
+  let tone = "slate";
+  if (normalized.includes("running")) tone = "blue";
+  if (normalized.includes("waiting_for_approval") || normalized.includes("waiting for approval")) tone = "amber";
+  if (
+    normalized.includes("completed") ||
     normalized.includes("won") ||
     normalized.includes("approved") ||
     normalized.includes("ready") ||
     normalized.includes("enabled") ||
     normalized.includes("sent") ||
     normalized.includes("high_priority")
-      ? "green"
-      : normalized.includes("lost") || normalized.includes("rejected") || normalized.includes("offline")
-        ? "red"
-        : normalized.includes("revision") ||
-            normalized.includes("review") ||
-            normalized.includes("disabled") ||
-            normalized.includes("proposal") ||
-            normalized.includes("follow")
-          ? "amber"
-          : normalized.includes("booked") ||
-              normalized.includes("negotiation") ||
-              normalized.includes("interested")
-            ? "blue"
-            : normalized.includes("nurture") || normalized.includes("research")
-              ? "purple"
-              : "slate";
+  ) tone = "green";
+  if (normalized.includes("failed") || normalized.includes("lost") || normalized.includes("rejected") || normalized.includes("offline")) tone = "red";
+  if (
+    normalized.includes("revision") ||
+    normalized.includes("review") ||
+    normalized.includes("disabled") ||
+    normalized.includes("proposal") ||
+    normalized.includes("follow")
+  ) tone = "amber";
+  if (normalized.includes("booked") || normalized.includes("negotiation") || normalized.includes("interested")) tone = "blue";
+  if (normalized.includes("nurture") || normalized.includes("research")) tone = "purple";
 
   const styles = {
     green: "bg-green-50 text-green-700 ring-green-200",

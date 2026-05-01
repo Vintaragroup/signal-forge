@@ -85,7 +85,7 @@ No approval queue decision sends messages, posts content, scrapes data, schedule
 
 ## Agent Task Queue v1
 
-The dashboard Agent Tasks page lets operators create, queue, run, and cancel agent tasks without using CLI dry-runs directly. Tasks are stored in MongoDB in the `agent_tasks` collection and link to the resulting Agent Console run when executed.
+Agents are now run from the dashboard via Agent Tasks. The dashboard Agent Tasks page lets operators create, queue, run, and cancel agent tasks without using CLI dry-runs directly. Agents now run in a live panel with visible step execution and outputs. Tasks are stored in MongoDB in the `agent_tasks` collection and link to the resulting Agent Console run when executed.
 
 Supported agents:
 
@@ -95,6 +95,8 @@ Supported agents:
 - `fan_engagement`
 
 Task runs use the same dry-run/GPT-safe agent behavior as the Agent Console. A task can become `waiting_for_approval` when the linked agent run creates open approval requests. The task page links to the Agent Console run and to the Approval Queue for follow-up review.
+
+Task records store `agent_name`, `module`, `task_type`, `status`, `priority`, `input_config`, lifecycle timestamps, `linked_run_id`, and `result_summary`.
 
 Running a task does not send messages, publish content, post comments, scrape platforms, schedule posts, create calendar events, or call external CRM/platform APIs.
 

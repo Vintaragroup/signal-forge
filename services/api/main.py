@@ -9,7 +9,7 @@ from typing import Any, Literal
 from bson import ObjectId
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from pymongo import MongoClient
 
 from core.constants import MESSAGE_REVIEW_DECISIONS, OPEN_DEAL_OUTCOMES, VALID_MODULES
@@ -44,6 +44,15 @@ AGENT_CLASSES = {
     "followup": FollowupAgent,
 }
 
+AGENT_TASK_TYPES = {
+    "outreach": "run_outreach",
+    "followup": "run_followup",
+    "content": "generate_content",
+    "fan_engagement": "engage_fans",
+}
+
+AGENT_TASK_PRIORITY_ORDER = {"high": 3, "normal": 2, "low": 1}
+
 
 class MessageReviewRequest(BaseModel):
     decision: Literal["approve", "reject", "revise"]
@@ -60,9 +69,9 @@ class AgentRunRequest(BaseModel):
 class AgentTaskCreateRequest(BaseModel):
     agent_name: Literal["outreach", "followup", "content", "fan_engagement"]
     module: str
-    task_type: str = "agent_dry_run"
-    priority: int = 5
-    input_summary: dict[str, Any] = {}
+    task_type: Literal["run_outreach", "run_followup", "generate_content", "engage_fans"] | None = None
+    priority: Literal["low", "normal", "high"] = "normal"
+    input_config: dict[str, Any] = Field(default_factory=dict)
 
 
 class ApprovalDecisionRequest(BaseModel):
@@ -237,6 +246,12 @@ def validate_agent_task(agent_name: str, module: str) -> None:
         raise HTTPException(status_code=400, detail="Unsupported module.")
 
 
+def validate_agent_task_type(agent_name: str, task_type: str) -> None:
+    expected = AGENT_TASK_TYPES.get(agent_name)
+    if expected and task_type != expected:
+        raise HTTPException(status_code=400, detail=f"Task type '{task_type}' is not supported for agent '{agent_name}'.")
+
+
 def agent_task_query(status: str, agent_name: str, module: str) -> dict:
     query: dict[str, Any] = {}
     if status:
@@ -246,6 +261,14 @@ def agent_task_query(status: str, agent_name: str, module: str) -> dict:
     if module:
         query["module"] = module
     return query
+
+
+def sort_agent_tasks(records: list[dict]) -> list[dict]:
+    return sorted(
+        records,
+        key=lambda task: (AGENT_TASK_PRIORITY_ORDER.get(clean_text(task.get("priority")), 0), str(task.get("created_at") or "")),
+        reverse=True,
+    )
 
 
 def report_file(path: Path, label: str) -> dict:
@@ -1037,11 +1060,7 @@ def agent_tasks(
     client = get_client()
     try:
         db = get_database(client)
-        records = list(
-            db.agent_tasks.find(agent_task_query(status, agent_name, module))
-            .sort([("priority", -1), ("created_at", -1)])
-            .limit(limit)
-        )
+        records = sort_agent_tasks(list(db.agent_tasks.find(agent_task_query(status, agent_name, module))))[:limit]
         return {"items": serialize(records), "simulation_only": True}
     finally:
         client.close()
@@ -1050,15 +1069,17 @@ def agent_tasks(
 @app.post("/agent-tasks")
 def create_agent_task(payload: AgentTaskCreateRequest) -> dict:
     validate_agent_task(payload.agent_name, payload.module)
+    task_type = payload.task_type or AGENT_TASK_TYPES[payload.agent_name]
+    validate_agent_task_type(payload.agent_name, task_type)
     now = utc_now()
     task = {
         "agent_name": payload.agent_name,
         "module": payload.module,
-        "task_type": clean_text(payload.task_type) or "agent_dry_run",
+        "task_type": task_type,
         "status": "queued",
         "priority": payload.priority,
-        "input_summary": {
-            **(payload.input_summary or {}),
+        "input_config": {
+            **(payload.input_config or {}),
             "dry_run": True,
             "simulation_only": True,
         },
@@ -1093,7 +1114,9 @@ def run_agent_task(task_id: str) -> dict:
 
         agent_name = clean_text(task.get("agent_name"))
         module = clean_text(task.get("module"))
+        task_type = clean_text(task.get("task_type"))
         validate_agent_task(agent_name, module)
+        validate_agent_task_type(agent_name, task_type)
         db.agent_tasks.update_one(
             {"_id": task["_id"]},
             {"$set": {"status": "running", "started_at": started_at, "updated_at": started_at, "outbound_actions_taken": 0}},
@@ -1101,7 +1124,7 @@ def run_agent_task(task_id: str) -> dict:
 
         try:
             agent_cls = AGENT_CLASSES[agent_name]
-            limit = int((task.get("input_summary") or {}).get("limit") or 10)
+            limit = int((task.get("input_config") or {}).get("limit") or 10)
             agent = agent_cls(
                 module=module,
                 dry_run=True,
@@ -1119,7 +1142,7 @@ def run_agent_task(task_id: str) -> dict:
                 "completed_at": completed_at,
                 "updated_at": completed_at,
                 "linked_run_id": result.get("run_id"),
-                "output_summary": {
+                "result_summary": {
                     "agent_run_status": run_status,
                     "planned_action_count": len(result.get("actions") or []),
                     "log_path": result.get("log_path"),
@@ -1150,6 +1173,11 @@ def run_agent_task(task_id: str) -> dict:
                         "completed_at": failed_at,
                         "updated_at": failed_at,
                         "error": f"{exc.__class__.__name__}: {exc}",
+                        "result_summary": {
+                            "error": f"{exc.__class__.__name__}: {exc}",
+                            "simulation_only": True,
+                            "outbound_actions_taken": 0,
+                        },
                         "outbound_actions_taken": 0,
                     }
                 },

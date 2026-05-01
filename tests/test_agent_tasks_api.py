@@ -127,14 +127,16 @@ def test_create_and_list_agent_task(monkeypatch):
 
     response = TestClient(app).post(
         "/agent-tasks",
-        json={"agent_name": "outreach", "module": "insurance_growth", "task_type": "gpt_safe_dry_run", "priority": 8, "input_summary": {"limit": 3}},
+        json={"agent_name": "outreach", "module": "insurance_growth", "task_type": "run_outreach", "priority": "high", "input_config": {"limit": 3}},
     )
 
     assert response.status_code == 200
     task = response.json()["item"]
     assert task["status"] == "queued"
     assert task["agent_name"] == "outreach"
-    assert task["input_summary"]["dry_run"] is True
+    assert task["task_type"] == "run_outreach"
+    assert task["priority"] == "high"
+    assert task["input_config"]["dry_run"] is True
     assert task["outbound_actions_taken"] == 0
 
     list_response = TestClient(app).get("/agent-tasks")
@@ -152,10 +154,10 @@ def test_run_agent_task_links_run_and_waiting_for_approval(monkeypatch):
             "_id": task_id,
             "agent_name": "outreach",
             "module": "insurance_growth",
-            "task_type": "agent_dry_run",
+            "task_type": "run_outreach",
             "status": "queued",
-            "priority": 5,
-            "input_summary": {"limit": 2},
+            "priority": "normal",
+            "input_config": {"limit": 2},
             "created_at": datetime.now(timezone.utc),
             "started_at": None,
             "completed_at": None,
@@ -169,7 +171,7 @@ def test_run_agent_task_links_run_and_waiting_for_approval(monkeypatch):
     updated = db.agent_tasks.documents[0]
     assert updated["status"] == "waiting_for_approval"
     assert updated["linked_run_id"] == "run-task-1"
-    assert updated["output_summary"]["outbound_actions_taken"] == 0
+    assert updated["result_summary"]["outbound_actions_taken"] == 0
     assert updated["outbound_actions_taken"] == 0
 
 
@@ -183,10 +185,10 @@ def test_run_agent_task_marks_completed_when_run_completed(monkeypatch):
             "_id": task_id,
             "agent_name": "outreach",
             "module": "insurance_growth",
-            "task_type": "agent_dry_run",
+            "task_type": "run_outreach",
             "status": "queued",
-            "priority": 5,
-            "input_summary": {},
+            "priority": "normal",
+            "input_config": {},
             "created_at": datetime.now(timezone.utc),
         }
     )
@@ -208,10 +210,10 @@ def test_cancel_agent_task_updates_internal_status(monkeypatch):
             "_id": task_id,
             "agent_name": "outreach",
             "module": "insurance_growth",
-            "task_type": "agent_dry_run",
+            "task_type": "run_outreach",
             "status": "queued",
-            "priority": 5,
-            "input_summary": {},
+            "priority": "low",
+            "input_config": {},
             "created_at": datetime.now(timezone.utc),
         }
     )
@@ -235,10 +237,10 @@ def test_completed_agent_task_cannot_be_cancelled(monkeypatch):
             "_id": task_id,
             "agent_name": "outreach",
             "module": "insurance_growth",
-            "task_type": "agent_dry_run",
+            "task_type": "run_outreach",
             "status": "completed",
-            "priority": 5,
-            "input_summary": {},
+            "priority": "normal",
+            "input_config": {},
             "created_at": datetime.now(timezone.utc),
         }
     )
