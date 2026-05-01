@@ -1,6 +1,6 @@
 # SignalForge v1 Current Capability Matrix
 
-SignalForge v1 is local-first and human-reviewed. This matrix separates what is browser-supported, CLI-only, simulated, manual, real/local, and not yet implemented before any GPT-powered agent runtime is added.
+SignalForge v1 is local-first and human-reviewed. This matrix separates what is browser-supported, CLI-only, simulated, manual, real/local, and not yet implemented now that the GPT agent runtime exists behind an explicit operator gate.
 
 Legend:
 
@@ -36,7 +36,7 @@ Legend:
 | Revenue/performance report | Yes | Yes | No | No | Yes | No | `scripts/generate_revenue_report.py`, `make revenue-report`, and dashboard Reports page. |
 | Obsidian vault audit layer | Partly | Yes | No | Yes | Yes | No | Vault notes, logs, drafts, review queue, meetings, deals, and reports remain readable markdown. |
 | Simulation-only agents | Yes | Yes | Yes | Yes | Yes | No | CLI and Agent Console run dry-run agents and record observed runs. |
-| GPT/OpenAI agent runtime | No | No | No | No | Partly | Partly | Phase 1 safe client wrapper exists behind `GPT_AGENT_ENABLED=false`; agents are not wired to use it yet. |
+| GPT/OpenAI agent runtime | Yes | Yes | Yes | Yes | Yes | No | Implemented for outreach, follow-up, content, and fan engagement planning behind `GPT_AGENT_ENABLED=false` by default. Requires `OPENAI_API_KEY`; all GPT output is review-only and records artifacts, drafts, or approval requests. |
 | Social signal processing runtime | No | Partly | Yes | Yes | Partly | Partly | Placeholder service checks vault/Mongo; real ingestion/classification is not implemented. |
 | Post/content generation runtime | No | Partly | Yes | Yes | Partly | Partly | Placeholder service checks vault/Mongo; real content generation is not implemented. |
 | Backup/export guidance | No | Yes | No | Yes | Yes | No | Documented in `docs/V1_BACKUP_AND_EXPORT.md`; no Makefile wrapper yet. |
@@ -44,4 +44,4 @@ Legend:
 
 ## Safety Boundary
 
-SignalForge v1 does not send messages, publish content, create calendar events, issue invoices, call CRM APIs, run GPT-powered agents by default, or use external enrichment/scraping APIs. The Phase 1 GPT client wrapper remains disabled unless `GPT_AGENT_ENABLED=true` and `OPENAI_API_KEY` are both configured. The dashboard and CLI may update local MongoDB records and append local vault logs only.
+SignalForge v1 does not send messages, publish content, create calendar events, issue invoices, call CRM APIs, run GPT-powered agents by default, or use external enrichment/scraping APIs. The GPT runtime is implemented but gated unless `GPT_AGENT_ENABLED=true` and `OPENAI_API_KEY` are configured. The dashboard and CLI may update local MongoDB records, create review-only GPT artifacts/drafts/approval requests, and append local vault logs only.

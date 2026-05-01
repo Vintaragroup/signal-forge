@@ -66,9 +66,11 @@ class BaseAgent:
         self.contacts: list[dict[str, Any]] = []
         self.message_drafts: list[dict[str, Any]] = []
         self.run_id: str | None = None
+        self.db = None
 
     def run(self) -> dict[str, Any]:
         db = self.get_database()
+        self.db = db
         run_id = self.start_observed_run(db)
         self.run_id = run_id
         leads: list[dict[str, Any]] = []

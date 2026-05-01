@@ -18,6 +18,24 @@ make dashboard
 
 Open `http://localhost:5174`. The dashboard reads MongoDB through the local API and keeps vault behavior unchanged.
 
+The dashboard header shows GPT runtime status from `GET /settings/gpt-runtime`: enabled or disabled, plus the configured model when enabled.
+
+## 1A. Optional GPT Runtime Gate
+
+GPT Agent Runtime v1 is disabled by default. To enable review-only GPT planning, edit the local `.env` file:
+
+```text
+GPT_AGENT_ENABLED=true
+OPENAI_API_KEY=<your-api-key>
+OPENAI_MODEL=gpt-4o-mini
+```
+
+`OPENAI_MODEL` is optional; blank values use the runtime default. Keep `.env` local and do not commit real API keys.
+
+When enabled, GPT can create human-reviewed outreach drafts, follow-up recommendations, content plans, fan engagement plans, agent artifacts, local markdown notes, and approval requests. GPT output is not approval to take action.
+
+GPT cannot send emails, SMS, DMs, comments, social posts, publish content, scrape platforms, schedule posts, create calendar events, issue invoices, or call external CRM/platform APIs. Operators must review GPT outputs in the Agent Console, Messages page, approval requests, and vault notes before doing anything manually outside SignalForge.
+
 ## 2. Run The Lead Pipeline
 
 ```bash
@@ -302,6 +320,8 @@ Use the Agent Console to answer:
 
 Agent Console actions remain simulation-only. They do not send email, SMS, DMs, social posts, or calendar events.
 
+If GPT is enabled, supported agents may add GPT steps, artifacts, drafts, and approval requests to the same run timeline. Low-confidence GPT output creates an approval request instead of being treated as ready. All GPT-generated drafts remain `send_status=not_sent` until a human sends outside SignalForge and logs that manual action.
+
 ## 18. Use Dashboard Detail Timelines
 
 The dashboard Messages page supports full message review from the browser:
@@ -325,4 +345,5 @@ make down
 - Keep `.env` local.
 - Review outreach before sending anything manually.
 - Do not treat generated copy as approved without human review.
+- Treat every GPT output as a draft, recommendation, or approval request only.
 - Use notes and status updates to keep MongoDB and the vault aligned.

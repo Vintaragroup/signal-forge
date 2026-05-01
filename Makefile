@@ -3,7 +3,7 @@ BUSINESS_TYPE ?= roofing contractor
 LOCATION ?= Austin, TX
 LEAD_COUNT ?= 5
 
-.PHONY: up down api web dashboard pipeline report revenue-report check test
+.PHONY: up down api web dashboard pipeline report revenue-report check test gpt-agent-test
 
 up:
 	docker compose up -d --build
@@ -34,3 +34,6 @@ check:
 
 test:
 	docker compose run --rm --no-deps api python -m pytest
+
+gpt-agent-test:
+	docker compose run --rm api python scripts/gpt_runtime_test_campaign.py

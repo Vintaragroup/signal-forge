@@ -49,6 +49,10 @@ function formatDate(value) {
   return value ? new Date(value).toLocaleString() : "-";
 }
 
+function shortId(value) {
+  return value ? String(value).slice(0, 8) : "-";
+}
+
 function MessageDetailDrawer({ message, onClose, onReview, busyId }) {
   if (!message) return null;
 
@@ -66,6 +70,7 @@ function MessageDetailDrawer({ message, onClose, onReview, busyId }) {
             <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Message Review</div>
             <h2 className="mt-1 text-xl font-semibold text-slate-950">{message.subject_line || "Message draft"}</h2>
             <div className="mt-3 flex flex-wrap gap-2">
+              {message.source === "gpt" ? <StatusBadge value="source=gpt" /> : null}
               <StatusBadge value={message.review_status} />
               <StatusBadge value={message.send_status} />
               <StatusBadge value={message.response_status || "not_set"} />
@@ -98,6 +103,26 @@ function MessageDetailDrawer({ message, onClose, onReview, busyId }) {
               </div>
             </div>
           </section>
+
+          {(message.source === "gpt" || message.generated_by_agent || message.agent_run_id) ? (
+            <section className="mt-6 rounded-lg border border-purple-200 bg-purple-50 p-4">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <h3 className="text-sm font-semibold text-purple-950">GPT Provenance</h3>
+                <div className="flex flex-wrap gap-2">
+                  <StatusBadge value={message.source ? `source=${message.source}` : "source not set"} />
+                  <StatusBadge value={message.generated_by_agent || "agent not set"} />
+                </div>
+              </div>
+              <div className="mt-3 grid gap-2 text-sm text-purple-950 md:grid-cols-2">
+                <div><span className="font-medium">Review:</span> {message.review_status || "not_set"}</div>
+                <div><span className="font-medium">Send:</span> {message.send_status || "not_set"}</div>
+                <div><span className="font-medium">Agent run:</span> {message.agent_run_id || "not linked"}</div>
+                <div><span className="font-medium">Step:</span> {message.agent_step_name || "not linked"}</div>
+                <div><span className="font-medium">Confidence:</span> {message.gpt_confidence ?? "-"}</div>
+                <div className="md:col-span-2"><span className="font-medium">Reasoning:</span> {message.gpt_reasoning_summary || "No reasoning summary recorded."}</div>
+              </div>
+            </section>
+          ) : null}
 
           <section className="mt-6">
             <h3 className="text-sm font-semibold text-slate-950">Message Body</h3>
@@ -265,11 +290,26 @@ export default function MessagesPage() {
   };
 
   const columns = [
-    { key: "subject_line", label: "Subject", render: (row) => <span className="font-medium text-slate-900">{row.subject_line || "-"}</span> },
+    {
+      key: "subject_line",
+      label: "Subject",
+      render: (row) => (
+        <div>
+          <span className="font-medium text-slate-900">{row.subject_line || "-"}</span>
+          <div className="mt-1 flex flex-wrap gap-1.5">
+            {row.source === "gpt" ? <StatusBadge value="source=gpt" /> : null}
+            {row.agent_run_id ? <span className="text-xs text-slate-500">run {shortId(row.agent_run_id)}</span> : null}
+          </div>
+        </div>
+      ),
+    },
     { key: "recipient_name", label: "Recipient" },
     { key: "module", label: "Module", render: (row) => <StatusBadge value={row.module} /> },
+    { key: "source", label: "Source", render: (row) => <StatusBadge value={row.source || "not_set"} /> },
     { key: "review_status", label: "Review", render: (row) => <StatusBadge value={row.review_status} /> },
     { key: "send_status", label: "Send", render: (row) => <StatusBadge value={row.send_status} /> },
+    { key: "generated_by_agent", label: "Agent", render: (row) => <span className="text-xs text-slate-600">{row.generated_by_agent || "-"}</span> },
+    { key: "agent_run_id", label: "Run", render: (row) => <span className="font-mono text-xs text-slate-500">{shortId(row.agent_run_id)}</span> },
     { key: "response_status", label: "Response", render: (row) => <StatusBadge value={row.response_status || "not_set"} /> },
     { key: "contact_status", label: "Contact", render: (row) => <StatusBadge value={row.contact_status || "not_linked"} /> },
     { key: "deal_outcome", label: "Deal", render: (row) => <StatusBadge value={row.deal_outcome || "none"} /> },

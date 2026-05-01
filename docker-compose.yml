@@ -1,5 +1,7 @@
 x-signalforge-env: &signalforge-env
   OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+  OPENAI_MODEL: ${OPENAI_MODEL:-}
+  GPT_AGENT_ENABLED: ${GPT_AGENT_ENABLED:-false}
   MONGO_URI: ${MONGO_URI:-mongodb://mongo:27017/signalforge}
   LINKEDIN_COOKIE: ${LINKEDIN_COOKIE:-}
   X_API_KEY: ${X_API_KEY:-}

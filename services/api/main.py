@@ -33,6 +33,8 @@ SERVICE_DESCRIPTION = "Local-first SignalForge dashboard API."
 PROJECT_ROOT = Path(__file__).resolve().parents[1] if Path(__file__).resolve().parent.name == "services" else Path.cwd()
 DEFAULT_MONGO_URI = "mongodb://localhost:27017/signalforge"
 DEFAULT_VAULT_PATH = Path(os.getenv("VAULT_PATH", "/vault"))
+DEFAULT_OPENAI_MODEL = "gpt-4o-mini"
+GPT_SAFETY_MODE = "local_human_review_only"
 VALID_MESSAGE_DECISIONS = MESSAGE_REVIEW_DECISIONS
 
 AGENT_CLASSES = {
@@ -156,6 +158,19 @@ def mongo_status() -> dict:
             client.close()
         except Exception:
             pass
+
+
+def env_enabled(value: str | None) -> bool:
+    return (value or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def gpt_runtime_status() -> dict:
+    return {
+        "enabled": env_enabled(os.getenv("GPT_AGENT_ENABLED", "false")),
+        "model": clean_text(os.getenv("OPENAI_MODEL")) or DEFAULT_OPENAI_MODEL,
+        "has_api_key": bool(clean_text(os.getenv("OPENAI_API_KEY"))),
+        "safety_mode": GPT_SAFETY_MODE,
+    }
 
 
 def count_response_events(messages: list[dict], outcome: str) -> int:
@@ -331,6 +346,52 @@ def enrich_messages(records: list[dict], db) -> list[dict]:
         message["linked_deals"] = linked_deals
         message["timeline"] = message_timeline(message, linked_deal)
         enriched.append(message)
+    return enriched
+
+
+def enrich_approval_requests(records: list[dict], db) -> list[dict]:
+    enriched = []
+    for request in records:
+        target = clean_text(request.get("target"))
+        linked_target_id = clean_text(request.get("linked_target_id"))
+        target_values = [value for raw in (target, linked_target_id) for value in object_id_or_raw(raw)]
+        request_type = clean_text(request.get("request_type"))
+        target_type = clean_text(request.get("target_type"))
+
+        linked_contact = None
+        linked_lead = None
+        linked_message = None
+
+        if target_type == "contact" or request_type.startswith("gpt_"):
+            contact_conditions = []
+            for value in target_values:
+                if isinstance(value, ObjectId):
+                    contact_conditions.append({"_id": value})
+                else:
+                    contact_conditions.extend([{"contact_key": value}, {"email": value}])
+            if contact_conditions:
+                linked_contact = db.contacts.find_one({"$or": contact_conditions})
+
+        if target_type == "lead" or request_type.startswith("gpt_"):
+            lead_conditions = []
+            for value in target_values:
+                if isinstance(value, ObjectId):
+                    lead_conditions.append({"_id": value})
+                else:
+                    lead_conditions.append({"company_slug": value})
+            if lead_conditions:
+                linked_lead = db.leads.find_one({"$or": lead_conditions})
+
+        message_id = clean_text(request.get("message_draft_id") or request.get("draft_key"))
+        if not message_id and target_type == "message":
+            message_id = target or linked_target_id
+        if message_id:
+            linked_message = find_message_draft(db, message_id)
+
+        request["linked_contact"] = linked_contact
+        request["linked_lead"] = linked_lead
+        request["linked_message"] = linked_message
+        enriched.append(request)
     return enriched
 
 
@@ -539,6 +600,11 @@ def health() -> dict:
         "vault": vault_status(),
         "mongo": mongo_status(),
     }
+
+
+@app.get("/settings/gpt-runtime")
+def gpt_runtime_settings() -> dict:
+    return gpt_runtime_status()
 
 
 @app.get("/vault")
@@ -838,6 +904,7 @@ def run_agent(payload: AgentRunRequest) -> dict:
             run = db.agent_runs.find_one({"run_id": result.get("run_id")})
             steps = list(db.agent_steps.find({"run_id": result.get("run_id")}).sort("step_number", 1))
             approvals = list(db.approval_requests.find({"run_id": result.get("run_id")}).sort("created_at", -1))
+            approvals = enrich_approval_requests(approvals, db)
         finally:
             client.close()
         return serialize(
@@ -892,6 +959,7 @@ def agent_run_detail(run_id: str) -> dict:
         steps = list(db.agent_steps.find({"run_id": actual_run_id}).sort("step_number", 1))
         artifacts = list(db.agent_artifacts.find({"run_id": actual_run_id}).sort("created_at", 1))
         approvals = list(db.approval_requests.find({"run_id": actual_run_id}).sort("created_at", -1))
+        approvals = enrich_approval_requests(approvals, db)
 
         related_contacts = []
         for value in run.get("related_contacts") or []:

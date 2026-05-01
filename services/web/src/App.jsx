@@ -32,11 +32,16 @@ export default function App() {
   const initialPage = () => window.location.hash.replace("#", "").split("?")[0] || "overview";
   const [activePage, setActivePage] = useState(initialPage);
   const [health, setHealth] = useState(null);
+  const [gptRuntime, setGptRuntime] = useState(null);
   const [lastRefresh, setLastRefresh] = useState(new Date());
 
   async function refreshHealth() {
-    const nextHealth = await api.health().catch(() => null);
+    const [nextHealth, nextGptRuntime] = await Promise.all([
+      api.health().catch(() => null),
+      api.gptRuntimeSettings().catch(() => null),
+    ]);
     setHealth(nextHealth);
+    setGptRuntime(nextGptRuntime);
     setLastRefresh(new Date());
   }
 
@@ -73,6 +78,7 @@ export default function App() {
           <Header
             title={title}
             health={health}
+            gptRuntime={gptRuntime}
             lastRefresh={lastRefresh}
             action={
               <button

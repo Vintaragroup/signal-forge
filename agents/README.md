@@ -4,6 +4,8 @@ The agent layer is a simulation-first planning layer for SignalForge modules.
 
 Agents can read MongoDB, inspect module context, print planned actions, and write agent run logs into the Obsidian vault. They do not send emails, SMS, DMs, social posts, calendar invites, or any outbound communication.
 
+GPT Agent Runtime v1 is available behind an explicit environment gate. It is disabled by default and remains human-reviewed when enabled.
+
 Agents read module-matched records from `leads`, `contacts`, and `message_drafts`. Imported contacts come from `scripts/import_contacts.py`; scored contacts come from `scripts/score_contacts.py`; draft notes come from `scripts/draft_messages.py`; review decisions come from `scripts/review_message.py`; manual send logs come from `scripts/log_manual_send.py`; response outcomes come from `scripts/log_response.py`; meeting prep notes come from `scripts/generate_meeting_prep.py`; deal outcomes come from `scripts/log_deal_outcome.py`. When no matching leads exist, agents can create contact-based planning actions for human review and prefer `high_priority` contacts first.
 
 ## Supported Modules
@@ -28,6 +30,28 @@ python scripts/run_agent.py content --module artist_growth --dry-run
 python scripts/run_agent.py fan_engagement --module artist_growth --dry-run
 python scripts/run_agent.py followup --module insurance_growth --dry-run
 ```
+
+## GPT Runtime Controls
+
+Enable GPT only in your local `.env`:
+
+```text
+GPT_AGENT_ENABLED=true
+OPENAI_API_KEY=<your-api-key>
+OPENAI_MODEL=gpt-4o-mini
+```
+
+`OPENAI_MODEL` is optional; blank values use the runtime default. The dashboard reads `GET /settings/gpt-runtime` to show whether GPT is enabled, whether an API key exists, the configured model, and the safety mode.
+
+When enabled, GPT can:
+
+- draft outreach messages for human review;
+- recommend follow-up actions;
+- create content planning artifacts and markdown notes;
+- create artist fan engagement planning artifacts and markdown notes;
+- create approval requests when confidence is low.
+
+GPT cannot send email, SMS, DMs, comments, social posts, publish content, scrape platforms, schedule posts, create calendar events, issue invoices, or call external CRM/platform APIs. Operators must review and approve every GPT output before taking any real-world action outside SignalForge.
 
 Import a provided contact list before an agent run:
 
@@ -67,7 +91,7 @@ The dashboard Agent Console reads these collections to show runs as working proc
 
 - Simulation only.
 - No outbound communication.
-- No external API calls.
+- No external platform API calls.
 - No social posting.
 - No calendar actions.
 - Human approval required for any real-world action.

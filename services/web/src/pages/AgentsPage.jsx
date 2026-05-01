@@ -8,6 +8,22 @@ function formatDate(value) {
   return value ? new Date(value).toLocaleString() : "-";
 }
 
+function formatConfidence(value) {
+  if (value === null || value === undefined || value === "") return "-";
+  const numeric = Number(value);
+  if (Number.isNaN(numeric)) return String(value);
+  return `${Math.round(numeric * 100)}%`;
+}
+
+function isGptStep(step) {
+  return step?.step_name?.startsWith("gpt_");
+}
+
+function recordLabel(record) {
+  if (!record) return "not linked";
+  return record.name || record.recipient_name || record.company || record.company_name || record.subject_line || record._id || "linked";
+}
+
 function JsonBlock({ value }) {
   return (
     <pre className="max-h-64 overflow-auto rounded-lg bg-slate-950 p-3 text-xs leading-5 text-slate-100 scrollbar-soft">
@@ -36,6 +52,20 @@ function Timeline({ steps }) {
               <span className="text-xs text-slate-500">{formatDate(step.timestamp)}</span>
             </div>
           </div>
+          {isGptStep(step) ? (
+            <div className="mt-4 rounded-lg border border-purple-200 bg-purple-50 p-3">
+              <div className="flex flex-wrap items-center gap-2">
+                <StatusBadge value="gpt step" />
+                <StatusBadge value={step.output?.used_gpt ? "used gpt" : "gpt not used"} />
+                <StatusBadge value={`confidence ${formatConfidence(step.output?.confidence)}`} />
+              </div>
+              <div className="mt-3 grid gap-2 text-sm text-purple-950 md:grid-cols-2">
+                <div><span className="font-medium">Step:</span> {step.step_name}</div>
+                <div><span className="font-medium">Output length:</span> {step.output?.output_length ?? "-"}</div>
+                <div className="md:col-span-2"><span className="font-medium">Reasoning:</span> {step.output?.reasoning_summary || step.output?.error || "No reasoning summary recorded."}</div>
+              </div>
+            </div>
+          ) : null}
           <div className="mt-4 grid gap-3 xl:grid-cols-2">
             <div>
               <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-400">Input</div>
@@ -107,6 +137,20 @@ export default function AgentsPage() {
   const artifacts = selectedRun?.artifacts || [];
   const related = selectedRun?.related || {};
   const openApprovalCount = approvals.filter((item) => item.status === "open").length;
+  const gptSteps = steps.filter(isGptStep);
+  const gptApprovals = approvals.filter((item) => item.request_type?.startsWith("gpt_"));
+  const gptDrafts = (related.messages || []).filter((item) => item.source === "gpt");
+  const gptArtifacts = artifacts.filter((item) => item.artifact_type?.startsWith("gpt_"));
+  const usedGpt = gptSteps.some((step) => step.output?.used_gpt);
+  const gptOutcome = gptDrafts.length
+    ? `${gptDrafts.length} draft${gptDrafts.length === 1 ? "" : "s"}`
+    : gptArtifacts.length
+      ? `${gptArtifacts.length} recommendation${gptArtifacts.length === 1 ? "" : "s"}`
+    : gptApprovals.length
+      ? `${gptApprovals.length} approval${gptApprovals.length === 1 ? "" : "s"}`
+      : gptSteps.length
+        ? "no draft"
+        : "not used";
 
   const runStats = useMemo(
     () => ({
@@ -205,11 +249,12 @@ export default function AgentsPage() {
                 <div className="flex flex-wrap gap-2">
                   <StatusBadge value={run.status} />
                   <StatusBadge value="simulation_only" />
+                  <StatusBadge value={usedGpt ? "used gpt" : "gpt not used"} />
                   {openApprovalCount ? <StatusBadge value={`${openApprovalCount} approvals`} /> : null}
                 </div>
               </div>
 
-              <div className="mt-5 grid gap-3 md:grid-cols-4">
+              <div className="mt-5 grid gap-3 md:grid-cols-5">
                 <div className="rounded-lg bg-slate-50 p-3">
                   <div className="text-xs text-slate-500">Started</div>
                   <div className="mt-1 text-sm font-medium text-slate-900">{formatDate(run.started_at)}</div>
@@ -226,7 +271,32 @@ export default function AgentsPage() {
                   <div className="text-xs text-slate-500">Messages</div>
                   <div className="mt-1 text-sm font-medium text-slate-900">{run.related_messages?.length || 0}</div>
                 </div>
+                <div className="rounded-lg bg-purple-50 p-3">
+                  <div className="text-xs text-purple-700">GPT</div>
+                  <div className="mt-1 text-sm font-medium text-purple-950">{gptOutcome}</div>
+                </div>
               </div>
+
+              {gptSteps.length ? (
+                <div className="mt-4 rounded-lg border border-purple-200 bg-purple-50 p-4">
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <h3 className="text-sm font-semibold text-purple-950">GPT Activity</h3>
+                    <div className="flex flex-wrap gap-2">
+                      <StatusBadge value={usedGpt ? "used gpt" : "gpt not used"} />
+                      <StatusBadge value={gptOutcome} />
+                    </div>
+                  </div>
+                  <div className="mt-3 grid gap-3 md:grid-cols-3">
+                    {gptSteps.map((step) => (
+                      <div key={step._id} className="rounded-lg bg-white/70 p-3 text-sm text-purple-950 ring-1 ring-purple-100">
+                        <div className="text-xs font-semibold uppercase tracking-wide text-purple-700">{step.step_name}</div>
+                        <div className="mt-2">Confidence: {formatConfidence(step.output?.confidence)}</div>
+                        <div className="mt-1 line-clamp-3 text-purple-800">{step.output?.reasoning_summary || step.output?.error || "No reasoning summary recorded."}</div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
             </div>
           ) : null}
 
@@ -258,12 +328,26 @@ export default function AgentsPage() {
               <h2 className="text-sm font-semibold text-slate-950">Human Approvals Needed</h2>
               <div className="mt-3 space-y-2">
                 {approvals.map((item) => (
-                  <div key={item._id} className="rounded-lg border border-slate-200 p-3">
+                  <div key={item._id} className={["rounded-lg border p-3", item.request_type?.startsWith("gpt_") ? "border-purple-200 bg-purple-50" : "border-slate-200"].join(" ")}>
                     <div className="flex items-start justify-between gap-3">
-                      <div className="text-sm font-medium text-slate-900">{item.title}</div>
+                      <div>
+                        <div className="text-sm font-medium text-slate-900">{item.title}</div>
+                        <div className="mt-2 flex flex-wrap gap-2">
+                          <StatusBadge value={item.request_type} />
+                          {item.request_type?.startsWith("gpt_") ? <StatusBadge value={`confidence ${formatConfidence(item.gpt_confidence)}`} /> : null}
+                        </div>
+                      </div>
                       <StatusBadge value={item.status} />
                     </div>
-                    <p className="mt-2 text-sm text-slate-600">{item.summary || item.target}</p>
+                    <p className="mt-2 text-sm text-slate-600">{item.reason_for_review || item.summary || item.target}</p>
+                    {item.request_type?.startsWith("gpt_") ? (
+                      <div className="mt-3 grid gap-2 text-xs text-slate-600 md:grid-cols-3">
+                        <div><span className="font-medium text-slate-800">Target:</span> {item.target_type || "record"} {item.target || "-"}</div>
+                        <div><span className="font-medium text-slate-800">Contact:</span> {recordLabel(item.linked_contact)}</div>
+                        <div><span className="font-medium text-slate-800">Lead:</span> {recordLabel(item.linked_lead)}</div>
+                        <div className="md:col-span-3"><span className="font-medium text-slate-800">Message:</span> {recordLabel(item.linked_message)}</div>
+                      </div>
+                    ) : null}
                   </div>
                 ))}
                 {!approvals.length ? <div className="text-sm text-slate-500">No approval requests were created for this run.</div> : null}

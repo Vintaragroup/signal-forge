@@ -20,6 +20,27 @@ Current package docs:
 
 v1 remains local-first and human-reviewed. It does not send messages, publish content, create calendar events, issue invoices, call CRM APIs, or use external enrichment/scraping APIs.
 
+## GPT Agent Runtime
+
+GPT Agent Runtime v1 is implemented but gated off by default. It can help the existing agents draft or recommend review-only outputs:
+
+- `outreach_agent`: draft outreach messages into `message_drafts` with `review_status=needs_review` and `send_status=not_sent`.
+- `followup_agent`: create follow-up recommendations as agent artifacts or approval requests.
+- `content_agent`: create content plan artifacts and local markdown notes under `vault/content/agents/`.
+- `fan_engagement_agent`: create artist-growth engagement plan artifacts and local markdown notes under `vault/content/agents/`.
+
+To enable GPT locally, copy `.env.example` to `.env`, then set:
+
+```text
+GPT_AGENT_ENABLED=true
+OPENAI_API_KEY=<your-api-key>
+OPENAI_MODEL=gpt-4o-mini
+```
+
+`OPENAI_MODEL` is optional; blank values use the built-in default. The dashboard shows GPT enabled/disabled status from `GET /settings/gpt-runtime` and displays the active model name.
+
+GPT cannot send emails, SMS, DMs, comments, social posts, calendar invites, invoices, CRM updates, enrichment calls, scraping jobs, or publishing/scheduling actions. Every GPT output requires human review before any real-world action happens outside SignalForge.
+
 ## Web Dashboard v1
 
 SignalForge now includes a local React dashboard for operating the system visually.
@@ -74,7 +95,7 @@ External Sources
    cp .env.example .env
    ```
 
-2. Edit `.env` and add any API keys you want to use.
+2. Edit `.env` and add any API keys you want to use. Keep `GPT_AGENT_ENABLED=false` unless you want review-only GPT planning.
 
 3. Start the stack:
 
@@ -237,7 +258,7 @@ Available documentation-first modules:
 
 ## Agent Layer
 
-SignalForge includes a simulation-only agent layer for planning work across modules. Agents read MongoDB, use module context, print planned actions, and write run logs to `vault/logs/agents/`. They do not send email, SMS, DMs, social posts, or call external APIs.
+SignalForge includes a simulation-only agent layer for planning work across modules. Agents read MongoDB, use module context, print planned actions, and write run logs to `vault/logs/agents/`. When GPT is enabled, supported agents may call OpenAI to create review-only drafts, recommendations, artifacts, or approval requests. They do not send email, SMS, DMs, social posts, publish content, or call external platform APIs.
 
 Example dry runs:
 

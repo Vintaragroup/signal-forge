@@ -4,6 +4,7 @@ export default function StatusBadge({ value }) {
     normalized.includes("won") ||
     normalized.includes("approved") ||
     normalized.includes("ready") ||
+    normalized.includes("enabled") ||
     normalized.includes("sent") ||
     normalized.includes("high_priority")
       ? "green"
@@ -11,6 +12,7 @@ export default function StatusBadge({ value }) {
         ? "red"
         : normalized.includes("revision") ||
             normalized.includes("review") ||
+            normalized.includes("disabled") ||
             normalized.includes("proposal") ||
             normalized.includes("follow")
           ? "amber"
