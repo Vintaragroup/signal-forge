@@ -78,12 +78,14 @@ The dashboard uses the FastAPI service at `http://localhost:8000`, reads existin
 Dashboard pages:
 
 - Demo Mode
+- Workflow
 - Overview
 - Pipeline / CRM
 - Messages
 - Approvals
 - Agent Tasks
 - Agents
+- Research / Tools
 - GPT Diagnostics
 - Deals
 - Reports
@@ -112,6 +114,21 @@ Approval decisions only control internal workflow state:
 No approval queue decision sends messages, posts content, scrapes data, schedules posts, creates calendar events, or calls external CRM/platform APIs.
 
 Approval requests are classified by origin and severity so the dashboard can keep real operator work separate from diagnostics. The default Approval Queue shows actionable approvals only; use the queue filters for GPT, system issues, or test/synthetic records. GPT runtime tests may create synthetic approval requests to verify safety behavior. Review them with `python scripts/cleanup_test_approvals.py --dry-run`, or archive and remove them with `python scripts/cleanup_test_approvals.py --archive`.
+
+## Agent Tool Layer v1 - Phase 1
+
+SignalForge now includes a separate read-only research tool layer under `tools/`. Phase 1 includes mock web search, public website scraping, contact-field extraction, and source validation. It records `tool_runs` and review-only `scraped_candidates` for operator inspection.
+
+Run tools from Docker with:
+
+```bash
+docker compose run --rm api python scripts/run_tool.py web_search --query "roofing contractor" --module contractor_growth --location "Austin, TX" --limit 3
+docker compose run --rm api python scripts/run_tool.py website_scraper --url https://example.com
+```
+
+The dashboard Research / Tools page shows tool history and scraped candidates. Operators can approve, reject, convert to contact, or convert to lead. Conversion requires an explicit operator decision; approval alone does not create contact or lead records.
+
+Phase 1 does not add a real search API, browser scrolling, agent-wide integration, login, form submission, posting, messaging, captcha bypass, protected/private scraping, or any outbound action.
 
 ## Agent Task Queue v1
 

@@ -15,16 +15,17 @@ Legend:
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | Docker local stack | No | Yes | No | Yes | Yes | No | `make up`, `make dashboard`, `docker compose` start MongoDB, API, services, and web. |
 | FastAPI health/status | Yes | Yes | No | No | Yes | No | `GET /health` plus `curl http://localhost:8000/health`. |
-| React web dashboard | Yes | No | No | No | Yes | No | Overview, Pipeline / CRM, Messages, Agent Console, Deals, Reports. |
+| React web dashboard | Yes | No | No | No | Yes | No | Demo Mode, Workflow, Overview, Pipeline / CRM, Messages, Approvals, Agent Tasks, Agent Console, Research / Tools, GPT Diagnostics, Deals, Reports. |
 | Contractor listing import | No | Yes | No | Yes | Yes | No | `scripts/run_daily_pipeline.sh` runs `lead_scraper` against local structured data. |
 | Contractor lead enrichment/scoring | No | Yes | No | No | Yes | No | `lead_enricher` adds deterministic v3 intelligence, score breakdown, notes, and review queue items. |
-| External/live scraping | No | No | No | No | No | Yes | v1 uses local structured datasets only. |
+| External/live scraping | Partly | Yes | No | Yes | Partly | Partly | Tool Layer Phase 1 can fetch a single public HTML URL for operator review only. It does not login, scroll browsers, submit forms, bypass captcha, scrape protected/private areas, or integrate with agents. |
 | External enrichment APIs | No | No | No | No | No | Yes | No external enrichment providers are called. |
 | Contact CSV import | No | Yes | No | Yes | Yes | No | `scripts/import_contacts.py` imports local CSVs into MongoDB and writes vault notes. |
 | Contact scoring/segmentation | No | Yes | No | No | Yes | No | `scripts/score_contacts.py` applies deterministic local scoring. |
 | Message draft generation | No | Yes | No | Yes | Yes | No | `scripts/draft_messages.py` writes Mongo records and editable vault notes. |
 | Message review | Yes | Yes | No | Yes | Yes | No | Dashboard Messages page and `scripts/review_message.py` approve, revise, or reject. |
 | Approval queue | Yes | No | No | Yes | Yes | No | Dashboard Approval Queue reviews `approval_requests`, stores decisions and notes, and can convert safe local requests into review-only drafts or artifacts. |
+| Agent Tool Layer v1 Phase 1 | Yes | Yes | Yes | Yes | Yes | No | Research / Tools dashboard plus `scripts/run_tool.py` record read-only `tool_runs` and `scraped_candidates`. Mock search is deterministic; public website scraping extracts visible public fields only. Conversion to contact or lead requires explicit operator decision. |
 | Outbound email/SMS/DM/social sending | No | No | No | Yes | No | Yes | SignalForge never sends. Operators may send manually outside the system. |
 | Manual send logging | No | Yes | No | Yes | Yes | No | `scripts/log_manual_send.py` records human-performed sends only. |
 | Response logging | No | Yes | No | Yes | Yes | No | `scripts/log_response.py` records outcomes and updates linked records. |
@@ -47,4 +48,4 @@ Legend:
 
 ## Safety Boundary
 
-SignalForge v1 does not send messages, publish content, create calendar events, issue invoices, call CRM APIs, run GPT-powered agents by default, or use external enrichment/scraping APIs. The GPT runtime is implemented but gated unless `GPT_AGENT_ENABLED=true` and `OPENAI_API_KEY` are configured. GPT diagnostics never return API keys or raw prompts; the optional live diagnostics test makes only a minimal OpenAI `OK` request when explicitly invoked. The dashboard and CLI may update local MongoDB records, create review-only GPT artifacts/drafts/approval requests, write sanitized diagnostics steps, and append local vault logs only.
+SignalForge v1 does not send messages, publish content, create calendar events, issue invoices, call CRM APIs, run GPT-powered agents by default, or use external enrichment/search APIs. The GPT runtime is implemented but gated unless `GPT_AGENT_ENABLED=true` and `OPENAI_API_KEY` are configured. Tool Layer Phase 1 is read-only and review-first: it records `tool_runs` and `scraped_candidates`, and local contact/lead conversion requires an explicit operator decision. GPT diagnostics never return API keys or raw prompts; the optional live diagnostics test makes only a minimal OpenAI `OK` request when explicitly invoked. The dashboard and CLI may update local MongoDB records, create review-only GPT artifacts/drafts/approval requests, write sanitized diagnostics steps, and append local vault logs only.

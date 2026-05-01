@@ -79,6 +79,11 @@ class ApprovalDecisionRequest(BaseModel):
     note: str = ""
 
 
+class ScrapedCandidateDecisionRequest(BaseModel):
+    decision: Literal["approve", "reject", "convert_to_contact", "convert_to_lead"]
+    note: str = ""
+
+
 def utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -700,6 +705,77 @@ def convert_approval_to_draft(db, request: dict, note: str, decided_at: datetime
     return "artifact_draft", create_artifact_draft_from_approval(db, request, note, decided_at)
 
 
+def find_scraped_candidate(db, candidate_id: str) -> dict | None:
+    query: dict[str, Any] = {"_id": candidate_id}
+    if ObjectId.is_valid(candidate_id):
+        query = {"$or": [{"_id": ObjectId(candidate_id)}, {"_id": candidate_id}]}
+    return db.scraped_candidates.find_one(query)
+
+
+def candidate_display_name(candidate: dict) -> str:
+    return clean_text(candidate.get("company") or candidate.get("name") or candidate.get("source_url")) or "Research Candidate"
+
+
+def create_contact_from_candidate(db, candidate: dict, decided_at: datetime) -> dict:
+    candidate_id = str(candidate.get("_id"))
+    existing = db.contacts.find_one({"source_candidate_id": candidate_id})
+    if existing:
+        return existing
+    company = candidate_display_name(candidate)
+    contact = {
+        "contact_key": slugify(f"research-{candidate_id}-{company}"),
+        "name": company,
+        "company": company,
+        "email": clean_text(candidate.get("email")),
+        "phone": clean_text(candidate.get("phone")),
+        "city": clean_text(candidate.get("city")),
+        "state": clean_text(candidate.get("state")),
+        "module": clean_text(candidate.get("module")) or "contractor_growth",
+        "source": "tool_layer_review",
+        "source_url": clean_text(candidate.get("source_url")),
+        "source_candidate_id": candidate_id,
+        "contact_status": "needs_review",
+        "segment": "research_candidate",
+        "notes": "Converted from scraped candidate by explicit operator decision. No outbound action taken.",
+        "confidence": candidate.get("confidence"),
+        "source_quality": candidate.get("source_quality"),
+        "created_at": decided_at,
+        "updated_at": decided_at,
+    }
+    result = db.contacts.insert_one(contact)
+    contact["_id"] = result.inserted_id
+    return contact
+
+
+def create_lead_from_candidate(db, candidate: dict, decided_at: datetime) -> dict:
+    candidate_id = str(candidate.get("_id"))
+    existing = db.leads.find_one({"source_candidate_id": candidate_id})
+    if existing:
+        return existing
+    company = candidate_display_name(candidate)
+    lead = {
+        "company_slug": slugify(f"research-{company}"),
+        "company_name": company,
+        "business_type": clean_text(candidate.get("service_category")) or "unknown",
+        "location": ", ".join(part for part in [clean_text(candidate.get("city")), clean_text(candidate.get("state"))] if part),
+        "module": clean_text(candidate.get("module")) or "contractor_growth",
+        "source": "tool_layer_review",
+        "source_url": clean_text(candidate.get("source_url")),
+        "source_candidate_id": candidate_id,
+        "review_status": "needs_review",
+        "outreach_status": "not_started",
+        "lead_score": int(float(candidate.get("confidence") or 0) * 100),
+        "score": int(float(candidate.get("confidence") or 0) * 100),
+        "priority_reason": "Converted from scraped candidate by explicit operator decision. No outbound action taken.",
+        "source_quality": candidate.get("source_quality"),
+        "created_at": decided_at,
+        "updated_at": decided_at,
+    }
+    result = db.leads.insert_one(lead)
+    lead["_id"] = result.inserted_id
+    return lead
+
+
 def append_message_review_log(draft: dict, decision: str, note: str, reviewed_at: datetime) -> None:
     relative_path = draft.get("message_note_path")
     if not relative_path:
@@ -1188,6 +1264,68 @@ def approval_requests(
         records = [record for record in db.approval_requests.find(query).sort([("created_at", -1)]) if approval_matches_view(record, view)][:limit]
         records = enrich_approval_requests(records, db)
         return {"items": serialize(records), "simulation_only": True}
+    finally:
+        client.close()
+
+
+@app.get("/tool-runs")
+def tool_runs(limit: int = Query(100, ge=1, le=500), status: str = "") -> dict:
+    client = get_client()
+    try:
+        db = get_database(client)
+        query = {"status": status} if status else {}
+        items = list(db.tool_runs.find(query).sort([("created_at", -1)]).limit(limit))
+        return {"items": serialize(items), "count": len(items), "simulation_only": True}
+    finally:
+        client.close()
+
+
+@app.get("/scraped-candidates")
+def scraped_candidates(status: str = "", limit: int = Query(100, ge=1, le=500)) -> dict:
+    client = get_client()
+    try:
+        db = get_database(client)
+        query = {"status": status} if status else {}
+        items = list(db.scraped_candidates.find(query).sort([("created_at", -1)]).limit(limit))
+        return {"items": serialize(items), "count": len(items), "simulation_only": True}
+    finally:
+        client.close()
+
+
+@app.post("/scraped-candidates/{candidate_id}/decision")
+def decide_scraped_candidate(candidate_id: str, payload: ScrapedCandidateDecisionRequest) -> dict:
+    client = get_client()
+    try:
+        db = get_database(client)
+        candidate = find_scraped_candidate(db, candidate_id)
+        if not candidate:
+            raise HTTPException(status_code=404, detail="Scraped candidate not found")
+        decided_at = utc_now()
+        decision = payload.decision
+        update_fields = {
+            "status": "approved" if decision == "approve" else "rejected" if decision == "reject" else f"converted_to_{decision.removeprefix('convert_to_')}",
+            "last_decision": decision,
+            "decision_note": clean_text(payload.note),
+            "decided_at": decided_at,
+            "updated_at": decided_at,
+            "outbound_actions_taken": 0,
+        }
+        created_record = None
+        if decision == "convert_to_contact":
+            created_record = create_contact_from_candidate(db, candidate, decided_at)
+            update_fields.update({"created_record_type": "contact", "created_record_id": str(created_record.get("_id"))})
+        elif decision == "convert_to_lead":
+            created_record = create_lead_from_candidate(db, candidate, decided_at)
+            update_fields.update({"created_record_type": "lead", "created_record_id": str(created_record.get("_id"))})
+        event = {"decision": decision, "note": clean_text(payload.note), "decided_at": decided_at, "outbound_actions_taken": 0}
+        db.scraped_candidates.update_one({"_id": candidate.get("_id")}, {"$set": update_fields, "$push": {"decision_events": event}})
+        updated = find_scraped_candidate(db, candidate_id) or {**candidate, **update_fields}
+        return {
+            "item": serialize(updated),
+            "created_record": serialize(created_record) if created_record else None,
+            "message": "Candidate decision recorded. No outbound actions were taken.",
+            "simulation_only": True,
+        }
     finally:
         client.close()
 

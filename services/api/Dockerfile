@@ -7,6 +7,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY services/api/main.py .
 COPY agents ./agents
+COPY tools ./tools
 COPY modules ./modules
 COPY core ./core
 COPY scripts ./scripts

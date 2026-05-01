@@ -58,6 +58,13 @@ export const api = {
       method: "POST",
       body: JSON.stringify(payload),
     }),
+  toolRuns: (params = {}) => request(`/tool-runs?${new URLSearchParams(params)}`),
+  scrapedCandidates: (params = {}) => request(`/scraped-candidates?${new URLSearchParams(params)}`),
+  decideScrapedCandidate: (id, payload) =>
+    request(`/scraped-candidates/${encodeURIComponent(id)}/decision`, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
   agentTasks: (params = {}) => request(`/agent-tasks?${new URLSearchParams(params)}`),
   createAgentTask: (payload) =>
     request("/agent-tasks", {

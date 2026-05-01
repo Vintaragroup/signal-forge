@@ -11,6 +11,7 @@ import {
   ClipboardCheck,
   ListChecks,
   RefreshCw,
+  SearchCheck,
   Users,
   Workflow,
 } from "lucide-react";
@@ -24,6 +25,7 @@ import MessagesPage from "./pages/MessagesPage.jsx";
 import ApprovalQueuePage from "./pages/ApprovalQueuePage.jsx";
 import AgentTasksPage from "./pages/AgentTasksPage.jsx";
 import AgentsPage from "./pages/AgentsPage.jsx";
+import ResearchToolsPage from "./pages/ResearchToolsPage.jsx";
 import GptDiagnosticsPage from "./pages/GptDiagnosticsPage.jsx";
 import DealsPage from "./pages/DealsPage.jsx";
 import ReportsPage from "./pages/ReportsPage.jsx";
@@ -38,6 +40,7 @@ const NAV_ITEMS = [
   { id: "approvals", label: "Approvals", icon: ClipboardCheck },
   { id: "agent-tasks", label: "Agent Tasks", icon: ListChecks },
   { id: "agents", label: "Agent Console", icon: Bot },
+  { id: "research-tools", label: "Research / Tools", icon: SearchCheck },
   { id: "gpt-diagnostics", label: "GPT Diagnostics", icon: Activity },
   { id: "deals", label: "Deals", icon: Building2 },
   { id: "reports", label: "Reports", icon: FileText },
@@ -94,6 +97,7 @@ export default function App() {
     if (activePage === "approvals") return ApprovalQueuePage;
     if (activePage === "agent-tasks") return AgentTasksPage;
     if (activePage === "agents") return AgentsPage;
+    if (activePage === "research-tools") return ResearchToolsPage;
     if (activePage === "gpt-diagnostics") return GptDiagnosticsPage;
     if (activePage === "deals") return DealsPage;
     if (activePage === "reports") return ReportsPage;
