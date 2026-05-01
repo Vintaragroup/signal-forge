@@ -55,6 +55,10 @@ function isSystemIssue(item) {
   return item.request_origin === "system" || item.severity === "error";
 }
 
+function isDiagnosticOnly(item) {
+  return isSystemIssue(item) || item.is_test || item.request_origin === "test";
+}
+
 export default function ApprovalQueuePage() {
   const [items, setItems] = useState([]);
   const [view, setView] = useState("actionable");
@@ -204,31 +208,37 @@ export default function ApprovalQueuePage() {
               ))}
             </div>
 
-            <div className="mt-4 grid gap-3 lg:grid-cols-[1fr_auto]">
-              <textarea
-                value={notes[item._id] || ""}
-                onChange={(event) => setNotes((current) => ({ ...current, [item._id]: event.target.value }))}
-                placeholder="Operator note"
-                className="min-h-20 rounded-lg border border-slate-200 p-3 text-sm text-slate-700 outline-none transition focus:border-blue-300 focus:ring-2 focus:ring-blue-100"
-              />
-              <div className="flex flex-wrap content-start gap-2">
-                {DECISIONS.map((decision) => {
-                  const Icon = decision.icon;
-                  return (
-                    <button
-                      key={decision.value}
-                      type="button"
-                      disabled={busyId === item._id}
-                      onClick={() => decide(item, decision.value)}
-                      className="inline-flex h-9 items-center gap-2 rounded-lg border border-slate-200 px-3 text-sm font-medium text-slate-700 transition hover:border-blue-200 hover:text-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
-                    >
-                      <Icon className="h-4 w-4" />
-                      {decision.label}
-                    </button>
-                  );
-                })}
+            {isDiagnosticOnly(item) ? (
+              <div className="mt-4 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
+                Diagnostic-only item. Inspect the technical details, then use the source workflow for any real operator decision.
               </div>
-            </div>
+            ) : (
+              <div className="mt-4 grid gap-3 lg:grid-cols-[1fr_auto]">
+                <textarea
+                  value={notes[item._id] || ""}
+                  onChange={(event) => setNotes((current) => ({ ...current, [item._id]: event.target.value }))}
+                  placeholder="Operator note"
+                  className="min-h-20 rounded-lg border border-slate-200 p-3 text-sm text-slate-700 outline-none transition focus:border-blue-300 focus:ring-2 focus:ring-blue-100"
+                />
+                <div className="flex flex-wrap content-start gap-2">
+                  {DECISIONS.map((decision) => {
+                    const Icon = decision.icon;
+                    return (
+                      <button
+                        key={decision.value}
+                        type="button"
+                        disabled={busyId === item._id}
+                        onClick={() => decide(item, decision.value)}
+                        className="inline-flex h-9 items-center gap-2 rounded-lg border border-slate-200 px-3 text-sm font-medium text-slate-700 transition hover:border-blue-200 hover:text-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
+                      >
+                        <Icon className="h-4 w-4" />
+                        {decision.label}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
           </section>
         ))}
         {!visibleItems.length ? <div className="rounded-lg border border-slate-200 bg-white p-6 text-sm text-slate-500 shadow-sm">No approval requests match this view.</div> : null}

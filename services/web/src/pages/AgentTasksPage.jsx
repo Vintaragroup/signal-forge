@@ -14,6 +14,8 @@ const AGENT_ACTIONS = [
   { agent_name: "fan_engagement", task_type: "engage_fans", label: "Fan Engagement", icon: Music2 },
 ];
 
+const TOOL_ENABLED_AGENTS = new Set(["outreach", "content"]);
+
 function formatDate(value) {
   return value ? new Date(value).toLocaleString() : "-";
 }
@@ -38,6 +40,7 @@ export default function AgentTasksPage() {
     priority: "normal",
     segment: "",
     high_priority: false,
+    use_tools: false,
   });
 
   async function loadTasks(nextStatus = status) {
@@ -68,7 +71,7 @@ export default function AgentTasksPage() {
   function openModal(action) {
     setNotice("");
     setActiveAction(action);
-    setConfig({ module: "contractor_growth", limit: 10, priority: "normal", segment: "", high_priority: false });
+    setConfig({ module: "contractor_growth", limit: 10, priority: "normal", segment: "", high_priority: false, use_tools: false });
   }
 
   async function createTask(event) {
@@ -77,6 +80,7 @@ export default function AgentTasksPage() {
     setNotice("");
     const input_config = {
       limit: Number(config.limit),
+      ...(config.use_tools ? { use_tools: true } : {}),
       filters: {
         ...(config.segment.trim() ? { segment: config.segment.trim() } : {}),
         ...(config.high_priority ? { high_priority: true } : {}),
@@ -320,6 +324,12 @@ export default function AgentTasksPage() {
                 <input type="checkbox" checked={config.high_priority} onChange={(event) => setConfig((current) => ({ ...current, high_priority: event.target.checked }))} className="h-4 w-4 rounded border-slate-300" />
                 High priority filter
               </label>
+              {TOOL_ENABLED_AGENTS.has(activeAction.agent_name) ? (
+                <label className="inline-flex items-center gap-2 text-sm font-medium text-slate-700">
+                  <input type="checkbox" checked={config.use_tools} onChange={(event) => setConfig((current) => ({ ...current, use_tools: event.target.checked }))} className="h-4 w-4 rounded border-slate-300" />
+                  Use research tools
+                </label>
+              ) : null}
             </div>
             <div className="mt-5 flex justify-end gap-2">
               <button type="button" onClick={() => setActiveAction(null)} className="inline-flex h-10 items-center rounded-lg border border-slate-200 px-4 text-sm font-medium text-slate-700 transition hover:text-slate-950">Cancel</button>

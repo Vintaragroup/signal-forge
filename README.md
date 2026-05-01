@@ -125,9 +125,10 @@ Run tools from Docker with:
 docker compose run --rm api python scripts/run_tool.py web_search --query "roofing contractor" --module contractor_growth --location "Austin, TX" --limit 3
 docker compose run --rm api python scripts/run_tool.py website_scraper --url https://example.com
 docker compose run --rm api python scripts/run_tool.py browser_scroll --url https://example.com
+docker compose run --rm api python scripts/import_candidates.py data/imports/contractor_sources.csv --module contractor_growth --source-label "manual_contractor_test"
 ```
 
-The dashboard Research / Tools page shows tool history, inputs, source URLs, extracted fields, linked agent runs, approval links, and scraped candidates. Operators can approve or reject candidates. Local conversion to contact or lead is blocked until the candidate has first been approved.
+The dashboard Research / Tools page shows tool history, inputs, source URLs, extracted fields, linked agent runs, approval links, and scraped candidates. Operators can run deterministic mock research or import a local/uploaded CSV through the Import CSV panel. Manual candidate imports expect `company,website,phone,email,city,state,service_category,notes,source_url`, run the same source validation, quality scoring, enrichment, duplicate detection, approval request creation, and review workflow as tool-generated candidates, and store rows with `source=manual_upload` plus the operator-provided `source_label`. Operators can approve or reject candidates. Local conversion to contact or lead is blocked until the candidate has first been approved.
 
 Outreach and content agents can optionally run the tool layer from the Agent Console. Tool-enabled agent runs create research artifacts and approval requests only. They do not convert candidates, send messages, submit forms, post content, bypass captcha, scrape protected/private areas, or take any outbound action. `SERPAPI_KEY` is reserved for future support; v1 remains deterministic unless explicitly extended later.
 

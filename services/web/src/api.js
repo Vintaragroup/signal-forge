@@ -14,8 +14,9 @@ import {
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "http://localhost:8000";
 
 async function request(path, options = {}) {
+  const isFormData = options.body instanceof FormData;
   const response = await fetch(`${API_BASE_URL}${path}`, {
-    headers: {
+    headers: isFormData ? options.headers || {} : {
       "Content-Type": "application/json",
       ...(options.headers || {}),
     },
@@ -59,6 +60,16 @@ export const api = {
       body: JSON.stringify(payload),
     }),
   toolRuns: (params = {}) => request(`/tool-runs?${new URLSearchParams(params)}`),
+  runWebSearchTool: (payload) =>
+    request("/tools/web-search", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  importCandidates: (formData) =>
+    request("/tools/import-candidates", {
+      method: "POST",
+      body: formData,
+    }),
   scrapedCandidates: (params = {}) => request(`/scraped-candidates?${new URLSearchParams(params)}`),
   decideScrapedCandidate: (id, payload) =>
     request(`/scraped-candidates/${encodeURIComponent(id)}/decision`, {

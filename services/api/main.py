@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 from bson import ObjectId
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from pymongo import MongoClient
@@ -84,6 +84,20 @@ class ApprovalDecisionRequest(BaseModel):
 class ScrapedCandidateDecisionRequest(BaseModel):
     decision: Literal["approve", "reject", "convert_to_contact", "convert_to_lead"]
     note: str = ""
+
+
+class WebSearchToolRunRequest(BaseModel):
+    query: str
+    module: str = "contractor_growth"
+    location: str = ""
+    limit: int = Field(default=2, ge=1, le=25)
+
+
+class CandidateImportRequest(BaseModel):
+    module: str = "contractor_growth"
+    source_label: str = "manual_upload"
+    csv_path: str = ""
+    csv_text: str = ""
 
 
 def utc_now() -> datetime:
@@ -1303,8 +1317,91 @@ def tool_runs(limit: int = Query(100, ge=1, le=500), status: str = "", agent_run
         client.close()
 
 
+@app.post("/tools/web-search")
+def run_web_search_tool(payload: WebSearchToolRunRequest) -> dict:
+    if payload.module not in VALID_MODULES:
+        raise HTTPException(status_code=400, detail="Unsupported module.")
+    from tools.web_search_tool import WebSearchTool
+
+    client = get_client()
+    try:
+        db = get_database(client)
+        result = WebSearchTool().run(payload.query, payload.module, payload.location, payload.limit, db=db)
+        return serialize({**result, "message": "Mock research completed. No outbound action taken."})
+    finally:
+        client.close()
+
+
+def resolve_import_csv_path(csv_path: str) -> Path:
+    raw_path = clean_text(csv_path)
+    if not raw_path:
+        raise HTTPException(status_code=400, detail="Provide a CSV file or csv_path.")
+    path = Path(raw_path)
+    if not path.is_absolute():
+        parts = path.parts
+        path = Path("/data", *parts[1:]) if parts and parts[0] == "data" else PROJECT_ROOT / path
+    resolved = path.resolve()
+    project_root = PROJECT_ROOT.resolve()
+    data_root = Path("/data").resolve()
+    if resolved != project_root and project_root not in resolved.parents and resolved != data_root and data_root not in resolved.parents:
+        raise HTTPException(status_code=400, detail="CSV path must be inside the SignalForge workspace.")
+    if not resolved.exists() or not resolved.is_file():
+        raise HTTPException(status_code=400, detail=f"CSV file not found: {csv_path}")
+    if resolved.suffix.lower() != ".csv":
+        raise HTTPException(status_code=400, detail="Import path must point to a .csv file.")
+    return resolved
+
+
+async def read_candidate_import_request(request: Request) -> tuple[str, str, str, str]:
+    content_type = request.headers.get("content-type", "")
+    if "multipart/form-data" in content_type or "application/x-www-form-urlencoded" in content_type:
+        form = await request.form()
+        module = clean_text(form.get("module")) or "contractor_growth"
+        source_label = clean_text(form.get("source_label")) or "manual_upload"
+        uploaded = form.get("file")
+        csv_path = clean_text(form.get("csv_path"))
+        if uploaded and hasattr(uploaded, "read"):
+            content = await uploaded.read()
+            file_name = clean_text(getattr(uploaded, "filename", "uploaded.csv")) or "uploaded.csv"
+            return module, source_label, content.decode("utf-8-sig"), file_name
+        if csv_path:
+            path = resolve_import_csv_path(csv_path)
+            return module, source_label, path.read_text(encoding="utf-8-sig"), str(path)
+        raise HTTPException(status_code=400, detail="Provide a CSV file or csv_path.")
+
+    try:
+        payload = CandidateImportRequest(**(await request.json()))
+    except Exception as error:
+        raise HTTPException(status_code=400, detail="Invalid import request payload.") from error
+    if payload.csv_text:
+        return payload.module, payload.source_label, payload.csv_text, "inline_csv"
+    path = resolve_import_csv_path(payload.csv_path)
+    return payload.module, payload.source_label, path.read_text(encoding="utf-8-sig"), str(path)
+
+
+@app.post("/tools/import-candidates")
+async def import_candidates_tool(request: Request) -> dict:
+    from tools.manual_import_tool import CandidateImportError, ManualCandidateImportTool
+
+    module, source_label, csv_text, file_name = await read_candidate_import_request(request)
+    if module not in VALID_MODULES:
+        raise HTTPException(status_code=400, detail="Unsupported module.")
+    if not source_label:
+        raise HTTPException(status_code=400, detail="source_label is required.")
+
+    client = get_client()
+    try:
+        db = get_database(client)
+        result = ManualCandidateImportTool().run_text(csv_text, module, source_label, db=db, file_name=file_name)
+        return serialize({**result, "message": "CSV import completed. No contacts, leads, or outbound actions were created automatically."})
+    except CandidateImportError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    finally:
+        client.close()
+
+
 @app.get("/scraped-candidates")
-def scraped_candidates(status: str = "", agent_run_id: str = "", limit: int = Query(100, ge=1, le=500)) -> dict:
+def scraped_candidates(status: str = "", agent_run_id: str = "", include_duplicates: bool = False, limit: int = Query(100, ge=1, le=500)) -> dict:
     client = get_client()
     try:
         db = get_database(client)
@@ -1313,7 +1410,11 @@ def scraped_candidates(status: str = "", agent_run_id: str = "", limit: int = Qu
             query["status"] = status
         if agent_run_id:
             query["linked_agent_run_id"] = agent_run_id
-        items = list(db.scraped_candidates.find(query).sort([("created_at", -1)]).limit(limit))
+        items = list(db.scraped_candidates.find(query))
+        if not include_duplicates:
+            items = [item for item in items if not item.get("is_duplicate")]
+        items.sort(key=lambda item: (int(item.get("quality_score") or 0), float(item.get("confidence") or 0), item.get("created_at") or utc_now()), reverse=True)
+        items = items[:limit]
         return {"items": serialize(items), "count": len(items), "simulation_only": True}
     finally:
         client.close()

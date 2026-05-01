@@ -6,7 +6,8 @@ from main import app
 from tools.base_tool import BaseTool
 from tools.browser_scroll_tool import BrowserScrollTool
 from tools.contact_extraction_tool import extract_contact_fields
-from tools.source_validator_tool import classify_source
+from tools.manual_import_tool import ManualCandidateImportTool
+from tools.source_validator_tool import classify_source, score_source
 from tools.web_search_tool import WebSearchTool
 from tools.website_scraper_tool import WebsiteScraperTool
 
@@ -152,6 +153,30 @@ def test_source_validator_classifies_urls():
     assert classify_source("")["source_quality"] == "low_confidence"
 
 
+def test_source_validator_scores_signal_quality():
+    result = score_source(
+        "https://apexridgeroofing-austin.test/services",
+        "Apex Ridge Roofing serves Austin, TX since 2014. Call (512) 555-0142 or hello@example.com for storm damage roofing.",
+        {"company": "Apex Ridge Roofing", "phone": "(512) 555-0142", "email": "hello@example.com"},
+    )
+
+    assert result["source_quality"] == "direct_business_website"
+    assert result["domain_age_estimate"] == "established_10_plus_years"
+    assert result["has_phone"] is True
+    assert result["has_email"] is True
+    assert result["has_location"] is True
+    assert result["has_services_keywords"] is True
+    assert result["detected_business_type"] == "roofing"
+    assert result["confidence_score"] >= 80
+
+    insurance = score_source(
+        "https://harborshieldagency.test/contact",
+        "Independent insurance agency for contractors and homeowners in Tampa, FL.",
+        {"company": "Harbor Shield Insurance Agency", "service_category": "insurance"},
+    )
+    assert insurance["detected_business_type"] == "insurance"
+
+
 def test_candidate_approval_does_not_create_contact_or_lead(monkeypatch):
     db = FakeDatabase()
     candidate_id = ObjectId()
@@ -200,6 +225,133 @@ def test_candidate_conversion_requires_prior_approval(monkeypatch):
     assert db.leads.documents[0]["company_name"] == "Apex Roofing"
     assert db.leads.documents[0]["outreach_status"] == "not_started"
     assert db.contacts.documents == []
+
+
+def test_candidate_insert_marks_duplicates_from_contacts():
+    db = FakeDatabase()
+    db.contacts.insert_one({"_id": ObjectId(), "company": "Apex Ridge Roofing", "phone": "5125550142", "source_url": "https://apexridgeroofing-austin.test"})
+
+    candidate_ids = BaseTool().insert_candidates(
+        db,
+        [
+            {
+                "company": "Apex Ridge Roofing Co.",
+                "phone": "(512) 555-0142",
+                "source_url": "https://apexridgeroofing-austin.test/services",
+                "raw_summary": "Roofing contractor in Austin, TX.",
+            }
+        ],
+        create_approval=False,
+    )
+
+    assert len(candidate_ids) == 1
+    stored = db.scraped_candidates.documents[0]
+    assert stored["is_duplicate"] is True
+    assert stored["duplicate_of"].startswith("contacts:")
+    assert "phone" in stored["duplicate_reasons"]
+    assert stored["quality_score"] < 100
+
+
+def test_import_candidates_endpoint_creates_review_candidates(monkeypatch):
+    db = FakeDatabase()
+    patch_database(monkeypatch, db)
+    client = TestClient(app)
+    csv_text = """company,website,phone,email,city,state,service_category,notes,source_url
+Apex Import Roofing,https://apex-import.test,(512) 555-0111,hello@apex-import.test,Austin,TX,roofing,"Roof repair in Austin, TX since 2012.",https://apex-import.test
+Northline Import HVAC,https://northline-import.test,303-555-0112,,Denver,CO,hvac,"Heating and air conditioning service in Denver, CO.",https://northline-import.test
+"""
+
+    response = client.post(
+        "/tools/import-candidates",
+        json={"module": "contractor_growth", "source_label": "manual_contractor_test", "csv_text": csv_text},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["candidate_count"] == 2
+    assert payload["outbound_actions_taken"] == 0
+    assert len(db.tool_runs.documents) == 1
+    assert db.tool_runs.documents[0]["tool_name"] == "manual_upload"
+    assert len(db.approval_requests.documents) == 2
+    assert len(db.scraped_candidates.documents) == 2
+    assert all(candidate["source"] == "manual_upload" for candidate in db.scraped_candidates.documents)
+    assert all(candidate["source_label"] == "manual_contractor_test" for candidate in db.scraped_candidates.documents)
+    assert all(candidate["status"] == "needs_review" for candidate in db.scraped_candidates.documents)
+    assert db.contacts.documents == []
+    assert db.leads.documents == []
+
+
+def test_import_candidates_marks_duplicates_and_keeps_conversion_gated(monkeypatch):
+    db = FakeDatabase()
+    db.contacts.insert_one({"_id": ObjectId(), "company": "Apex Import Roofing", "phone": "5125550111", "source_url": "https://apex-import.test"})
+    patch_database(monkeypatch, db)
+    client = TestClient(app)
+    csv_text = """company,website,phone,email,city,state,service_category,notes,source_url
+Apex Import Roofing,https://apex-import.test,(512) 555-0111,hello@apex-import.test,Austin,TX,roofing,"Roof repair in Austin, TX.",https://apex-import.test
+"""
+
+    response = client.post(
+        "/tools/import-candidates",
+        json={"module": "contractor_growth", "source_label": "manual_contractor_test", "csv_text": csv_text},
+    )
+
+    assert response.status_code == 200
+    stored = db.scraped_candidates.documents[0]
+    assert stored["is_duplicate"] is True
+    assert "phone" in stored["duplicate_reasons"]
+
+    blocked = client.post(f"/scraped-candidates/{stored['_id']}/decision", json={"decision": "convert_to_contact", "note": "Convert locally"})
+    assert blocked.status_code == 400
+    assert len(db.contacts.documents) == 1
+
+    approved = client.post(f"/scraped-candidates/{stored['_id']}/decision", json={"decision": "approve", "note": "Looks real"})
+    assert approved.status_code == 200
+    converted = client.post(f"/scraped-candidates/{stored['_id']}/decision", json={"decision": "convert_to_contact", "note": "Convert locally"})
+    assert converted.status_code == 200
+    assert db.scraped_candidates.documents[0]["status"] == "converted_to_contact"
+    assert db.scraped_candidates.documents[0]["outbound_actions_taken"] == 0
+    assert len(db.contacts.documents) == 2
+
+
+def test_import_candidates_invalid_csv_fails_safely(monkeypatch):
+    db = FakeDatabase()
+    patch_database(monkeypatch, db)
+    client = TestClient(app)
+
+    response = client.post(
+        "/tools/import-candidates",
+        json={"module": "contractor_growth", "source_label": "manual_contractor_test", "csv_text": "company,email\nOnly Name,hello@example.com\n"},
+    )
+
+    assert response.status_code == 400
+    assert "missing required fields" in response.json()["detail"]
+    assert db.scraped_candidates.documents == []
+    assert db.contacts.documents == []
+    assert db.leads.documents == []
+
+
+def test_import_candidates_data_path_missing_fails_safely(monkeypatch):
+    db = FakeDatabase()
+    patch_database(monkeypatch, db)
+    client = TestClient(app)
+
+    response = client.post(
+        "/tools/import-candidates",
+        json={"module": "contractor_growth", "source_label": "manual_contractor_test", "csv_path": "data/imports/missing_sources.csv"},
+    )
+
+    assert response.status_code == 400
+    assert "CSV file not found" in response.json()["detail"]
+    assert db.scraped_candidates.documents == []
+
+
+def test_manual_import_tool_rejects_empty_csv():
+    try:
+        ManualCandidateImportTool().parse_csv_text("", "contractor_growth", "manual_contractor_test")
+    except ValueError as error:
+        assert "empty" in str(error)
+    else:
+        raise AssertionError("Expected empty CSV to fail safely")
 
 
 def test_tool_run_stores_no_secrets():

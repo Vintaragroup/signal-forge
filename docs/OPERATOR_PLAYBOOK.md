@@ -46,6 +46,20 @@ Mock search example:
 docker compose run --rm api python scripts/run_tool.py web_search --query "roofing contractor" --module contractor_growth --location "Austin, TX" --limit 3
 ```
 
+Manual candidate CSV import example:
+
+```bash
+docker compose run --rm api python scripts/import_candidates.py data/imports/contractor_sources.csv --module contractor_growth --source-label "manual_contractor_test"
+```
+
+Manual candidate imports are also available in the dashboard Research / Tools page from the Import CSV panel. Use this for real prospect/source lists supplied by an operator or client. Expected CSV fields are:
+
+```text
+company,website,phone,email,city,state,service_category,notes,source_url
+```
+
+Imported rows are stored as `scraped_candidates` with `source=manual_upload`, `status=needs_review`, and the provided `source_label`. They use the same quality scoring, enrichment, source validation, duplicate detection, approval request creation, and conversion rules as other Research / Tools candidates. Importing does not create contacts or leads automatically.
+
 Public website scrape example:
 
 ```bash

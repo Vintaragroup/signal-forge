@@ -6,10 +6,56 @@ from tools.base_tool import BaseTool, clean_text, slugify, utc_now
 
 
 MOCK_BUSINESSES = [
-    {"company": "Mock Apex Roofing", "city": "Austin", "state": "TX", "service_category": "roofing", "website": "https://mock-apex-roofing.example.invalid", "phone": "512-555-0142", "email": "hello@mock-apex-roofing.example.invalid"},
-    {"company": "Mock Northline HVAC", "city": "Denver", "state": "CO", "service_category": "hvac", "website": "https://mock-northline-hvac.example.invalid", "phone": "303-555-0198", "email": "info@mock-northline-hvac.example.invalid"},
-    {"company": "Mock Harbor Insurance", "city": "Tampa", "state": "FL", "service_category": "insurance", "website": "https://mock-harbor-insurance.example.invalid", "phone": "813-555-0164", "email": "team@mock-harbor-insurance.example.invalid"},
-    {"company": "Mock Studio Media", "city": "Nashville", "state": "TN", "service_category": "media", "website": "https://mock-studio-media.example.invalid", "phone": "615-555-0120", "email": "press@mock-studio-media.example.invalid"},
+    {
+        "company": "Apex Ridge Roofing Co.",
+        "city": "Austin",
+        "state": "TX",
+        "service_category": "roofing",
+        "website": "https://apexridgeroofing-austin.test",
+        "phone": "(512) 555-0142",
+        "email": "hello@apexridgeroofing-austin.test",
+        "raw_summary": "Local roof repair, storm damage inspections, gutter replacement, and metal roofing. Serving Austin, TX since 2014.",
+    },
+    {
+        "company": "Northline Heating & Air",
+        "city": "Denver",
+        "state": "CO",
+        "service_category": "hvac",
+        "website": "https://northlineheatingair.test/services",
+        "phone": "303.555.0198",
+        "email": "",
+        "raw_summary": "HVAC repair, furnace tune-ups, air conditioning installation. Denver, CO service area.",
+    },
+    {
+        "company": "Harbor Shield Insurance Agency",
+        "city": "Tampa",
+        "state": "FL",
+        "service_category": "insurance",
+        "website": "https://harborshieldagency.test/contact",
+        "phone": "813-555-0164",
+        "email": "team@harborshieldagency.test",
+        "raw_summary": "Independent insurance agency for contractors, homeowners, and small business coverage. Tampa, FL.",
+    },
+    {
+        "company": "Studio North Media",
+        "city": "Nashville",
+        "state": "TN",
+        "service_category": "media",
+        "website": "https://studionorthmedia.test",
+        "phone": "",
+        "email": "press@studionorthmedia.test",
+        "raw_summary": "Podcast production, live session video, brand media kits, and artist content campaigns in Nashville, TN.",
+    },
+    {
+        "company": "ATX Roof Works",
+        "city": "Austin",
+        "state": "TX",
+        "service_category": "roofing",
+        "website": "https://atxroofworks.test",
+        "phone": "512 555 0142",
+        "email": "",
+        "raw_summary": "Residential roof repair and shingle replacement. Austin TX. Limited public contact details.",
+    },
 ]
 
 
@@ -41,7 +87,7 @@ class WebSearchTool(BaseTool):
                     "source_url": business["website"],
                     "source_quality": "direct_business_website",
                     "confidence": round(min(score, 0.95), 2),
-                    "raw_summary": f"Mock search candidate for {business['company']} from query '{clean_text(query)}'.",
+                    "raw_summary": business.get("raw_summary") or f"Mock search candidate for {business['company']} from query '{clean_text(query)}'.",
                     "is_mock": True,
                     "timestamp": utc_now(),
                 }
