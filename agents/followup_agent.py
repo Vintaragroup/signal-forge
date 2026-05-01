@@ -252,6 +252,7 @@ class FollowupAgent(BaseAgent):
         if self.db is None or not self.run_id:
             return "not_recorded"
         reason = result.get("reasoning_summary") or result.get("error") or "GPT output was not confident enough to create a follow-up recommendation."
+        is_failure = bool(result.get("error")) or not str(result.get("output") or "").strip()
         request_doc = {
             "run_id": self.run_id,
             "agent_name": self.agent_name,
@@ -259,8 +260,13 @@ class FollowupAgent(BaseAgent):
             "request_type": "gpt_followup_recommendation_review",
             "status": "open",
             "title": f"Review GPT follow-up recommendation for {self.target_display(target, target_type)}",
-            "summary": reason,
+            "summary": "GPT could not produce a usable follow-up recommendation." if is_failure else f"GPT produced a low-confidence follow-up recommendation for {self.target_display(target, target_type)}.",
             "reason_for_review": reason,
+            "request_origin": "system" if is_failure else "gpt",
+            "is_test": False,
+            "severity": "error" if is_failure else "needs_review",
+            "user_facing_summary": "GPT failed before producing a usable follow-up recommendation." if is_failure else f"Review the low-confidence GPT follow-up recommendation for {self.target_display(target, target_type)} before using it.",
+            "technical_reason": reason,
             "target": self.target_key(target, target_type),
             "target_type": target_type,
             "linked_target_id": self.record_id(target),

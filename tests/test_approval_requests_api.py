@@ -144,7 +144,68 @@ def test_approval_requests_endpoint_returns_enriched_open_items(monkeypatch):
     assert len(payload["items"]) == 1
     item = payload["items"][0]
     assert item["request_type"] == "gpt_message_generation_review"
+    assert item["request_origin"] == "gpt"
+    assert item["is_test"] is False
+    assert item["severity"] == "needs_review"
+    assert item["user_facing_summary"] == "Needs operator review."
+    assert item["technical_reason"] == "Needs operator review."
     assert item["linked_contact"]["name"] == "Approval Contact"
+
+
+def test_approval_requests_default_hides_test_and_system_items(monkeypatch):
+    db = FakeDatabase()
+    db.approval_requests.documents.extend(
+        [
+            {
+                "_id": ObjectId(),
+                "request_type": "gpt_message_generation_review",
+                "status": "open",
+                "title": "Synthetic GPT test approval",
+                "request_origin": "test",
+                "is_test": True,
+                "severity": "info",
+                "created_at": datetime.now(timezone.utc),
+            },
+            {
+                "_id": ObjectId(),
+                "request_type": "gpt_message_generation_review",
+                "status": "open",
+                "title": "GPT request failed",
+                "request_origin": "system",
+                "is_test": False,
+                "severity": "error",
+                "created_at": datetime.now(timezone.utc),
+            },
+        ]
+    )
+    patch_database(monkeypatch, db)
+
+    response = TestClient(app).get("/approval-requests")
+
+    assert response.status_code == 200
+    titles = [item["title"] for item in response.json()["items"]]
+    assert "Review GPT outreach result" in titles
+    assert "Synthetic GPT test approval" not in titles
+    assert "GPT request failed" not in titles
+
+
+def test_approval_requests_filter_system_and_test_views(monkeypatch):
+    db = FakeDatabase()
+    test_id = ObjectId()
+    system_id = ObjectId()
+    db.approval_requests.documents.extend(
+        [
+            {"_id": test_id, "request_type": "gpt_message_generation_review", "status": "open", "title": "Synthetic approval", "request_origin": "test", "is_test": True, "severity": "info", "created_at": datetime.now(timezone.utc)},
+            {"_id": system_id, "request_type": "gpt_message_generation_review", "status": "open", "title": "System issue", "request_origin": "system", "is_test": False, "severity": "error", "created_at": datetime.now(timezone.utc)},
+        ]
+    )
+    patch_database(monkeypatch, db)
+
+    system_response = TestClient(app).get("/approval-requests?view=system")
+    test_response = TestClient(app).get("/approval-requests?view=test")
+
+    assert [item["title"] for item in system_response.json()["items"]] == ["System issue"]
+    assert [item["title"] for item in test_response.json()["items"]] == ["Synthetic approval"]
 
 
 def test_approval_decision_approve_updates_internal_status(monkeypatch):

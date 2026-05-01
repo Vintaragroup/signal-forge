@@ -221,6 +221,8 @@ class OutreachAgent(BaseAgent):
 
         now = datetime.now(timezone.utc)
         display = self.target_display(target, target_type)
+        reason = result.get("reasoning_summary") or result.get("error") or "GPT output was not confident enough to create a message draft."
+        is_failure = bool(result.get("error")) or not str(result.get("output") or "").strip()
         request_doc = {
             "run_id": self.run_id,
             "agent_name": self.agent_name,
@@ -228,8 +230,13 @@ class OutreachAgent(BaseAgent):
             "request_type": "gpt_message_generation_review",
             "status": "open",
             "title": f"Review GPT outreach result for {display}",
-            "summary": result.get("reasoning_summary") or result.get("error") or "GPT output was not confident enough to create a message draft.",
-            "reason_for_review": result.get("reasoning_summary") or result.get("error") or "GPT output was not confident enough to create a message draft.",
+            "summary": "GPT could not produce a usable outreach draft." if is_failure else f"GPT drafted a low-confidence outreach idea for {display}.",
+            "reason_for_review": reason,
+            "request_origin": "system" if is_failure else "gpt",
+            "is_test": False,
+            "severity": "error" if is_failure else "needs_review",
+            "user_facing_summary": "GPT failed before producing a usable outreach draft." if is_failure else f"Review the low-confidence GPT outreach result for {display} before deciding whether to convert it into a draft.",
+            "technical_reason": reason,
             "target": self.target_key(target, target_type),
             "target_type": target_type,
             "linked_target_id": self.record_id(target),

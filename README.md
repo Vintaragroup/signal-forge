@@ -83,6 +83,8 @@ Approval decisions only control internal workflow state:
 
 No approval queue decision sends messages, posts content, scrapes data, schedules posts, creates calendar events, or calls external CRM/platform APIs.
 
+Approval requests are classified by origin and severity so the dashboard can keep real operator work separate from diagnostics. The default Approval Queue shows actionable approvals only; use the queue filters for GPT, system issues, or test/synthetic records. GPT runtime tests may create synthetic approval requests to verify safety behavior. Review them with `python scripts/cleanup_test_approvals.py --dry-run`, or archive and remove them with `python scripts/cleanup_test_approvals.py --archive`.
+
 ## Agent Task Queue v1
 
 Agents are now run from the dashboard via Agent Tasks. The dashboard Agent Tasks page lets operators create, queue, run, and cancel agent tasks without using CLI dry-runs directly. Agents now run in a live panel with visible step execution and outputs. Tasks are stored in MongoDB in the `agent_tasks` collection and link to the resulting Agent Console run when executed.

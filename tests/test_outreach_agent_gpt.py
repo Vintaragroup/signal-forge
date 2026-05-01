@@ -139,6 +139,11 @@ def test_outreach_agent_low_confidence_creates_approval_request(monkeypatch):
     assert approval["request_type"] == "gpt_message_generation_review"
     assert approval["status"] == "open"
     assert approval["simulation_only"] is True
+    assert approval["request_origin"] == "gpt"
+    assert approval["is_test"] is False
+    assert approval["severity"] == "needs_review"
+    assert approval["user_facing_summary"] == "Review the low-confidence GPT outreach result for Andre Brooks before deciding whether to convert it into a draft."
+    assert approval["technical_reason"] == "Insufficient context for confident outreach."
     assert approval["gpt_confidence"] == 0.41
     assert approval["reason_for_review"] == "Insufficient context for confident outreach."
     assert approval["linked_target_id"] == "andre-brooks"

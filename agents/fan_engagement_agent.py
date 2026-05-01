@@ -275,6 +275,7 @@ scheduled: false
         if self.db is None or not self.run_id:
             return "not_recorded"
         reason = result.get("reasoning_summary") or result.get("error") or "GPT output was not confident enough to create a fan engagement plan."
+        is_failure = bool(result.get("error")) or not str(result.get("output") or "").strip()
         request_doc = {
             "run_id": self.run_id,
             "agent_name": self.agent_name,
@@ -282,8 +283,13 @@ scheduled: false
             "request_type": "gpt_fan_engagement_plan_review",
             "status": "open",
             "title": "Review GPT fan engagement plan for artist_growth",
-            "summary": reason,
+            "summary": "GPT could not produce a usable fan engagement plan." if is_failure else "GPT produced a low-confidence fan engagement plan for artist_growth.",
             "reason_for_review": reason,
+            "request_origin": "system" if is_failure else "gpt",
+            "is_test": False,
+            "severity": "error" if is_failure else "needs_review",
+            "user_facing_summary": "GPT failed before producing a usable fan engagement plan." if is_failure else "Review the low-confidence GPT fan engagement plan before using it.",
+            "technical_reason": reason,
             "target": self.module,
             "target_type": "module",
             "gpt_confidence": confidence,

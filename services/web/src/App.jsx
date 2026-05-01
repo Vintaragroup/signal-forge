@@ -10,10 +10,12 @@ import {
   ListChecks,
   RefreshCw,
   Users,
+  Workflow,
 } from "lucide-react";
 import Sidebar from "./components/Sidebar.jsx";
 import Header from "./components/Header.jsx";
 import OverviewPage from "./pages/OverviewPage.jsx";
+import WorkflowPage from "./pages/WorkflowPage.jsx";
 import PipelinePage from "./pages/PipelinePage.jsx";
 import MessagesPage from "./pages/MessagesPage.jsx";
 import ApprovalQueuePage from "./pages/ApprovalQueuePage.jsx";
@@ -24,6 +26,7 @@ import ReportsPage from "./pages/ReportsPage.jsx";
 import { api } from "./api.js";
 
 const NAV_ITEMS = [
+  { id: "workflow", label: "Workflow", icon: Workflow },
   { id: "overview", label: "Overview", icon: Gauge },
   { id: "pipeline", label: "Pipeline", icon: Users },
   { id: "messages", label: "Messages", icon: Mail },
@@ -59,6 +62,7 @@ export default function App() {
   }, []);
 
   const Page = useMemo(() => {
+    if (activePage === "workflow") return WorkflowPage;
     if (activePage === "pipeline") return PipelinePage;
     if (activePage === "messages") return MessagesPage;
     if (activePage === "approvals") return ApprovalQueuePage;

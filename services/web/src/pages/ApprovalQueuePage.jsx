@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Check, FilePlus2, RefreshCw, RotateCcw, X } from "lucide-react";
+import { AlertTriangle, Check, FilePlus2, RefreshCw, RotateCcw, X } from "lucide-react";
 import { api } from "../api.js";
 import StatusBadge from "../components/StatusBadge.jsx";
 
@@ -34,9 +34,31 @@ const DECISIONS = [
   { value: "needs_revision", label: "Revise", icon: RotateCcw },
 ];
 
+const VIEWS = [
+  { value: "actionable", label: "Actionable" },
+  { value: "all", label: "All" },
+  { value: "gpt", label: "GPT" },
+  { value: "system", label: "System Issues" },
+  { value: "test", label: "Test / Synthetic" },
+];
+
+function classificationBadges(item) {
+  const badges = [];
+  if (item.is_test || item.request_origin === "test") badges.push("Test");
+  if (item.request_origin === "gpt" || item.request_type?.startsWith("gpt_")) badges.push("GPT");
+  if (item.request_origin === "system") badges.push("System");
+  if (item.severity === "error") badges.push("Error");
+  return badges;
+}
+
+function isSystemIssue(item) {
+  return item.request_origin === "system" || item.severity === "error";
+}
+
 export default function ApprovalQueuePage() {
   const [items, setItems] = useState([]);
-  const [status, setStatus] = useState("open");
+  const [view, setView] = useState("actionable");
+  const [expanded, setExpanded] = useState({});
   const [notes, setNotes] = useState({});
   const [notice, setNotice] = useState("");
   const [busyId, setBusyId] = useState("");
@@ -46,8 +68,8 @@ export default function ApprovalQueuePage() {
     return new URLSearchParams(query).get("request") || "";
   }, []);
 
-  async function loadQueue(nextStatus = status) {
-    const params = nextStatus === "all" ? { limit: "200" } : { status: nextStatus, limit: "200" };
+  async function loadQueue(nextView = view) {
+    const params = { status: "open", view: nextView, limit: "200" };
     const data = await api.approvalRequests(params);
     setItems(data.items || []);
   }
@@ -71,7 +93,9 @@ export default function ApprovalQueuePage() {
   }
 
   const openCount = items.filter((item) => item.status === "open").length;
-  const gptCount = items.filter((item) => item.request_type?.startsWith("gpt_")).length;
+  const gptCount = items.filter((item) => item.request_origin === "gpt" || item.request_type?.startsWith("gpt_")).length;
+  const systemItems = items.filter(isSystemIssue);
+  const visibleItems = view === "system" ? items : items.filter((item) => !isSystemIssue(item));
 
   return (
     <div className="space-y-5">
@@ -85,20 +109,16 @@ export default function ApprovalQueuePage() {
           <div className="flex flex-wrap items-center gap-2">
             <StatusBadge value={`${openCount} open`} />
             <StatusBadge value={`${gptCount} gpt`} />
+            {systemItems.length ? <StatusBadge value={`${systemItems.length} system issues`} /> : null}
             <select
-              value={status}
+              value={view}
               onChange={(event) => {
-                setStatus(event.target.value);
+                setView(event.target.value);
                 loadQueue(event.target.value);
               }}
               className="h-9 rounded-lg border border-slate-200 bg-white px-3 text-sm text-slate-700"
             >
-              <option value="open">Open</option>
-              <option value="needs_revision">Needs revision</option>
-              <option value="approved">Approved</option>
-              <option value="rejected">Rejected</option>
-              <option value="converted_to_draft">Converted</option>
-              <option value="all">All</option>
+              {VIEWS.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}
             </select>
             <button
               type="button"
@@ -114,8 +134,20 @@ export default function ApprovalQueuePage() {
 
       {notice ? <div className="rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-800">{notice}</div> : null}
 
+      {view !== "system" && systemItems.length ? (
+        <section className="rounded-lg border border-red-200 bg-red-50 p-4 shadow-sm">
+          <div className="flex flex-wrap items-start justify-between gap-4">
+            <div>
+              <div className="inline-flex items-center gap-2 text-sm font-semibold text-red-950"><AlertTriangle className="h-4 w-4" />System / GPT Issues</div>
+              <p className="mt-1 text-sm text-red-800">These are not operator approval tasks. Use the System Issues filter to inspect technical details.</p>
+            </div>
+            <button type="button" onClick={() => { setView("system"); loadQueue("system"); }} className="inline-flex h-9 items-center rounded-lg border border-red-200 bg-white px-3 text-sm font-medium text-red-800 transition hover:border-red-300">View issues</button>
+          </div>
+        </section>
+      ) : null}
+
       <div className="space-y-3">
-        {items.map((item) => (
+        {visibleItems.map((item) => (
           <section
             key={item._id}
             className={[
@@ -128,10 +160,15 @@ export default function ApprovalQueuePage() {
                 <div className="flex flex-wrap items-center gap-2">
                   <StatusBadge value={item.request_type} />
                   <StatusBadge value={item.status} />
+                  {classificationBadges(item).map((badge) => <StatusBadge key={badge} value={badge} />)}
                   {item.gpt_confidence !== undefined ? <StatusBadge value={`confidence ${formatConfidence(item.gpt_confidence)}`} /> : null}
                 </div>
                 <h3 className="mt-3 text-base font-semibold text-slate-950">{item.title || item.request_type}</h3>
-                <p className="mt-2 text-sm leading-6 text-slate-600">{item.reason_for_review || item.summary || "No reasoning summary recorded."}</p>
+                <p className="mt-2 text-sm leading-6 text-slate-600">{item.user_facing_summary || item.summary || "Human review is needed before manual action."}</p>
+                <button type="button" onClick={() => setExpanded((current) => ({ ...current, [item._id]: !current[item._id] }))} className="mt-2 text-xs font-medium text-blue-700 transition hover:text-blue-900">
+                  {expanded[item._id] ? "Hide technical reason" : "Show technical reason"}
+                </button>
+                {expanded[item._id] ? <p className="mt-2 rounded-lg bg-slate-50 p-3 text-xs leading-5 text-slate-600">{item.technical_reason || item.reason_for_review || item.summary || "No technical reason recorded."}</p> : null}
               </div>
               <div className="text-right text-xs text-slate-500">
                 <div>{formatDate(item.created_at)}</div>
@@ -194,7 +231,7 @@ export default function ApprovalQueuePage() {
             </div>
           </section>
         ))}
-        {!items.length ? <div className="rounded-lg border border-slate-200 bg-white p-6 text-sm text-slate-500 shadow-sm">No approval requests match this view.</div> : null}
+        {!visibleItems.length ? <div className="rounded-lg border border-slate-200 bg-white p-6 text-sm text-slate-500 shadow-sm">No approval requests match this view.</div> : null}
       </div>
     </div>
   );

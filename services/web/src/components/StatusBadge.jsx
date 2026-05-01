@@ -12,7 +12,7 @@ export default function StatusBadge({ value }) {
     normalized.includes("sent") ||
     normalized.includes("high_priority")
   ) tone = "green";
-  if (normalized.includes("failed") || normalized.includes("lost") || normalized.includes("rejected") || normalized.includes("offline")) tone = "red";
+  if (normalized.includes("failed") || normalized.includes("error") || normalized.includes("lost") || normalized.includes("rejected") || normalized.includes("offline")) tone = "red";
   if (
     normalized.includes("revision") ||
     normalized.includes("review") ||
@@ -21,7 +21,8 @@ export default function StatusBadge({ value }) {
     normalized.includes("follow")
   ) tone = "amber";
   if (normalized.includes("booked") || normalized.includes("negotiation") || normalized.includes("interested")) tone = "blue";
-  if (normalized.includes("nurture") || normalized.includes("research")) tone = "purple";
+  if (normalized.includes("gpt") || normalized.includes("nurture") || normalized.includes("research")) tone = "purple";
+  if (normalized.includes("test") || normalized.includes("synthetic") || normalized.includes("system")) tone = "slate";
 
   const styles = {
     green: "bg-green-50 text-green-700 ring-green-200",

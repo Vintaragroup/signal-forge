@@ -413,6 +413,7 @@ def enrich_messages(records: list[dict], db) -> list[dict]:
 def enrich_approval_requests(records: list[dict], db) -> list[dict]:
     enriched = []
     for request in records:
+        apply_approval_defaults(request)
         target = clean_text(request.get("target"))
         linked_target_id = clean_text(request.get("linked_target_id"))
         target_values = [value for raw in (target, linked_target_id) for value in object_id_or_raw(raw)]
@@ -454,6 +455,39 @@ def enrich_approval_requests(records: list[dict], db) -> list[dict]:
         request["linked_message"] = linked_message
         enriched.append(request)
     return enriched
+
+
+def apply_approval_defaults(request: dict) -> dict:
+    request_type = clean_text(request.get("request_type"))
+    reason = clean_text(request.get("reason_for_review") or request.get("summary") or request.get("technical_reason"))
+    if "request_origin" not in request:
+        request["request_origin"] = "gpt" if request_type.startswith("gpt_") else "agent"
+    if "is_test" not in request:
+        request["is_test"] = request.get("request_origin") == "test"
+    if "severity" not in request:
+        request["severity"] = "error" if request.get("request_origin") == "system" else "needs_review"
+    if "user_facing_summary" not in request:
+        request["user_facing_summary"] = reason or "Human review is needed before the operator takes any manual action."
+    if "technical_reason" not in request:
+        request["technical_reason"] = reason or "No technical reason recorded."
+    return request
+
+
+def approval_matches_view(request: dict, view: str) -> bool:
+    request = apply_approval_defaults(request)
+    origin = clean_text(request.get("request_origin"))
+    request_type = clean_text(request.get("request_type"))
+    severity = clean_text(request.get("severity"))
+    is_test = request.get("is_test") is True
+    if view == "all":
+        return True
+    if view == "gpt":
+        return not is_test and (origin == "gpt" or request_type.startswith("gpt_")) and severity != "error"
+    if view == "system":
+        return not is_test and (origin == "system" or severity == "error")
+    if view == "test":
+        return is_test or origin == "test"
+    return not is_test and origin not in {"system", "test"} and severity != "error"
 
 
 def find_approval_request(db, approval_id: str) -> dict | None:
@@ -1026,6 +1060,7 @@ def review_message(message_id: str, payload: MessageReviewRequest) -> dict:
 @app.get("/approval-requests")
 def approval_requests(
     status: str = "open",
+    view: Literal["actionable", "all", "gpt", "system", "test"] = "actionable",
     request_type: str = "",
     agent_name: str = "",
     module: str = "",
@@ -1043,7 +1078,7 @@ def approval_requests(
             query["agent_name"] = agent_name
         if module:
             query["module"] = module
-        records = list(db.approval_requests.find(query).sort([("created_at", -1)]).limit(limit))
+        records = [record for record in db.approval_requests.find(query).sort([("created_at", -1)]) if approval_matches_view(record, view)][:limit]
         records = enrich_approval_requests(records, db)
         return {"items": serialize(records), "simulation_only": True}
     finally:

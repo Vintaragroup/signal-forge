@@ -117,6 +117,21 @@ def verify_gpt_approval_request(db, run_id: str) -> None:
     print_ok("GPT cannot-proceed path created an open approval request")
 
 
+def mark_test_approval_requests(db, run_id: str) -> None:
+    db.approval_requests.update_many(
+        {"run_id": run_id},
+        {
+            "$set": {
+                "request_origin": "test",
+                "is_test": True,
+                "severity": "info",
+                "user_facing_summary": "Synthetic GPT runtime test approval. It exists only to verify review-only safety behavior.",
+                "technical_reason": "Created by scripts/gpt_runtime_test_campaign.py while mocking or validating GPT safety paths.",
+            }
+        },
+    )
+
+
 def run_mocked_cannot_proceed_campaign(db) -> str:
     original_generate = outreach_module.generate_agent_response
 
@@ -139,6 +154,7 @@ def run_mocked_cannot_proceed_campaign(db) -> str:
     run_id = result["run_id"]
     verify_gpt_steps(db, run_id)
     verify_gpt_approval_request(db, run_id)
+    mark_test_approval_requests(db, run_id)
     return run_id
 
 
@@ -161,6 +177,7 @@ def run_live_gpt_campaign_if_configured(db) -> str | None:
     approval_count = db.approval_requests.count_documents({"run_id": run_id, "request_type": "gpt_message_generation_review"})
     draft_count = db.message_drafts.count_documents({"agent_run_id": run_id, "source": "gpt"})
     assert_condition(draft_count or approval_count, "live GPT run created neither a review draft nor a safety approval request.")
+    mark_test_approval_requests(db, run_id)
     print_ok("live GPT-enabled outreach dry-run completed without outbound action")
     return run_id
 

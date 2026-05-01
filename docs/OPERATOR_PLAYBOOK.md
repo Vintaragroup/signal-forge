@@ -322,6 +322,29 @@ Agent Console actions remain simulation-only. They do not send email, SMS, DMs, 
 
 If GPT is enabled, supported agents may add GPT steps, artifacts, drafts, and approval requests to the same run timeline. Low-confidence GPT output creates an approval request instead of being treated as ready. All GPT-generated drafts remain `send_status=not_sent` until a human sends outside SignalForge and logs that manual action.
 
+### Approval Queue Classification
+
+Approval requests include classification fields so the dashboard can separate real operator work from diagnostics:
+
+- `request_origin`: `operator`, `agent`, `gpt`, `test`, or `system`
+- `is_test`: marks synthetic validation records
+- `severity`: `info`, `needs_review`, `warning`, or `error`
+- `user_facing_summary`: short plain-English operator summary
+- `technical_reason`: detailed diagnostic context
+
+The Approval Queue defaults to actionable human work and hides synthetic test records and system/GPT failures from the main list. Use the queue filters to inspect `All`, `GPT`, `System Issues`, or `Test / Synthetic` records when troubleshooting.
+
+Synthetic approvals exist because GPT runtime tests intentionally create review-only safety records to prove that low-confidence or mocked GPT output does not send anything. These are useful for verification, but they are not real operator tasks.
+
+Clean up synthetic approval requests with:
+
+```bash
+python scripts/cleanup_test_approvals.py --dry-run
+python scripts/cleanup_test_approvals.py --archive
+```
+
+`--dry-run` only lists matching records. `--archive` copies matching records to `approval_requests_archive` before deleting them from `approval_requests`. The script only matches `is_test=true` or `request_origin=test`; it does not delete real approvals by default.
+
 ## 18. Queue Agent Tasks
 
 Agents are now run from the dashboard via Agent Tasks. Use the dashboard Agent Tasks page to create and run agent work from the browser instead of only using CLI dry-runs. Each task is stored in the `agent_tasks` collection with `agent_name`, `module`, `task_type`, `status`, `priority`, `input_config`, timestamps, `linked_run_id`, and `result_summary`.
