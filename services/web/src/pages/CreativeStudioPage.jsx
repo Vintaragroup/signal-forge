@@ -1287,6 +1287,13 @@ function AssetRenderSection({
                 {render.assembly_engine === "ffmpeg" && (
                   <span className="rounded-full bg-violet-100 px-2 py-0.5 text-xs text-violet-700">FFmpeg</span>
                 )}
+                {/* Image source badge */}
+                {render.image_source === "comfyui" && (
+                  <span className="rounded-full bg-sky-100 px-2 py-0.5 text-xs text-sky-700 font-medium">ComfyUI Image</span>
+                )}
+                {render.image_source === "placeholder" && (
+                  <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs text-slate-500">Placeholder</span>
+                )}
               </div>
 
               {snippet && (
@@ -1325,6 +1332,11 @@ function AssetRenderSection({
               {render.assembly_result?.skip_reason && (
                 <p className="text-xs text-slate-400 italic">
                   Assembly skipped: {render.assembly_result.skip_reason}
+                </p>
+              )}
+              {render.comfyui_partial_failure && render.comfyui_result?.fallback_reason && (
+                <p className="text-xs text-amber-600 italic">
+                  ComfyUI fallback: {render.comfyui_result.fallback_reason}
                 </p>
               )}
               {render.assembly_result?.error && (

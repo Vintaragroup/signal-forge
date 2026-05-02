@@ -169,23 +169,52 @@ services:
       - |
         pip install -q fastapi uvicorn
         python - <<'PYEOF'
-        import uvicorn
-        from fastapi import FastAPI
-        import uuid, time
+        import uvicorn, uuid, struct, zlib
+        from fastapi import FastAPI, Request
+        from fastapi.responses import Response
+
         app = FastAPI()
+        _store = {}    # prompt_id -> filename
+        _images = {}   # filename  -> png bytes
+
+        def _make_png(w=64, h=64, r=30, g=27, b=75):
+            """Generate a minimal valid RGB PNG in pure Python (no Pillow needed)."""
+            def chunk(name, data):
+                crc = zlib.crc32(name + data) & 0xffffffff
+                return struct.pack('>I', len(data)) + name + data + struct.pack('>I', crc)
+            ihdr = struct.pack('>IIBBBBB', w, h, 8, 2, 0, 0, 0)
+            raw = b''.join(b'\x00' + bytes([r, g, b] * w) for _ in range(h))
+            return (b'\x89PNG\r\n\x1a\n'
+                    + chunk(b'IHDR', ihdr)
+                    + chunk(b'IDAT', zlib.compress(raw))
+                    + chunk(b'IEND', b''))
 
         @app.get('/system_stats')
         def system_stats():
             return {'cuda': False, 'devices': [{'name': 'stub-cpu', 'type': 'cpu', 'vram_total': 0}]}
 
         @app.post('/prompt')
-        def run_prompt(body: dict = None):
-            time.sleep(0.1)
-            return {'prompt_id': str(uuid.uuid4()), 'number': 1, 'node_errors': {}}
+        async def run_prompt(request: Request):
+            pid = str(uuid.uuid4())
+            fname = f'ComfyUI_{pid[:8]}_00001_.png'
+            _images[fname] = _make_png()
+            _store[pid] = fname
+            return {'prompt_id': pid, 'number': 1, 'node_errors': {}}
 
         @app.get('/history/{prompt_id}')
         def history(prompt_id: str):
-            return {prompt_id: {'outputs': {}, 'status': {'completed': True}}}
+            fname = _store.get(prompt_id)
+            if not fname:
+                return {}
+            return {prompt_id: {
+                'outputs': {'7': {'images': [{'filename': fname, 'subfolder': '', 'type': 'output'}]}},
+                'status': {'completed': True, 'status_str': 'success', 'messages': []}
+            }}
+
+        @app.get('/view')
+        def view(filename: str = '', subfolder: str = '', type: str = 'output'):
+            data = _images.get(filename, _make_png())
+            return Response(content=data, media_type='image/png')
 
         uvicorn.run(app, host='0.0.0.0', port=8188)
         PYEOF

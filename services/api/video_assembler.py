@@ -65,6 +65,7 @@ class VideoAssemblyResult:
     mock: bool = True
     assembly_status: str = "mock"   # "success" | "failed" | "skipped" | "mock"
     assembly_engine: str = "mock"   # "ffmpeg" | "mock"
+    image_source: str = ""          # "comfyui" | "placeholder" | ""
     skip_reason: str = ""
     error: str = ""
     simulation_only: bool = True
@@ -81,6 +82,7 @@ class VideoAssemblyResult:
             "mock": self.mock,
             "assembly_status": self.assembly_status,
             "assembly_engine": self.assembly_engine,
+            "image_source": self.image_source,
             "skip_reason": self.skip_reason,
             "error": self.error,
             "simulation_only": self.simulation_only,

@@ -161,3 +161,24 @@ All safety guarantees from v5 Asset Rendering are preserved. The worker process 
 ### v5.5 Safety Boundary
 
 All v5 and v5 Runtime safety guarantees are preserved. `FFMPEG_ENABLED=true` is now the default — FFmpeg is invoked **locally** via subprocess only, writing `.mp4` files to the `render-output` Docker volume (`/tmp/signalforge_renders`). No file is uploaded, streamed, or sent to any external service. The test tone generator uses FFmpeg lavfi (a built-in source) — it never downloads audio from any URL. The placeholder image generator uses FFmpeg lavfi color source — no network calls. All renders remain `simulation_only: true`, `outbound_actions_taken: 0`. ComfyUI remains disabled by default (`COMFYUI_ENABLED=false`). Approved renders still require explicit operator action before any downstream use.
+
+---
+
+## Social Creative Engine v6 — ComfyUI Image Generation
+
+| Capability | Dashboard-supported | Simulated | Manual | Real/local | Notes |
+|---|---|---|---|---|---|
+| ComfyUI image generation | Partial | No | No | Yes | `COMFYUI_ENABLED=true` required. Worker submits workflow to ComfyUI, polls until done, downloads PNG to shared volume. |
+| ComfyUI stub (no GPU) | Yes | N/A | N/A | Yes | `docker compose --profile comfyui up -d` starts a pure-Python FastAPI stub that accepts ComfyUI API calls and returns a real PNG. |
+| Workflow auto-build from prompt_generation | No | N/A | N/A | Yes | `build_txt2img_workflow()` constructs 7-node KSampler workflow from `positive_prompt`, `negative_prompt`, `visual_style`, `lighting`, `camera_direction`. |
+| Custom workflow file | No | N/A | N/A | Yes | Set `COMFYUI_WORKFLOW_PATH` to a JSON file path; loaded in preference over auto-built workflow. |
+| image_source field | Yes | N/A | N/A | N/A | `"comfyui"` or `"placeholder"`. Set on every render record. Dashboard shows sky "ComfyUI Image" or slate "Placeholder" badge. |
+| comfyui_partial_failure | Yes | N/A | N/A | N/A | `true` when ComfyUI was enabled but failed; render still completes via fallback. |
+| Graceful fallback on ComfyUI failure | No | N/A | N/A | Yes | Unreachable ComfyUI → placeholder image used; render reaches `needs_review` not `failed`. `fallback_reason` stored. |
+| GET /health/comfyui | No | N/A | N/A | Yes | Returns `comfyui_enabled`, `comfyui_base_url`, `comfyui_reachable`, `comfyui_error`, `system_stats`. |
+| ComfyUI image badge | Yes | N/A | N/A | N/A | Sky "ComfyUI Image" badge when `image_source=comfyui`. Amber fallback notice when partial failure. |
+| os.path.isfile guard | No | N/A | N/A | Yes | If ComfyUI returns a path that doesn't exist on disk, worker falls back to placeholder. Never passes a non-existent path to FFmpeg. |
+
+### v6 Safety Boundary
+
+All v5.5 guarantees are preserved. ComfyUI calls are made only to the local endpoint specified by `COMFYUI_BASE_URL` — no external image generation APIs. The worker never posts generated images externally. `simulation_only: true` and `outbound_actions_taken: 0` are maintained on every path, including ComfyUI success, ComfyUI failure, and fallback. GPU is not required — the built-in stub runs on CPU. `COMFYUI_ENABLED=false` is the default; the ComfyUI service requires the `comfyui` Docker profile to start.

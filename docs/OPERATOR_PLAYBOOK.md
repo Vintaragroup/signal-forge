@@ -1040,3 +1040,64 @@ docker compose up -d
 - `assembly_status` and `assembly_engine` are stored on every render record and visible in the dashboard
 - Dashboard shows green "Real Render" badge when `assembly_status=success`, violet "FFmpeg" badge when `assembly_engine=ffmpeg`
 - `COMFYUI_ENABLED` remains `false` by default — ComfyUI is not required for v5.5 renders
+
+---
+
+## Section 29: Social Creative Engine v6 — ComfyUI Image Generation
+
+v6 integrates a local ComfyUI instance into the render pipeline. When `COMFYUI_ENABLED=true`, the worker generates a real image from the `prompt_generation` document's prompts before passing it to FFmpeg for video assembly.
+
+### New env vars (v6)
+
+| Variable | Default | Notes |
+|---|---|---|
+| `COMFYUI_ENABLED` | `false` | Set `true` to activate image generation |
+| `COMFYUI_BASE_URL` | `http://comfyui:8188` | ComfyUI endpoint (use `host.docker.internal` for external) |
+| `COMFYUI_WORKFLOW_PATH` | _(empty)_ | Custom workflow JSON path; auto-built from PG if empty |
+| `COMFYUI_MODEL_CHECKPOINT` | `v1-5-pruned-emaonly.safetensors` | Checkpoint model name in ComfyUI |
+
+### New metadata fields (v6)
+
+| Field | Values | Description |
+|---|---|---|
+| `image_source` | `"comfyui"` \| `"placeholder"` | Whether the render image came from ComfyUI or was auto-generated |
+| `comfyui_partial_failure` | `bool` | `true` if ComfyUI was enabled but failed; assembly still proceeded |
+| `comfyui_result.fallback_reason` | string | Why ComfyUI image was not used (when partial_failure) |
+| `comfyui_result.prompt_id` | string | ComfyUI prompt_id returned by POST /prompt |
+| `comfyui_result.workflow` | dict | Workflow submitted to ComfyUI (for traceability) |
+
+### New API endpoints (v6)
+
+- `GET /health/comfyui` — Returns `{comfyui_enabled, comfyui_base_url, comfyui_reachable, comfyui_error, system_stats}`
+
+### Dashboard changes (v6)
+
+- Sky "ComfyUI Image" badge when `image_source === "comfyui"`
+- Slate "Placeholder" badge when `image_source === "placeholder"`
+- Amber fallback notice when `comfyui_partial_failure=true` with reason text
+
+### Startup checklist (v6 with stub)
+
+```bash
+# 1. Start stack with ComfyUI stub
+COMFYUI_ENABLED=true docker compose --profile comfyui up -d
+
+# 2. Verify stub is live
+curl http://localhost:8188/system_stats
+
+# 3. Check connectivity from API
+curl http://localhost:8000/health/comfyui
+# Expect: {"comfyui_enabled": true, "comfyui_reachable": true, ...}
+
+# 4. Watch worker logs during a render
+docker compose logs -f worker | grep -i comfyui
+```
+
+### Operating rules (v6)
+
+- When ComfyUI is unreachable or returns no image, the worker falls back to placeholder — render still completes as `needs_review`
+- `image_source: "comfyui"` is only set when `os.path.isfile(output_image_path)` passes — a non-existent path triggers fallback
+- All safety guarantees preserved: `simulation_only: true`, `outbound_actions_taken: 0`
+- ComfyUI talks only to the local endpoint (`COMFYUI_BASE_URL`) — no external platform calls
+- Rebuild both images after changing `comfyui_client.py` or `worker.py`: `docker compose build --no-cache api worker`
+- GPU is **not** required for the built-in stub; GPU is recommended for real ComfyUI with production models

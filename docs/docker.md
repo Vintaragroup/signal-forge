@@ -98,7 +98,7 @@ docker compose --profile comfyui down
 
 ## Render Output Volume
 
-The `render-output` Docker volume is shared between the api and worker containers at `/tmp/signalforge_renders`. With `FFMPEG_ENABLED=true` (default in v5.5), real `.mp4` files, test-tone `.wav` files, and placeholder `.png` files are written here.
+The `render-output` Docker volume is shared between the api and worker containers at `/tmp/signalforge_renders`. With `FFMPEG_ENABLED=true` (default in v5.5), real `.mp4` files, test-tone `.wav` files, and placeholder `.png` files are written here. With `COMFYUI_ENABLED=true` (v6), ComfyUI-generated `.png` images are also saved here before being passed to FFmpeg assembly.
 
 ```bash
 # Inspect rendered files (from api container)
@@ -111,13 +111,16 @@ docker compose exec worker ffmpeg -version
 # Check FFmpeg health via API
 curl http://localhost:8000/health/ffmpeg
 
-# Watch worker logs for FFmpeg diagnostics at startup
-docker compose logs worker | grep -i ffmpeg
+# Check ComfyUI health via API (v6)
+curl http://localhost:8000/health/comfyui
+
+# Watch worker logs for startup diagnostics
+docker compose logs worker | grep -iE "ffmpeg|comfyui"
 ```
 
-## v5.5 Rebuild Requirements
+## v5.5 / v6 Rebuild Requirements
 
-When updating Python files (video_assembler.py, worker.py, main.py), **both** api and worker images must be rebuilt:
+When updating Python files (video_assembler.py, worker.py, main.py, comfyui_client.py), **both** api and worker images must be rebuilt:
 
 ```bash
 docker compose build --no-cache api worker
@@ -125,6 +128,69 @@ docker compose up -d
 ```
 
 > The api and worker containers share the same Dockerfile but produce separate images. Rebuilding `api` does not rebuild `worker`.
+
+## ComfyUI Integration (v6)
+
+ComfyUI generates the background image that is fed into FFmpeg assembly. It is **disabled by default** and runs behind a Docker profile.
+
+### Enabling the ComfyUI stub (no GPU required)
+
+The stub is a pure-Python FastAPI server that accepts ComfyUI API calls and returns a minimal dark-purple PNG. Use this to verify the full pipeline without a real ComfyUI installation.
+
+```bash
+# Start the full stack including the ComfyUI stub
+COMFYUI_ENABLED=true docker compose --profile comfyui up -d
+
+# Verify the stub is healthy
+curl http://localhost:8188/system_stats
+
+# Check ComfyUI connectivity from the API
+curl http://localhost:8000/health/comfyui
+```
+
+The stub supports:
+- `GET /system_stats` — health check
+- `POST /prompt` — accepts any workflow JSON, returns a `prompt_id`, generates a PNG
+- `GET /history/{prompt_id}` — returns immediately completed with image filename
+- `GET /view?filename=...&type=output` — returns PNG image bytes
+
+### Using a real ComfyUI instance
+
+To connect a real local ComfyUI running outside Docker (e.g. `http://127.0.0.1:8188`):
+
+```bash
+COMFYUI_ENABLED=true \
+COMFYUI_BASE_URL=http://host.docker.internal:8188 \
+docker compose up -d api worker
+```
+
+Required ComfyUI setup:
+1. ComfyUI running on port 8188 with the API server enabled
+2. A checkpoint model installed (configure via `COMFYUI_MODEL_CHECKPOINT` env var, defaults to `v1-5-pruned-emaonly.safetensors`)
+3. The `render-output` volume path accessible (images download to `/tmp/signalforge_renders`)
+
+GPU is recommended but not required. The stub uses CPU.
+
+### Environment variables (v6)
+
+| Variable | Default | Description |
+|---|---|---|
+| `COMFYUI_ENABLED` | `false` | Enable ComfyUI image generation |
+| `COMFYUI_BASE_URL` | `http://comfyui:8188` | ComfyUI endpoint URL |
+| `COMFYUI_WORKFLOW_PATH` | _(empty)_ | Path to custom workflow JSON; if empty, auto-built from prompt_generation |
+| `COMFYUI_MODEL_CHECKPOINT` | `v1-5-pruned-emaonly.safetensors` | Checkpoint model name |
+
+### Fallback behavior
+
+When `COMFYUI_ENABLED=true` but ComfyUI is unreachable or returns an error:
+- The worker falls back to the FFmpeg-generated placeholder image
+- `image_source` is set to `"placeholder"` (not `"comfyui"`)
+- `comfyui_partial_failure: true` is recorded on the render
+- `comfyui_result.fallback_reason` contains the error description
+- Assembly still proceeds — the render reaches `needs_review`, **not** `failed`
+- `simulation_only: true` and `outbound_actions_taken: 0` are always maintained
+
+## Disabling FFmpeg (revert to mock)
 
 ## Disabling FFmpeg (revert to mock)
 

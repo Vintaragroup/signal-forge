@@ -1172,6 +1172,22 @@ def health() -> dict:
     }
 
 
+@app.get("/health/comfyui")
+def health_comfyui() -> dict:
+    """Return ComfyUI availability diagnostics."""
+    try:
+        from comfyui_client import comfyui_diagnostics  # type: ignore
+        return comfyui_diagnostics()
+    except ImportError:
+        return {
+            "comfyui_enabled": False,
+            "comfyui_base_url": os.getenv("COMFYUI_BASE_URL", "http://comfyui:8188"),
+            "comfyui_reachable": False,
+            "comfyui_error": "comfyui_client module not importable",
+            "system_stats": None,
+        }
+
+
 @app.get("/health/ffmpeg")
 def health_ffmpeg() -> dict:
     """Return FFmpeg availability diagnostics. No subprocess is spawned if FFmpeg is not installed."""
@@ -4701,6 +4717,8 @@ def render_asset(payload: AssetRenderRequest) -> dict:
             "assembly_result": {},
             "assembly_status": "",
             "assembly_engine": "",
+            "image_source": "",
+            "comfyui_partial_failure": False,
             "file_path": "",
             "duration_seconds": 0.0,
             "resolution": "1080x1920",

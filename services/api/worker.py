@@ -133,32 +133,64 @@ def process_render_job(job: dict, db: Any) -> dict:
         # --------------------------------------------------------------
         comfyui_result: dict[str, Any] = {}
         generated_image_path = ""
+        image_source = "placeholder"
+        comfyui_partial_failure = False
 
         if comfyui_enabled:
             try:
                 sys.path.insert(0, "/app")
-                from agents.comfyui_client import ComfyUIClient  # type: ignore
+                from comfyui_client import ComfyUIClient  # type: ignore
 
                 comfyui = ComfyUIClient()
+                out_dir = os.getenv("FFMPEG_OUTPUT_DIR", "/tmp/signalforge_renders")
+
+                # Fail fast if ComfyUI is not reachable
+                health = comfyui.health_check()
+                if not health.get("reachable"):
+                    raise ConnectionError(
+                        f"ComfyUI unreachable: {health.get('error', 'no response')}"
+                    )
+
                 pg = _find_by_id(db.prompt_generations, record.get("prompt_generation_id", ""))
                 if pg:
                     comfyui_result = comfyui.run_from_prompt_generation(
                         _serialize_doc(pg),
+                        output_dir=out_dir,
                         workflow_path=os.getenv("COMFYUI_WORKFLOW_PATH", ""),
                     )
-                    generated_image_path = comfyui_result.get("output_image_path", "")
+                    img_path = comfyui_result.get("output_image_path", "")
+                    if img_path and os.path.isfile(img_path):
+                        generated_image_path = img_path
+                        image_source = "comfyui"
+                    else:
+                        # ComfyUI ran but produced no usable image — fall back to placeholder
+                        comfyui_result["partial_failure"] = True
+                        comfyui_result["fallback_reason"] = (
+                            comfyui_result.get("error") or "output_image_not_found"
+                        )
+                        comfyui_partial_failure = True
+                        image_source = "placeholder"
                 else:
                     comfyui_result = {
                         "error": "prompt_generation not found for ComfyUI step",
+                        "partial_failure": True,
+                        "fallback_reason": "prompt_generation_not_found",
                         "simulation_only": True,
                         "outbound_actions_taken": 0,
                     }
+                    comfyui_partial_failure = True
+                    image_source = "placeholder"
+
             except Exception as exc:
                 comfyui_result = {
                     "error": f"{type(exc).__name__}: {exc}",
+                    "partial_failure": True,
+                    "fallback_reason": "comfyui_exception",
                     "simulation_only": True,
                     "outbound_actions_taken": 0,
                 }
+                comfyui_partial_failure = True
+                image_source = "placeholder"
         else:
             comfyui_result = {
                 "skipped": True,
@@ -168,6 +200,7 @@ def process_render_job(job: dict, db: Any) -> dict:
                 "outbound_actions_taken": 0,
             }
             generated_image_path = comfyui_result["mock_image_path"]
+            image_source = "placeholder"
 
         db.asset_renders.update_one(
             {"_id": record["_id"]},
@@ -253,14 +286,20 @@ def process_render_job(job: dict, db: Any) -> dict:
                     "duration_seconds": duration_seconds,
                     "assembly_status": assembly_status,
                     "assembly_engine": assembly_engine,
+                    "image_source": image_source,
+                    "comfyui_partial_failure": comfyui_partial_failure,
                     "simulation_only": True,
                     "outbound_actions_taken": 0,
                     "updated_at": _utc_now(),
                 }
             },
         )
-        logger.info("render_id=%s status=needs_review assembly_status=%s assembly_engine=%s file_path=%s",
-                    render_id_str, assembly_status, assembly_engine, final_file_path)
+        logger.info(
+            "render_id=%s status=needs_review assembly_status=%s assembly_engine=%s "
+            "image_source=%s partial_failure=%s file_path=%s",
+            render_id_str, assembly_status, assembly_engine,
+            image_source, comfyui_partial_failure, final_file_path,
+        )
 
         return {
             "render_id": render_id_str,
@@ -269,6 +308,8 @@ def process_render_job(job: dict, db: Any) -> dict:
             "assembly_result": assembly_result,
             "assembly_status": assembly_status,
             "assembly_engine": assembly_engine,
+            "image_source": image_source,
+            "comfyui_partial_failure": comfyui_partial_failure,
             "file_path": final_file_path,
             "simulation_only": True,
             "outbound_actions_taken": 0,

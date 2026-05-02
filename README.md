@@ -268,11 +268,22 @@ v5 adds a rendering pipeline on top of the v4.5 prompt approval layer. An approv
 - Duration derived from `snippet.end_time - snippet.start_time` when both fields are set.
 - Dashboard shows green "Real Render" badge and violet "FFmpeg" engine badge for real renders.
 
+**v6 — ComfyUI Image Generation:**
+- `COMFYUI_ENABLED=true` activates real image generation via a local ComfyUI instance. Defaults to `false`.
+- `comfyui_client.py`: submits a KSampler workflow built from `prompt_generation` fields → polls until done → downloads image to shared volume.
+- ComfyUI stub included: `docker compose --profile comfyui up -d` starts a pure-Python stub that accepts ComfyUI API calls and returns a real PNG (no GPU required).
+- `image_source: "comfyui"` or `"placeholder"` stored on every render. Dashboard shows sky "ComfyUI Image" badge or slate "Placeholder" badge.
+- Graceful fallback: if ComfyUI is unreachable or returns no image, the worker uses the FFmpeg placeholder — render reaches `needs_review`, not `failed`.
+- `comfyui_partial_failure: true` and `fallback_reason` recorded when fallback occurs.
+- `GET /health/comfyui` endpoint returns `comfyui_enabled`, `comfyui_base_url`, `comfyui_reachable`.
+- `COMFYUI_MODEL_CHECKPOINT` env var selects the checkpoint (defaults to `v1-5-pruned-emaonly.safetensors`).
+
 **Safety:**
 - Both snippet AND prompt_generation must be `status='approved'` before any render can start.
 - All renders start as `status: needs_review` — no auto-publish path exists.
 - `COMFYUI_ENABLED` defaults to `false`. `FFMPEG_ENABLED` defaults to `true` (local subprocess only).
 - All records carry `simulation_only: true`, `outbound_actions_taken: 0`.
+- ComfyUI calls are made only to the local `COMFYUI_BASE_URL` — no external image APIs.
 - FFmpeg writes only to local filesystem (`FFMPEG_OUTPUT_DIR`, default `/tmp/signalforge_renders`) — no uploads to external services.
 
 ## Local Setup
