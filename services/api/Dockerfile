@@ -10,6 +10,7 @@ COPY services/api/transcript_provider.py .
 COPY services/api/audio_extractor.py .
 COPY services/api/media_intake.py .
 COPY services/api/prompt_generator.py .
+COPY services/api/video_assembler.py .
 COPY agents ./agents
 COPY tools ./tools
 COPY modules ./modules

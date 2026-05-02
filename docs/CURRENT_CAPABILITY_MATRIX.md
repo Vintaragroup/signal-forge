@@ -97,3 +97,25 @@ All Social Creative Engine v2 records carry `simulation_only: true` and `outboun
 ### v4.5 Safety Boundary
 
 All prompt_generations records carry `simulation_only: true` and `outbound_actions_taken: 0`. Default negative prompt blocks all identifiable faces, likenesses, and avatars. Voice cloning instructions are never generated. No ComfyUI, Seedance, Higgsfield, or Runway calls are made by SignalForge; the operator must execute any asset generation externally after review. `use_likeness=True` requires explicit client profile permissions. All prompts enter as `status: draft` and must be reviewed before use.
+
+---
+
+## Social Creative Engine v5 — Asset Rendering
+
+| Capability | Dashboard-supported | Simulated | Manual | Real/local | Notes |
+|---|---|---|---|---|---|
+| Asset render pipeline | Yes | Yes | No | Opt-in | Requires approved snippet + approved prompt_generation. Both gates enforced at API level. |
+| ComfyUI image generation | Yes (opt-in) | Yes (disabled path) | No | Yes (`COMFYUI_ENABLED=true`) | `COMFYUI_ENABLED=false` (default) → mock result, no external calls. |
+| FFmpeg video assembly | Yes (opt-in) | Yes (disabled path) | No | Yes (`FFMPEG_ENABLED=true`) | `FFMPEG_ENABLED=false` (default) → mock assembly result, no subprocess spawned. |
+| Vertical 9:16 output | Yes | Yes | No | Yes | Default resolution `1080x1920`. Configurable. |
+| Caption overlay (basic) | Yes | Yes | No | Yes (`FFMPEG_ENABLED=true`) | Optional `add_captions=true`. Burns caption text via FFmpeg drawtext filter. |
+| Status lifecycle | Yes | N/A | N/A | N/A | queued → generated → needs_review. Never auto-advances to approved. |
+| Asset render review | Yes | Yes | Yes | No | approve / reject / revise. Operator must explicitly approve each render. |
+| Rendered Assets tab | Yes | Yes | N/A | N/A | New "Rendered Assets" tab in Creative Studio dashboard. Preview, filter, and review inline. |
+| Demo mode renders | Yes (demo) | Yes | N/A | N/A | 2 demo seed records with mock preview URLs. Review mutations work in demo. |
+| Workspace isolation | Yes | N/A | N/A | N/A | asset_renders scoped to workspace_slug. Demo workspace excluded from real queries. |
+| Source traceability | Yes | N/A | N/A | N/A | snippet_id and prompt_generation_id stored on every render record. |
+
+### v5 Safety Boundary
+
+All `asset_renders` records carry `simulation_only: true` and `outbound_actions_taken: 0`. No asset is ever published, scheduled, or sent automatically. A render cannot be started unless both the source snippet and prompt_generation have `status: approved`. All rendered assets start as `status: needs_review` and require explicit operator approval before any downstream use. `COMFYUI_ENABLED` and `FFMPEG_ENABLED` are each independently gated and default to `false` — the system makes zero external subprocess or HTTP calls unless explicitly opted in. FFmpeg commands write only to the local filesystem at `FFMPEG_OUTPUT_DIR` (default: `/tmp/signalforge_renders`). No files are uploaded, streamed, or sent to any external service.

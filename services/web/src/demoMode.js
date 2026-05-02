@@ -696,6 +696,66 @@ const seedState = {
       updated_at: daysAgo(1),
     },
   ],
+  asset_renders: [
+    {
+      _id: "demo-render-1",
+      workspace_slug: "demo",
+      client_id: "demo-company-1",
+      snippet_id: "demo-snippet-1",
+      prompt_generation_id: "demo-prompt-gen-1",
+      asset_type: "video",
+      generation_engine: "comfyui",
+      source_audio_path: "",
+      add_captions: true,
+      notes: "",
+      status: "approved",
+      comfyui_enabled: false,
+      ffmpeg_enabled: false,
+      comfyui_result: { skipped: true, skip_reason: "comfyui_disabled", simulation_only: true, outbound_actions_taken: 0 },
+      assembly_result: { mock: true, skip_reason: "ffmpeg_disabled", simulation_only: true, outbound_actions_taken: 0 },
+      file_path: "/tmp/signalforge_renders/mock_demo-render-1.mp4",
+      preview_url: "https://placehold.co/540x960/1e293b/ffffff?text=Demo+Render+1",
+      duration_seconds: 30.0,
+      resolution: "1080x1920",
+      review_events: [
+        { decision: "approve", note: "Looks great for demo.", reviewed_at: daysAgo(0) },
+      ],
+      simulation_only: true,
+      outbound_actions_taken: 0,
+      is_demo: true,
+      demo_label: "Demo Mode",
+      created_at: daysAgo(1),
+      updated_at: daysAgo(0),
+    },
+    {
+      _id: "demo-render-2",
+      workspace_slug: "demo",
+      client_id: "demo-company-1",
+      snippet_id: "demo-snippet-1",
+      prompt_generation_id: "demo-prompt-gen-1",
+      asset_type: "video",
+      generation_engine: "comfyui",
+      source_audio_path: "",
+      add_captions: false,
+      notes: "Second demo render awaiting review.",
+      status: "needs_review",
+      comfyui_enabled: false,
+      ffmpeg_enabled: false,
+      comfyui_result: { skipped: true, skip_reason: "comfyui_disabled", simulation_only: true, outbound_actions_taken: 0 },
+      assembly_result: { mock: true, skip_reason: "ffmpeg_disabled", simulation_only: true, outbound_actions_taken: 0 },
+      file_path: "/tmp/signalforge_renders/mock_demo-render-2.mp4",
+      preview_url: "https://placehold.co/540x960/1e293b/ffffff?text=Demo+Render+2",
+      duration_seconds: 28.5,
+      resolution: "1080x1920",
+      review_events: [],
+      simulation_only: true,
+      outbound_actions_taken: 0,
+      is_demo: true,
+      demo_label: "Demo Mode",
+      created_at: daysAgo(0),
+      updated_at: daysAgo(0),
+    },
+  ],
 };
 
 function clone(value) {
@@ -843,8 +903,7 @@ export function reviewDemoCreativeAsset(assetId, decision, note = "") {
   return (state.creative_assets || []).find((a) => a._id === assetId) || {};
 }
 
-export function reviewDemoPromptGeneration(genId, decision, note = "") {
-  const state = readState();
+export function reviewDemoPromptGeneration(genId, decision, note = "") {  const state = readState();
   const newStatus =
     decision === "approve"
       ? "approved"
@@ -869,6 +928,34 @@ export function reviewDemoPromptGeneration(genId, decision, note = "") {
   );
   writeState(state);
   return (state.prompt_generations || []).find((g) => g._id === genId) || {};
+}
+
+export function reviewDemoAssetRender(renderId, decision, note = "") {
+  const state = readState();
+  const newStatus =
+    decision === "approve"
+      ? "approved"
+      : decision === "reject"
+        ? "rejected"
+        : "needs_revision";
+  state.asset_renders = (state.asset_renders || []).map((render) =>
+    render._id === renderId
+      ? {
+          ...render,
+          status: newStatus,
+          review_decision: decision,
+          review_note: note || "Demo review saved. No post published.",
+          reviewed_at: nowIso(),
+          updated_at: nowIso(),
+          review_events: [
+            ...(render.review_events || []),
+            { decision, note: note || "Demo review", reviewed_at: nowIso() },
+          ],
+        }
+      : render,
+  );
+  writeState(state);
+  return (state.asset_renders || []).find((r) => r._id === renderId) || {};
 }
 
 export function simulateDemoResponse(messageId) {

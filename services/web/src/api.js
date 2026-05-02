@@ -9,6 +9,7 @@ import {
   resetDemoData,
   reviewDemoCreativeAsset,
   reviewDemoPromptGeneration,
+  reviewDemoAssetRender,
   reviewDemoSnippet,
   runDemoOutreach,
   showDemoDealOutcome,
@@ -354,6 +355,30 @@ export const api = {
           message: "Demo review saved.",
         })
       : request(`/prompt-generations/${encodeURIComponent(id)}/review`, {
+          method: "POST",
+          body: JSON.stringify(payload),
+        }),
+
+  // --- Social Creative Engine v5 ---
+  assetRenders: (params = {}) =>
+    isDemoModeEnabled()
+      ? Promise.resolve({ items: demoItems("asset_renders"), simulation_only: true })
+      : request(`/assets?${new URLSearchParams({ ...wsParam(), ...params })}`),
+
+  createAssetRender: (payload) =>
+    request("/assets/render", {
+      method: "POST",
+      body: JSON.stringify({ ...wsParam(), ...payload }),
+    }),
+
+  reviewAssetRender: (id, payload) =>
+    isDemoModeEnabled()
+      ? Promise.resolve({
+          item: reviewDemoAssetRender(id, payload.decision, payload.note),
+          message: "Demo asset render review saved. No post published.",
+          simulation_only: true,
+        })
+      : request(`/assets/${encodeURIComponent(id)}/review`, {
           method: "POST",
           body: JSON.stringify(payload),
         }),

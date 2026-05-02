@@ -771,3 +771,92 @@ curl -X POST "http://localhost:8000/prompt-generations/<gen_id>/review" \
 - All records carry `simulation_only: true`, `outbound_actions_taken: 0`
 - The `prompt_generator.py` module makes zero external API calls
 - Default engine target is `comfyui` — local only, no remote API
+
+---
+
+## Section 26: Social Creative Engine v5 — Asset Rendering
+
+### Overview
+
+v5 adds a rendering pipeline on top of the v4.5 prompt approval layer. Approved prompt generations can be submitted to a render job that (optionally) calls ComfyUI for image generation and FFmpeg for video assembly. All rendering is gated: both `COMFYUI_ENABLED` and `FFMPEG_ENABLED` default to `false`. Every rendered asset is created as `status: needs_review` and requires operator approval before any downstream use.
+
+### Prerequisites
+
+1. Snippet must be `status: approved` (v2 snippet review workflow)
+2. Prompt generation must be `status: approved` (v4.5 prompt review workflow)
+3. No content is rendered, generated, or assembled without both approvals
+
+### Environment Variables
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `COMFYUI_ENABLED` | `false` | Enable real ComfyUI image generation |
+| `COMFYUI_BASE_URL` | `http://host.docker.internal:8188` | ComfyUI API address (local only) |
+| `COMFYUI_WORKFLOW_PATH` | `` | Path to ComfyUI workflow JSON |
+| `FFMPEG_ENABLED` | `false` | Enable real FFmpeg video assembly |
+| `FFMPEG_OUTPUT_DIR` | `/tmp/signalforge_renders` | Output directory for assembled mp4 files |
+
+### API Endpoints
+
+| Method | Endpoint | Description |
+|---|---|---|
+| POST | `/assets/render` | Trigger asset render from approved snippet + prompt generation |
+| GET | `/assets` | List render records with workspace/status/engine filters |
+| POST | `/assets/{id}/review` | Operator review: approve / reject / revise |
+
+### Render Workflow
+
+```
+Approved snippet + Approved prompt_generation
+    ↓
+POST /assets/render
+    ↓ (status: queued)
+ComfyUI step (if COMFYUI_ENABLED=true → image; else mock path)
+    ↓ (status: generated)
+FFmpeg step (if FFMPEG_ENABLED=true → mp4; else mock path)
+    ↓ (status: needs_review)
+Operator review via POST /assets/{id}/review
+    ↓
+status: approved | rejected | needs_revision
+```
+
+### Quick Reference: cURL Commands
+
+```bash
+# Trigger a render (both gates disabled — safe mock mode)
+curl -X POST "http://localhost:8000/assets/render" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "workspace_slug": "default",
+    "snippet_id": "<approved_snippet_id>",
+    "prompt_generation_id": "<approved_prompt_gen_id>",
+    "asset_type": "video",
+    "generation_engine": "comfyui",
+    "add_captions": false
+  }'
+
+# List renders for workspace
+curl "http://localhost:8000/assets?workspace_slug=default"
+
+# List renders awaiting review
+curl "http://localhost:8000/assets?workspace_slug=default&status=needs_review"
+
+# Approve a render
+curl -X POST "http://localhost:8000/assets/<render_id>/review" \
+  -H "Content-Type: application/json" \
+  -d '{"decision": "approve", "note": "Approved for use."}'
+
+# Reject a render
+curl -X POST "http://localhost:8000/assets/<render_id>/review" \
+  -H "Content-Type: application/json" \
+  -d '{"decision": "reject", "note": "Does not meet brand guidelines."}'
+```
+
+### Operating Rules (v5)
+
+- Never enable `COMFYUI_ENABLED=true` or `FFMPEG_ENABLED=true` in production without confirming local service availability
+- Both the snippet and the prompt_generation must be operator-approved before any render can be triggered
+- All render records carry `simulation_only: true`, `outbound_actions_taken: 0`
+- Rendered assets go to `needs_review` — they are never auto-approved
+- `video_assembler.py` makes zero external API calls; FFmpeg writes only to the local filesystem
+- The "Rendered Assets" tab in Creative Studio shows all renders with inline review controls

@@ -1113,6 +1113,279 @@ const PROMPT_STATUS_COLORS = {
   needs_revision: "bg-amber-100 text-amber-800",
 };
 
+const RENDER_STATUS_COLORS = {
+  queued: "bg-blue-100 text-blue-700",
+  generated: "bg-indigo-100 text-indigo-700",
+  needs_review: "bg-amber-100 text-amber-800",
+  approved: "bg-green-100 text-green-800",
+  rejected: "bg-red-100 text-red-800",
+  needs_revision: "bg-orange-100 text-orange-800",
+};
+
+// ---------------------------------------------------------------------------
+// v5: AssetRenderSection
+// ---------------------------------------------------------------------------
+
+function AssetRenderSection({
+  assetRenders,
+  promptGenerations,
+  contentSnippets,
+  wsParam,
+  onRefresh,
+  showNotice,
+  demoMode,
+}) {
+  const [filterStatus, setFilterStatus] = useState("");
+  const [reviewingId, setReviewingId] = useState(null);
+  const [reviewNote, setReviewNote] = useState("");
+  const [renderingId, setRenderingId] = useState(null);
+  const [busy, setBusy] = useState(false);
+
+  const approvedPrompts = (promptGenerations || []).filter((pg) => pg.status === "approved");
+
+  const filtered = (assetRenders || []).filter((r) => {
+    if (filterStatus && r.status !== filterStatus) return false;
+    return true;
+  });
+
+  async function handleRender(promptGen) {
+    if (renderingId) return;
+    const snippet = (contentSnippets || []).find((s) => s._id === promptGen.snippet_id);
+    if (!snippet) {
+      showNotice("Cannot render: linked snippet not found.");
+      return;
+    }
+    setBusy(true);
+    setRenderingId(promptGen._id);
+    try {
+      await api.createAssetRender({
+        ...wsParam(),
+        snippet_id: promptGen.snippet_id,
+        prompt_generation_id: promptGen._id,
+        client_id: promptGen.client_id || "",
+        generation_engine: promptGen.generation_engine_target || "comfyui",
+        add_captions: false,
+      });
+      showNotice("Asset render queued. Awaiting operator review. No content published.");
+      onRefresh();
+    } catch (err) {
+      showNotice(err.message || "Render failed. Check snippet and prompt approval status.");
+    } finally {
+      setBusy(false);
+      setRenderingId(null);
+    }
+  }
+
+  async function handleReview(id, decision) {
+    try {
+      await api.reviewAssetRender(id, { decision, note: reviewNote });
+      showNotice(`Asset render ${decision}d.`);
+      setReviewingId(null);
+      setReviewNote("");
+      onRefresh();
+    } catch {
+      showNotice("Review failed. Please try again.");
+    }
+  }
+
+  return (
+    <section className="space-y-6">
+      <div className="flex flex-wrap items-center gap-3">
+        <h2 className="text-base font-semibold text-slate-950">Rendered Assets</h2>
+        <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs text-slate-600">
+          {filtered.length} render{filtered.length !== 1 ? "s" : ""}
+        </span>
+        {demoMode && (
+          <span className="rounded-full bg-amber-100 px-2 py-0.5 text-xs text-amber-700">
+            Demo Mode
+          </span>
+        )}
+        <div className="ml-auto">
+          <select
+            value={filterStatus}
+            onChange={(e) => setFilterStatus(e.target.value)}
+            className="rounded border border-slate-200 px-2 py-1 text-xs"
+          >
+            <option value="">All Statuses</option>
+            <option value="queued">Queued</option>
+            <option value="generated">Generated</option>
+            <option value="needs_review">Needs Review</option>
+            <option value="approved">Approved</option>
+            <option value="rejected">Rejected</option>
+            <option value="needs_revision">Needs Revision</option>
+          </select>
+        </div>
+      </div>
+
+      {/* Quick render from approved prompt */}
+      {approvedPrompts.length > 0 && (
+        <div className="rounded-lg border border-indigo-200 bg-indigo-50 p-4">
+          <p className="mb-2 text-sm font-medium text-indigo-900">
+            Render asset from approved prompt
+          </p>
+          <div className="flex flex-wrap gap-2">
+            {approvedPrompts.slice(0, 5).map((pg) => (
+              <button
+                key={pg._id}
+                type="button"
+                disabled={busy}
+                onClick={() => handleRender(pg)}
+                className="rounded border border-indigo-300 bg-white px-3 py-1 text-xs text-indigo-700 hover:bg-indigo-100 disabled:opacity-50"
+              >
+                {renderingId === pg._id ? "Queuing…" : (
+                  (pg.prompt_type || "prompt").replace(/_/g, " ")
+                  + (pg.snippet_id ? ` — snippet …${pg.snippet_id.slice(-4)}` : "")
+                )}
+              </button>
+            ))}
+          </div>
+          <p className="mt-1 text-xs text-indigo-600">
+            ComfyUI and FFmpeg each individually gated by env vars. No external calls in disabled mode.
+          </p>
+        </div>
+      )}
+
+      {filtered.length === 0 && (
+        <p className="text-sm text-slate-400">
+          No renders yet. Approve a prompt generation above to render an asset.
+        </p>
+      )}
+
+      <div className="space-y-4">
+        {filtered.map((render) => {
+          const prompt = (promptGenerations || []).find((p) => p._id === render.prompt_generation_id);
+          const snippet = (contentSnippets || []).find((s) => s._id === render.snippet_id);
+          const isReviewing = reviewingId === render._id;
+          const statusColor = RENDER_STATUS_COLORS[render.status] || "bg-slate-100 text-slate-700";
+
+          return (
+            <div key={render._id} className="rounded-lg border border-slate-200 bg-white p-4 space-y-3">
+              <div className="flex flex-wrap items-center gap-2">
+                <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${statusColor}`}>
+                  {render.status}
+                </span>
+                <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs text-slate-600">
+                  {render.asset_type || "video"}
+                </span>
+                <span className="rounded-full bg-indigo-50 px-2 py-0.5 text-xs text-indigo-700">
+                  {render.generation_engine || "comfyui"}
+                </span>
+                {render.is_demo && (
+                  <span className="rounded-full bg-amber-100 px-2 py-0.5 text-xs text-amber-700">Demo</span>
+                )}
+                {render.assembly_result?.mock && (
+                  <span className="rounded-full bg-slate-200 px-2 py-0.5 text-xs text-slate-500">Mock Render</span>
+                )}
+              </div>
+
+              {snippet && (
+                <p className="text-xs text-slate-500">
+                  <span className="font-medium text-slate-700">Snippet: </span>
+                  {(snippet.transcript_text || "").slice(0, 120)}
+                  {snippet.transcript_text && snippet.transcript_text.length > 120 ? "…" : ""}
+                </p>
+              )}
+
+              {prompt && (
+                <p className="text-xs text-slate-500">
+                  <span className="font-medium text-slate-700">Prompt type: </span>
+                  {(prompt.prompt_type || "").replace(/_/g, " ")}
+                </p>
+              )}
+
+              {/* Preview */}
+              {(render.preview_url || render.file_path) && (
+                <div className="rounded-lg border border-slate-100 bg-slate-50 p-3">
+                  {render.preview_url ? (
+                    <img
+                      src={render.preview_url}
+                      alt="Asset preview"
+                      className="mx-auto max-h-48 rounded object-contain"
+                    />
+                  ) : (
+                    <p className="text-xs text-slate-400 italic">
+                      File: {render.file_path}
+                    </p>
+                  )}
+                </div>
+              )}
+
+              {render.assembly_result?.skip_reason && (
+                <p className="text-xs text-slate-400 italic">
+                  Assembly skipped: {render.assembly_result.skip_reason}
+                </p>
+              )}
+
+              <p className="text-xs text-slate-400">
+                Duration: {render.duration_seconds || 0}s · {render.resolution || "1080x1920"} ·{" "}
+                {render.add_captions ? "Captions ON" : "No captions"}
+              </p>
+
+              {/* Safety notice */}
+              <p className="rounded bg-green-50 px-2 py-1 text-xs text-green-700">
+                simulation_only: true · outbound_actions_taken: 0 · No content published.
+              </p>
+
+              {/* Review controls */}
+              {render.status === "needs_review" && (
+                isReviewing ? (
+                  <div className="space-y-2">
+                    <textarea
+                      className="w-full rounded border border-slate-200 p-2 text-xs"
+                      rows={2}
+                      placeholder="Review note (optional)"
+                      value={reviewNote}
+                      onChange={(e) => setReviewNote(e.target.value)}
+                    />
+                    <div className="flex gap-2">
+                      <button
+                        type="button"
+                        onClick={() => handleReview(render._id, "approve")}
+                        className="rounded bg-green-600 px-3 py-1 text-xs text-white hover:bg-green-700"
+                      >
+                        Approve
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleReview(render._id, "reject")}
+                        className="rounded bg-red-600 px-3 py-1 text-xs text-white hover:bg-red-700"
+                      >
+                        Reject
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleReview(render._id, "revise")}
+                        className="rounded bg-amber-500 px-3 py-1 text-xs text-white hover:bg-amber-600"
+                      >
+                        Needs Revision
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => { setReviewingId(null); setReviewNote(""); }}
+                        className="ml-auto rounded border border-slate-200 px-3 py-1 text-xs text-slate-600"
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => setReviewingId(render._id)}
+                    className="rounded border border-slate-300 px-3 py-1 text-xs text-slate-700 hover:bg-slate-50"
+                  >
+                    Review
+                  </button>
+                )
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </section>
+  );
+}
+
 function PromptLibrarySection({
   promptGenerations,
   contentSnippets,
@@ -1383,10 +1656,13 @@ export default function CreativeStudioPage({ activeWorkspace, refreshTrigger = 0
   // v4.5 state
   const [promptGenerations, setPromptGenerations] = useState([]);
 
+  // v5 state
+  const [assetRenders, setAssetRenders] = useState([]);
+
   async function load() {
     setLoading(true);
     try {
-      const [briefData, draftData, profilesData, channelsData, contentData, snippetsData, assetsData, audioRunsData, transcriptRunsData, segmentsData, intakeData, promptGenData] = await Promise.all([
+      const [briefData, draftData, profilesData, channelsData, contentData, snippetsData, assetsData, audioRunsData, transcriptRunsData, segmentsData, intakeData, promptGenData, assetRendersData] = await Promise.all([
         api.contentBriefs({ ...wsParam() }),
         api.contentDrafts({ ...wsParam() }),
         api.clientProfiles({ ...wsParam() }),
@@ -1399,6 +1675,7 @@ export default function CreativeStudioPage({ activeWorkspace, refreshTrigger = 0
         api.transcriptSegments({ ...wsParam() }),
         api.mediaIntakeRecords({ ...wsParam() }),
         api.promptGenerations({ ...wsParam() }),
+        api.assetRenders({ ...wsParam() }),
       ]);
       setBriefs(briefData.items || []);
       setDrafts(draftData.items || []);
@@ -1412,6 +1689,7 @@ export default function CreativeStudioPage({ activeWorkspace, refreshTrigger = 0
       setTranscriptSegments(segmentsData.items || []);
       setMediaIntakeRecords(intakeData.items || []);
       setPromptGenerations(promptGenData.items || []);
+      setAssetRenders(assetRendersData.items || []);
     } catch {
       // fail silently
     } finally {
@@ -1555,6 +1833,7 @@ export default function CreativeStudioPage({ activeWorkspace, refreshTrigger = 0
           { id: "approval-queue", label: `Approval Queue (${[...contentSnippets, ...creativeAssets].filter((i) => i.status === "needs_review").length})` },
           { id: "ingest", label: `Ingest Pipeline (${transcriptRuns.length})` },
           { id: "prompts", label: `Prompt Library (${promptGenerations.length})` },
+          { id: "renders", label: `Rendered Assets (${assetRenders.length})` },
         ].map(({ id, label }) => (
           <button
             key={id}
@@ -1970,6 +2249,19 @@ export default function CreativeStudioPage({ activeWorkspace, refreshTrigger = 0
           promptGenerations={promptGenerations}
           contentSnippets={contentSnippets}
           clientProfiles={clientProfiles}
+          wsParam={wsParam}
+          onRefresh={load}
+          showNotice={showNotice}
+          demoMode={demoMode}
+        />
+      )}
+
+      {/* v5: RENDERED ASSETS section */}
+      {activeSection === "renders" && (
+        <AssetRenderSection
+          assetRenders={assetRenders}
+          promptGenerations={promptGenerations}
+          contentSnippets={contentSnippets}
           wsParam={wsParam}
           onRefresh={load}
           showNotice={showNotice}

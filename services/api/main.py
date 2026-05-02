@@ -4560,3 +4560,320 @@ def review_prompt_generation(gen_id: str, payload: PromptGenerationReviewRequest
         }
     finally:
         client.close()
+
+
+# ===========================================================================
+# Social Creative Engine v5 — Asset Rendering
+# ===========================================================================
+
+# ---------------------------------------------------------------------------
+# v5: video_assembler import (graceful degradation if not available)
+# ---------------------------------------------------------------------------
+
+try:
+    from video_assembler import assemble_video as _assemble_video  # type: ignore
+    _VIDEO_ASSEMBLER_AVAILABLE = True
+except Exception:
+    _assemble_video = None  # type: ignore
+    _VIDEO_ASSEMBLER_AVAILABLE = False
+
+
+# ---------------------------------------------------------------------------
+# v5: Request / Response models
+# ---------------------------------------------------------------------------
+
+
+class AssetRenderRequest(BaseModel):
+    workspace_slug: str = ""
+    client_id: str = ""
+    snippet_id: str
+    prompt_generation_id: str
+    asset_type: str = "video"
+    generation_engine: str = "comfyui"
+    source_audio_path: str = ""
+    add_captions: bool = False
+    notes: str = ""
+
+
+class AssetRenderReviewRequest(BaseModel):
+    decision: str  # "approve" | "reject" | "revise"
+    note: str = ""
+
+
+# ---------------------------------------------------------------------------
+# v5: Helper
+# ---------------------------------------------------------------------------
+
+
+def find_asset_render(db: Any, render_id: str) -> dict | None:
+    """Lookup asset render by string id or ObjectId."""
+    try:
+        record = db.asset_renders.find_one({"_id": ObjectId(render_id)})
+        if record:
+            return record
+    except Exception:
+        pass
+    return db.asset_renders.find_one({"_id": render_id})
+
+
+# ---------------------------------------------------------------------------
+# v5: Endpoints
+# ---------------------------------------------------------------------------
+
+
+@app.post("/assets/render")
+def render_asset(payload: AssetRenderRequest) -> dict:
+    """
+    Trigger an asset render from an approved snippet + approved prompt_generation.
+    Validates both prerequisites before creating any records.
+    ComfyUI and FFmpeg are individually gated via environment variables.
+    All results are simulation_only=True; no external content is published.
+    """
+    now = utc_now()
+    comfyui_enabled = env_enabled(os.getenv("COMFYUI_ENABLED", "false"))
+    ffmpeg_enabled = env_enabled(os.getenv("FFMPEG_ENABLED", "false"))
+
+    client = get_client()
+    try:
+        db = get_database(client)
+
+        # --- Validate snippet ---
+        snippet = None
+        try:
+            snippet = db.content_snippets.find_one({"_id": ObjectId(clean_text(payload.snippet_id))})
+        except Exception:
+            pass
+        if not snippet:
+            snippet = db.content_snippets.find_one({"_id": clean_text(payload.snippet_id)})
+        if not snippet:
+            raise HTTPException(status_code=404, detail="Snippet not found.")
+        if snippet.get("status") != "approved":
+            raise HTTPException(
+                status_code=422,
+                detail=f"Snippet must be approved before rendering. Current status: {snippet.get('status', 'unknown')}",
+            )
+
+        # --- Validate prompt_generation ---
+        prompt_gen = find_prompt_generation(db, clean_text(payload.prompt_generation_id))
+        if not prompt_gen:
+            raise HTTPException(status_code=404, detail="Prompt generation not found.")
+        if prompt_gen.get("status") != "approved":
+            raise HTTPException(
+                status_code=422,
+                detail=f"Prompt generation must be approved before rendering. Current status: {prompt_gen.get('status', 'unknown')}",
+            )
+
+        # --- Create the render record (status: queued) ---
+        render_record: dict[str, Any] = {
+            "workspace_slug": clean_text(payload.workspace_slug),
+            "client_id": clean_text(payload.client_id),
+            "snippet_id": clean_text(payload.snippet_id),
+            "prompt_generation_id": clean_text(payload.prompt_generation_id),
+            "asset_type": payload.asset_type,
+            "generation_engine": clean_text(payload.generation_engine),
+            "source_audio_path": clean_text(payload.source_audio_path),
+            "add_captions": payload.add_captions,
+            "notes": clean_text(payload.notes),
+            "status": "queued",
+            "comfyui_enabled": comfyui_enabled,
+            "ffmpeg_enabled": ffmpeg_enabled,
+            "comfyui_result": {},
+            "assembly_result": {},
+            "file_path": "",
+            "duration_seconds": 0.0,
+            "resolution": "1080x1920",
+            "review_events": [],
+            "simulation_only": True,
+            "outbound_actions_taken": 0,
+            "created_at": now,
+            "updated_at": now,
+        }
+        insert_result = db.asset_renders.insert_one(render_record)
+        render_id = insert_result.inserted_id
+
+        # --- ComfyUI step ---
+        comfyui_result: dict[str, Any] = {}
+        generated_image_path = ""
+        if comfyui_enabled:
+            try:
+                from agents.comfyui_client import ComfyUIClient  # type: ignore
+                comfyui = ComfyUIClient()
+                comfyui_result = comfyui.run_from_prompt_generation(
+                    serialize(prompt_gen),
+                    workflow_path=os.getenv("COMFYUI_WORKFLOW_PATH", ""),
+                )
+            except Exception as exc:
+                comfyui_result = {
+                    "error": f"{exc.__class__.__name__}: {exc}",
+                    "simulation_only": True,
+                    "outbound_actions_taken": 0,
+                }
+        else:
+            render_id_str = str(render_id)
+            comfyui_result = {
+                "skipped": True,
+                "skip_reason": "comfyui_disabled",
+                "mock_image_path": f"/tmp/signalforge_renders/mock_comfyui_{render_id_str}.png",
+                "simulation_only": True,
+                "outbound_actions_taken": 0,
+            }
+            generated_image_path = comfyui_result["mock_image_path"]
+
+        db.asset_renders.update_one(
+            {"_id": render_id},
+            {"$set": {"status": "generated", "comfyui_result": comfyui_result, "updated_at": utc_now()}},
+        )
+
+        # --- FFmpeg / video assembly step ---
+        assembly_result: dict[str, Any] = {}
+        final_file_path = ""
+        duration_seconds = float(snippet.get("duration_seconds") or 30.0)
+
+        if _VIDEO_ASSEMBLER_AVAILABLE and _assemble_video is not None:
+            caption_text = ""
+            if payload.add_captions:
+                caption_text = (
+                    prompt_gen.get("caption_overlay_suggestion")
+                    or snippet.get("transcript_text", "")[:120]
+                    or ""
+                )
+            va_result = _assemble_video(
+                image_path=generated_image_path,
+                audio_path=clean_text(payload.source_audio_path),
+                duration_seconds=duration_seconds,
+                add_captions=payload.add_captions,
+                caption_text=caption_text,
+                resolution="1080x1920",
+                generation_engine=clean_text(payload.generation_engine),
+                asset_render_id=str(render_id),
+            )
+            assembly_result = va_result.to_dict()
+            final_file_path = va_result.file_path
+        else:
+            render_id_str = str(render_id)
+            assembly_result = {
+                "skipped": True,
+                "skip_reason": "video_assembler_unavailable",
+                "mock": True,
+                "mock_file_path": f"/tmp/signalforge_renders/mock_{render_id_str}.mp4",
+                "simulation_only": True,
+                "outbound_actions_taken": 0,
+            }
+            final_file_path = assembly_result["mock_file_path"]
+
+        # --- Transition to needs_review ---
+        db.asset_renders.update_one(
+            {"_id": render_id},
+            {
+                "$set": {
+                    "status": "needs_review",
+                    "assembly_result": assembly_result,
+                    "file_path": final_file_path,
+                    "duration_seconds": duration_seconds,
+                    "updated_at": utc_now(),
+                }
+            },
+        )
+
+        created = db.asset_renders.find_one({"_id": render_id})
+        return {
+            "item": serialize(created),
+            "message": "Asset render complete. Awaiting operator review. No content published or scheduled.",
+            "simulation_only": True,
+            "outbound_actions_taken": 0,
+        }
+    finally:
+        client.close()
+
+
+@app.get("/assets")
+def list_asset_renders(
+    workspace_slug: str = Query(""),
+    client_id: str = "",
+    snippet_id: str = "",
+    prompt_generation_id: str = "",
+    status: str = "",
+    asset_type: str = "",
+    generation_engine: str = "",
+    include_legacy: bool = Query(False),
+    include_test: bool = Query(False),
+    limit: int = Query(100, ge=1, le=500),
+) -> dict:
+    client = get_client()
+    try:
+        db = get_database(client)
+        query: dict[str, Any] = {}
+        if workspace_slug:
+            query["workspace_slug"] = workspace_slug
+        if client_id:
+            query["client_id"] = client_id
+        if snippet_id:
+            query["snippet_id"] = snippet_id
+        if prompt_generation_id:
+            query["prompt_generation_id"] = prompt_generation_id
+        if status:
+            query["status"] = status
+        if asset_type:
+            query["asset_type"] = asset_type
+        if generation_engine:
+            query["generation_engine"] = generation_engine
+        records = list(db.asset_renders.find(query).sort([("created_at", -1)]).limit(limit))
+        records = apply_real_mode_filters(
+            records,
+            workspace_slug=workspace_slug,
+            include_legacy=include_legacy,
+            include_test=include_test,
+        )
+        return {"items": serialize(records), "simulation_only": True}
+    finally:
+        client.close()
+
+
+@app.post("/assets/{render_id}/review")
+def review_asset_render(render_id: str, payload: AssetRenderReviewRequest) -> dict:
+    """
+    Operator review: approve, reject, or request revision on a rendered asset.
+    An asset must be in needs_review status to be reviewed.
+    No content is published by this endpoint.
+    """
+    valid_decisions = {"approve", "reject", "revise"}
+    if payload.decision not in valid_decisions:
+        raise HTTPException(
+            status_code=422,
+            detail=f"decision must be one of: {sorted(valid_decisions)}",
+        )
+
+    client = get_client()
+    try:
+        db = get_database(client)
+        record = find_asset_render(db, render_id)
+        if not record:
+            raise HTTPException(status_code=404, detail="Asset render not found.")
+
+        now = utc_now()
+        new_status = (
+            "approved" if payload.decision == "approve"
+            else "rejected" if payload.decision == "reject"
+            else "needs_revision"
+        )
+        review_event = {
+            "decision": payload.decision,
+            "note": clean_text(payload.note),
+            "reviewed_at": now,
+        }
+        db.asset_renders.update_one(
+            {"_id": record["_id"]},
+            {
+                "$set": {"status": new_status, "updated_at": now},
+                "$push": {"review_events": review_event},
+            },
+        )
+        updated = find_asset_render(db, render_id)
+        return {
+            "item": serialize(updated),
+            "message": f"Asset render {payload.decision}d. No content published or scheduled.",
+            "simulation_only": True,
+            "outbound_actions_taken": 0,
+        }
+    finally:
+        client.close()

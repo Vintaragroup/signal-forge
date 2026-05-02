@@ -96,3 +96,56 @@ class ComfyUIClient:
             "simulation_only": True,
             "outbound_actions_taken": 0,
         }
+
+    def build_prompt_inputs_from_generation(self, prompt_generation: dict) -> dict[str, Any]:
+        """
+        Map a PromptGenerationResult dict to ComfyUI workflow node inputs.
+
+        Follows the standard ComfyUI SDXL workflow layout:
+          node "6" → CLIPTextEncode (positive)
+          node "7" → CLIPTextEncode (negative)
+
+        Style, lighting, and camera_direction are appended to the positive
+        prompt as comma-separated style tags.  The negative prompt is passed
+        through unchanged.
+
+        Returns a prompt_inputs dict suitable for passing to run_workflow().
+        Never calls any external service.
+        """
+        positive_parts = [prompt_generation.get("positive_prompt", "")]
+        for field in ("visual_style", "lighting", "camera_direction"):
+            val = (prompt_generation.get(field) or "").strip()
+            if val:
+                positive_parts.append(val)
+
+        positive_text = ", ".join(p for p in positive_parts if p)
+        negative_text = (prompt_generation.get("negative_prompt") or "").strip()
+
+        return {
+            "6": {"text": positive_text},
+            "7": {"text": negative_text},
+        }
+
+    def run_from_prompt_generation(
+        self,
+        prompt_generation: dict,
+        workflow_path: str = "",
+    ) -> dict[str, Any]:
+        """
+        Convenience wrapper: builds prompt inputs from a PromptGenerationResult
+        dict and submits the workflow.  Returns the run_workflow() result
+        extended with traceability fields.
+
+        Never publishes or schedules content.  simulation_only=True always.
+        """
+        prompt_inputs = self.build_prompt_inputs_from_generation(prompt_generation)
+        result = self.run_workflow(
+            workflow_path=workflow_path,
+            prompt_inputs=prompt_inputs,
+        )
+        result["prompt_generation_id"] = str(prompt_generation.get("_id", ""))
+        result["engine_notes"] = (prompt_generation.get("motion_notes") or "").strip()
+        result["caption_overlay_suggestion"] = (
+            prompt_generation.get("caption_overlay_suggestion") or ""
+        ).strip()
+        return result

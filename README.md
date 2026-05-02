@@ -239,6 +239,25 @@ v4.5 adds a structured visual prompt generation layer on top of the v4 approval 
 - All records carry `simulation_only: true`, `outbound_actions_taken: 0`.
 - Prompts start as `draft` and require operator review before use.
 
+## Social Creative Engine v5 — Asset Rendering
+
+v5 adds a rendering pipeline on top of the v4.5 prompt approval layer. An approved prompt generation can be rendered into a short-form vertical video (9:16 mp4) by combining a ComfyUI-generated image with snippet audio via FFmpeg.
+
+**Key features:**
+- `POST /assets/render` — triggers render from approved snippet + approved prompt_generation.
+- `GET /assets` — lists rendered assets with workspace/status/engine filters.
+- `POST /assets/{id}/review` — operator review: approve / reject / revise.
+- **Rendered Assets tab** in Creative Studio dashboard: filter, preview, and review renders inline.
+- Mock render support: `COMFYUI_ENABLED=false` and `FFMPEG_ENABLED=false` (both default) produce safe mock records with no subprocess calls.
+- Caption overlay: optional `add_captions=true` burns caption text via FFmpeg drawtext filter.
+
+**Safety:**
+- Both snippet AND prompt_generation must be `status='approved'` before any render can start.
+- All renders start as `status: needs_review` — no auto-publish path exists.
+- `COMFYUI_ENABLED` and `FFMPEG_ENABLED` default to `false` — zero external calls in default mode.
+- All records carry `simulation_only: true`, `outbound_actions_taken: 0`.
+- FFmpeg writes only to local filesystem (`FFMPEG_OUTPUT_DIR`, default `/tmp/signalforge_renders`).
+
 ## Local Setup
 
 1. Copy the environment template:
