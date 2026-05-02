@@ -285,7 +285,7 @@ export default function WorkflowPage() {
             <h3 className="mb-3 text-sm font-semibold text-slate-950">Drafts needing review</h3>
             <div className="space-y-3">
               {draftsNeedingReview.map((message) => (
-                <article key={message._id} className="rounded-lg border border-slate-200 bg-slate-50 p-4">
+                <article key={`review-${message._id}`} className="rounded-lg border border-slate-200 bg-slate-50 p-4">
                   <div className="flex flex-wrap items-start justify-between gap-3">
                     <div className="min-w-0 flex-1">
                       <div className="font-semibold text-slate-950">{recordTitle(message)}</div>
@@ -336,7 +336,7 @@ export default function WorkflowPage() {
       <StepSection step="4" title="Ready to Send" subtitle="Approved drafts are ready for a human to send outside SignalForge." active={nextStep === 4} count={readyToSend.length}>
         <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
           {readyToSend.map((message) => (
-            <article key={message._id} className="rounded-lg border border-slate-200 bg-slate-50 p-4">
+            <article key={`send-${message._id}`} className="rounded-lg border border-slate-200 bg-slate-50 p-4">
               <div className="font-semibold text-slate-950">{recordTitle(message)}</div>
               <div className="mt-1 text-sm text-slate-600">{message.recipient_name || "-"} · {message.company || message.module || "-"}</div>
               <div className="mt-3 flex flex-wrap gap-2"><StatusBadge value={message.review_status} /><StatusBadge value={message.send_status} /></div>
@@ -358,7 +358,7 @@ export default function WorkflowPage() {
               <div key={group.label} className="rounded-lg border border-slate-200 bg-slate-50 p-4">
                 <div className="mb-3 flex items-center justify-between gap-2"><div className="inline-flex items-center gap-2 text-sm font-semibold text-slate-950"><Icon className="h-4 w-4 text-blue-600" />{group.label}</div><StatusBadge value={`${group.rows.length} items`} /></div>
                 <div className="space-y-2">
-                  {group.rows.slice(0, 6).map((message) => <div key={message._id} className="rounded-lg border border-slate-200 bg-white p-3 text-sm"><div className="font-medium text-slate-950">{recordTitle(message)}</div><div className="mt-1 text-slate-500">{message.recipient_name || message.company || "-"}</div></div>)}
+                  {group.rows.slice(0, 6).map((message) => <div key={`resp-${group.label}-${message._id}`} className="rounded-lg border border-slate-200 bg-white p-3 text-sm"><div className="font-medium text-slate-950">{recordTitle(message)}</div><div className="mt-1 text-slate-500">{message.recipient_name || message.company || "-"}</div></div>)}
                   {!group.rows.length ? <div className="text-sm text-slate-500">Nothing in this state.</div> : null}
                 </div>
               </div>
