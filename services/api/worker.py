@@ -300,14 +300,26 @@ def run_worker_loop() -> None:
     signal.signal(signal.SIGTERM, _handle_signal)
     signal.signal(signal.SIGINT, _handle_signal)
 
-    logger.info("SignalForge worker started. COMFYUI_ENABLED=%s FFMPEG_ENABLED=%s",
-                os.getenv("COMFYUI_ENABLED", "false"),
-                os.getenv("FFMPEG_ENABLED", "false"))
+    logger.info(
+        "SignalForge worker listening for render jobs. "
+        "COMFYUI_ENABLED=%s FFMPEG_ENABLED=%s REDIS_URL=%s",
+        os.getenv("COMFYUI_ENABLED", "false"),
+        os.getenv("FFMPEG_ENABLED", "false"),
+        os.getenv("REDIS_URL", "redis://redis:6379"),
+    )
 
     mongo_client, db = _make_db()
     try:
         while not _shutdown:
-            job = dequeue_render_job(timeout=5)
+            try:
+                job = dequeue_render_job(timeout=5)
+            except Exception as exc:
+                # Transient Redis error — log and continue polling
+                logger.warning("dequeue error (%s: %s) — retrying in 2s", type(exc).__name__, exc)
+                import time
+                time.sleep(2)
+                continue
+
             if job is None:
                 continue
 

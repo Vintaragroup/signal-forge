@@ -39,9 +39,13 @@ FAILED_QUEUE = "signalforge:render_jobs_failed"
 # Internal connection helper
 # ---------------------------------------------------------------------------
 
-def _connect():
+def _connect(socket_timeout: float = 5.0):
     """
     Return a connected Redis client, or None if unavailable.
+
+    ``socket_timeout`` controls how long a *non-blocking* read can wait.
+    For blocking commands (BRPOP) callers should pass a value larger than
+    the BRPOP timeout so the socket does not fire before BRPOP can return.
 
     Catches both ImportError (package missing) and connection errors so
     callers never have to worry about Redis availability.
@@ -52,7 +56,7 @@ def _connect():
         client = _redis.from_url(
             url,
             socket_connect_timeout=2,
-            socket_timeout=5,
+            socket_timeout=socket_timeout,
             decode_responses=True,
         )
         client.ping()
@@ -108,11 +112,23 @@ def dequeue_render_job(timeout: int = 5) -> Optional[dict]:
 
     Returns a parsed dict, or None on timeout / Redis unavailable.
     ``timeout=0`` blocks indefinitely (use only in long-lived worker loops).
+
+    Important: the connection socket_timeout must be > brpop timeout to
+    prevent the socket read from racing the BRPOP timeout and raising
+    redis.exceptions.TimeoutError instead of returning None.
     """
-    r = _connect()
+    # Use socket_timeout strictly larger than the BRPOP timeout so Redis
+    # can return None cleanly before the socket read deadline fires.
+    r = _connect(socket_timeout=float(timeout) + 3.0)
     if r is None:
         return None
-    result = r.brpop(RENDER_QUEUE, timeout=timeout)
+    try:
+        result = r.brpop(RENDER_QUEUE, timeout=timeout)
+    except Exception as exc:
+        # TimeoutError from socket or any other transient error — treat as
+        # empty poll so the caller loop can continue.
+        logger.debug("dequeue_render_job brpop exception (%s: %s)", type(exc).__name__, exc)
+        return None
     if result is None:
         return None
     _key, raw = result

@@ -9,6 +9,7 @@ x-signalforge-env: &signalforge-env
   SERPAPI_KEY: ${SERPAPI_KEY:-}
   SIGNALFORGE_ENV: ${SIGNALFORGE_ENV:-local}
   VAULT_PATH: /vault
+  PYTHONPATH: /app
   # Social Creative Engine v2 — ComfyUI integration (disabled by default)
   COMFYUI_ENABLED: ${COMFYUI_ENABLED:-false}
   COMFYUI_BASE_URL: ${COMFYUI_BASE_URL:-http://comfyui:8188}
@@ -36,7 +37,13 @@ services:
       retries: 5
       start_period: 10s
 
+  # -----------------------------------------------------------------------
+  # One-off / manual worker services
+  # Not started by default. Run individually with:
+  #   docker compose --profile tools run --rm lead_scraper
+  # -----------------------------------------------------------------------
   lead_scraper:
+    profiles: ["tools"]
     build:
       context: ./services/lead_scraper
     container_name: signalforge-lead-scraper
@@ -51,6 +58,7 @@ services:
         condition: service_healthy
 
   lead_enricher:
+    profiles: ["tools"]
     build:
       context: ./services/lead_enricher
     container_name: signalforge-lead-enricher
@@ -65,6 +73,7 @@ services:
         condition: service_healthy
 
   social_processor:
+    profiles: ["tools"]
     build:
       context: ./services/social_processor
     container_name: signalforge-social-processor
@@ -79,6 +88,7 @@ services:
         condition: service_healthy
 
   post_generator:
+    profiles: ["tools"]
     build:
       context: ./services/post_generator
     container_name: signalforge-post-generator
