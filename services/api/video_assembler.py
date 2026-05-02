@@ -1,5 +1,5 @@
 """
-video_assembler.py — SignalForge Social Creative Engine v5
+video_assembler.py — SignalForge Social Creative Engine v5.5
 
 Assembles short-form vertical video (9:16 mp4) from a generated image
 and snippet audio track using FFmpeg.
@@ -11,6 +11,14 @@ Safety guarantees
 - No publishing, scheduling, or platform API calls
 - FFMPEG_ENABLED=false (default) → returns mock result without
   spawning any subprocess or writing any files
+
+New in v5.5
+-----------
+- assembly_status: "success" | "failed" | "skipped" | "mock"
+- assembly_engine: "ffmpeg" | "mock"
+- generate_test_tone(): creates a safe local sine-wave WAV for demo/test
+  renders when no source_audio_path is provided
+- ffmpeg_diagnostics(): returns dict with ffmpeg_available, path, version
 
 Environment variables
 ---------------------
@@ -55,6 +63,8 @@ class VideoAssemblyResult:
     generation_engine: str = ""
     ffmpeg_enabled: bool = False
     mock: bool = True
+    assembly_status: str = "mock"   # "success" | "failed" | "skipped" | "mock"
+    assembly_engine: str = "mock"   # "ffmpeg" | "mock"
     skip_reason: str = ""
     error: str = ""
     simulation_only: bool = True
@@ -69,6 +79,8 @@ class VideoAssemblyResult:
             "generation_engine": self.generation_engine,
             "ffmpeg_enabled": self.ffmpeg_enabled,
             "mock": self.mock,
+            "assembly_status": self.assembly_status,
+            "assembly_engine": self.assembly_engine,
             "skip_reason": self.skip_reason,
             "error": self.error,
             "simulation_only": self.simulation_only,
@@ -113,6 +125,8 @@ def assemble_video(
             generation_engine=generation_engine,
             ffmpeg_enabled=False,
             mock=True,
+            assembly_status="mock",
+            assembly_engine="mock",
             skip_reason="ffmpeg_disabled",
             simulation_only=True,
             outbound_actions_taken=0,
@@ -126,6 +140,14 @@ def assemble_video(
     output_path = os.path.join(out_dir, f"{render_id}.mp4")
 
     width, height = _parse_resolution(resolution)
+
+    # If no audio provided, generate a local test tone (safe, no external download)
+    effective_audio = audio_path
+    if not effective_audio:
+        effective_audio = generate_test_tone(
+            duration_seconds=duration_seconds,
+            output_path=os.path.join(out_dir, f"testtone_{render_id}.wav"),
+        )
 
     # Build filter chain
     scale_filter = f"scale={width}:{height}:force_original_aspect_ratio=decrease,pad={width}:{height}:(ow-iw)/2:(oh-ih)/2,setsar=1"
@@ -146,14 +168,19 @@ def assemble_video(
         fade_out = f"fade=t=out:st={max(0.0, duration_seconds - fade_duration)}:d={fade_duration}"
         vf_chain = f"{vf_chain},{fade_in},{fade_out}"
 
+    # Use image_path only if the file actually exists; otherwise generate a placeholder.
+    effective_image = (
+        image_path if (image_path and os.path.isfile(image_path)) else _placeholder_image(render_id)
+    )
+
     cmd = [
         "ffmpeg", "-y",
         "-loop", "1",
-        "-i", image_path or _placeholder_image(render_id),
-        "-i", audio_path,
+        "-i", effective_image,
+        "-i", effective_audio,
         "-c:v", "libx264",
-        "-preset", "medium",
-        "-crf", "23",
+        "-preset", "ultrafast",
+        "-crf", "28",
         "-c:a", "aac",
         "-b:a", "128k",
         "-vf", vf_chain,
@@ -179,6 +206,8 @@ def assemble_video(
                 generation_engine=generation_engine,
                 ffmpeg_enabled=True,
                 mock=False,
+                assembly_status="failed",
+                assembly_engine="ffmpeg",
                 error=f"FFmpeg failed (rc={result.returncode}): {result.stderr[:500]}",
                 simulation_only=True,
                 outbound_actions_taken=0,
@@ -192,6 +221,8 @@ def assemble_video(
             generation_engine=generation_engine,
             ffmpeg_enabled=True,
             mock=False,
+            assembly_status="failed",
+            assembly_engine="ffmpeg",
             error="FFmpeg process timed out after 300s.",
             simulation_only=True,
             outbound_actions_taken=0,
@@ -205,6 +236,8 @@ def assemble_video(
             generation_engine=generation_engine,
             ffmpeg_enabled=True,
             mock=False,
+            assembly_status="failed",
+            assembly_engine="ffmpeg",
             error="FFmpeg binary not found. Install ffmpeg or set FFMPEG_ENABLED=false.",
             simulation_only=True,
             outbound_actions_taken=0,
@@ -218,6 +251,8 @@ def assemble_video(
         generation_engine=generation_engine,
         ffmpeg_enabled=True,
         mock=False,
+        assembly_status="success",
+        assembly_engine="ffmpeg",
         simulation_only=True,
         outbound_actions_taken=0,
     )
@@ -238,17 +273,18 @@ def _parse_resolution(resolution: str) -> tuple[int, int]:
 
 def _placeholder_image(render_id: str) -> str:
     """
-    Return a path to a 1080x1920 placeholder PNG.
-    Creates it in /tmp if the lavfi filter fails — used only when
-    no image_path is provided and FFMPEG_ENABLED=true.
+    Return a path to a 1080x1920 placeholder PNG (black background with
+    SignalForge label). Created using FFmpeg lavfi — no external downloads.
     """
+    os.makedirs("/tmp/signalforge_renders", exist_ok=True)
     path = f"/tmp/signalforge_renders/placeholder_{render_id}.png"
     try:
         subprocess.run(
             [
                 "ffmpeg", "-y",
                 "-f", "lavfi",
-                "-i", "color=c=black:s=1080x1920:d=1",
+                "-i", "color=c=#1e1b4b:s=1080x1920:d=1",
+                "-vf", "drawtext=text='SignalForge Placeholder':fontsize=48:fontcolor=white:x=(w-text_w)/2:y=(h-text_h)/2",
                 "-frames:v", "1",
                 path,
             ],
@@ -258,3 +294,75 @@ def _placeholder_image(render_id: str) -> str:
     except Exception:
         pass
     return path
+
+
+def generate_test_tone(
+    duration_seconds: float = 30.0,
+    output_path: str = "",
+    frequency: int = 440,
+) -> str:
+    """
+    Generate a safe local sine-wave WAV test tone using FFmpeg lavfi.
+
+    Used when no source_audio_path is provided for a render. This never
+    downloads external media and never calls any social platform API.
+
+    Returns the path to the generated WAV file, or empty string on failure.
+    """
+    os.makedirs("/tmp/signalforge_renders", exist_ok=True)
+    if not output_path:
+        output_path = f"/tmp/signalforge_renders/testtone_{uuid.uuid4()}.wav"
+    try:
+        result = subprocess.run(
+            [
+                "ffmpeg", "-y",
+                "-f", "lavfi",
+                "-i", f"sine=frequency={frequency}:duration={duration_seconds}",
+                "-ar", "44100",
+                "-ac", "1",
+                output_path,
+            ],
+            capture_output=True,
+            timeout=30,
+        )
+        if result.returncode == 0:
+            return output_path
+    except Exception:
+        pass
+    return ""
+
+
+def ffmpeg_diagnostics() -> dict:
+    """
+    Return FFmpeg availability diagnostics.
+
+    Returns:
+        {
+            "ffmpeg_available": bool,
+            "ffmpeg_path": str,
+            "ffmpeg_version": str,
+            "ffmpeg_enabled": bool,
+        }
+    """
+    import shutil
+    ffmpeg_path = shutil.which("ffmpeg") or ""
+    version = ""
+    available = bool(ffmpeg_path)
+    if available:
+        try:
+            proc = subprocess.run(
+                ["ffmpeg", "-version"],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            first_line = proc.stdout.splitlines()[0] if proc.stdout else ""
+            version = first_line[:120]
+        except Exception:
+            available = False
+    return {
+        "ffmpeg_available": available,
+        "ffmpeg_path": ffmpeg_path,
+        "ffmpeg_version": version,
+        "ffmpeg_enabled": _env_enabled(os.getenv("FFMPEG_ENABLED", "false")),
+    }

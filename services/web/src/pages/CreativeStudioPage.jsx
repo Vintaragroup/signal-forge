@@ -1273,8 +1273,19 @@ function AssetRenderSection({
                 {render.is_demo && (
                   <span className="rounded-full bg-amber-100 px-2 py-0.5 text-xs text-amber-700">Demo</span>
                 )}
-                {render.assembly_result?.mock && (
+                {/* Assembly status badge */}
+                {render.assembly_status === "success" && (
+                  <span className="rounded-full bg-green-100 px-2 py-0.5 text-xs text-green-700 font-medium">Real Render</span>
+                )}
+                {render.assembly_status === "failed" && (
+                  <span className="rounded-full bg-red-100 px-2 py-0.5 text-xs text-red-700 font-medium">Render Failed</span>
+                )}
+                {(render.assembly_status === "mock" || (!render.assembly_status && render.assembly_result?.mock)) && (
                   <span className="rounded-full bg-slate-200 px-2 py-0.5 text-xs text-slate-500">Mock Render</span>
+                )}
+                {/* Assembly engine badge */}
+                {render.assembly_engine === "ffmpeg" && (
+                  <span className="rounded-full bg-violet-100 px-2 py-0.5 text-xs text-violet-700">FFmpeg</span>
                 )}
               </div>
 
@@ -1304,7 +1315,8 @@ function AssetRenderSection({
                     />
                   ) : (
                     <p className="text-xs text-slate-400 italic">
-                      File: {render.file_path}
+                      {render.assembly_status === "success" ? "Local render — " : "Mock path — "}
+                      {render.file_path}
                     </p>
                   )}
                 </div>
@@ -1315,15 +1327,21 @@ function AssetRenderSection({
                   Assembly skipped: {render.assembly_result.skip_reason}
                 </p>
               )}
+              {render.assembly_result?.error && (
+                <p className="text-xs text-red-400 italic">
+                  Error: {render.assembly_result.error}
+                </p>
+              )}
 
               <p className="text-xs text-slate-400">
                 Duration: {render.duration_seconds || 0}s · {render.resolution || "1080x1920"} ·{" "}
-                {render.add_captions ? "Captions ON" : "No captions"}
+                {render.add_captions ? "Captions ON" : "No captions"}{" "}
+                {render.assembly_engine ? `· Engine: ${render.assembly_engine}` : ""}
               </p>
 
               {/* Safety notice */}
               <p className="rounded bg-green-50 px-2 py-1 text-xs text-green-700">
-                simulation_only: true · outbound_actions_taken: 0 · No content published.
+                simulation_only: true · outbound_actions_taken: 0 · Local render — no external publishing.
               </p>
 
               {/* Review controls */}

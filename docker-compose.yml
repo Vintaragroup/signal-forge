@@ -14,9 +14,9 @@ x-signalforge-env: &signalforge-env
   COMFYUI_ENABLED: ${COMFYUI_ENABLED:-false}
   COMFYUI_BASE_URL: ${COMFYUI_BASE_URL:-http://comfyui:8188}
   COMFYUI_WORKFLOW_PATH: ${COMFYUI_WORKFLOW_PATH:-}
-  # Social Creative Engine v5 — render pipeline
+  # Social Creative Engine v5.5 — FFmpeg render pipeline (enabled by default)
   REDIS_URL: ${REDIS_URL:-redis://redis:6379}
-  FFMPEG_ENABLED: ${FFMPEG_ENABLED:-false}
+  FFMPEG_ENABLED: ${FFMPEG_ENABLED:-true}
   FFMPEG_OUTPUT_DIR: ${FFMPEG_OUTPUT_DIR:-/tmp/signalforge_renders}
 
 services:

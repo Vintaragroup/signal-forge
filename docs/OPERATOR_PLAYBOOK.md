@@ -946,3 +946,97 @@ curl "http://localhost:8000/assets?workspace_slug=default&status=failed"
 - If Redis is down and a render request comes in, the API falls back to synchronous execution with `queued: false` in the response
 - The dead-letter queue (`signalforge:render_jobs_failed`) is for operator inspection only — no automatic retry
 - All records produced by the worker carry `simulation_only: true` and `outbound_actions_taken: 0`
+
+---
+
+## Section 28: Social Creative Engine v5.5 — Real Local FFmpeg Render
+
+### Overview
+
+v5.5 activates the real local FFmpeg render path. `FFMPEG_ENABLED` defaults to `true`. The worker produces actual `.mp4` files written to `/tmp/signalforge_renders` (shared `render-output` Docker volume). If no audio is available, a 440 Hz sine-wave test tone is auto-generated locally using FFmpeg lavfi — no external downloads occur.
+
+### Environment Variables Changed in v5.5
+
+| Variable | v5 default | v5.5 default | Notes |
+|---|---|---|---|
+| `FFMPEG_ENABLED` | `false` | `true` | Real FFmpeg subprocess now runs by default |
+
+### Verify FFmpeg is installed in containers
+
+```bash
+# API container
+docker compose exec api ffmpeg -version
+
+# Worker container
+docker compose exec worker ffmpeg -version
+```
+
+### Check FFmpeg health endpoint
+
+```bash
+curl http://localhost:8000/health/ffmpeg
+# Expected response:
+# {"ffmpeg_available": true, "ffmpeg_path": "/usr/bin/ffmpeg", "ffmpeg_version": "ffmpeg version ...", "ffmpeg_enabled": true}
+```
+
+### Confirm renders are creating real MP4 files
+
+```bash
+# After triggering a render via the dashboard or API:
+docker compose exec api ls -lh /tmp/signalforge_renders/
+
+# Example expected output:
+# -rw-r--r-- 1 root root 2.3M Jun 1 12:00 6843a1b2f00c4d001234abcd.mp4
+# -rw-r--r-- 1 root root  48K Jun 1 12:00 placeholder_6843....png
+# -rw-r--r-- 1 root root 176K Jun 1 12:00 testtone_6843....wav
+```
+
+### Worker startup log (v5.5)
+
+When the worker container starts, look for FFmpeg diagnostics in the startup log:
+
+```bash
+docker compose logs worker | grep -i ffmpeg
+# Expected output includes:
+# FFmpeg diagnostics: available=True path=/usr/bin/ffmpeg version=ffmpeg version 6.1... enabled=True
+```
+
+### Trigger a full render and verify
+
+```bash
+# 1. Queue a render from the dashboard (Creative Studio → Rendered Assets tab)
+# OR via API:
+curl -X POST http://localhost:8000/assets/render \
+  -H "Content-Type: application/json" \
+  -d '{"snippet_id": "<approved-snippet-id>", "prompt_generation_id": "<approved-pg-id>", "workspace_slug": "default"}'
+
+# 2. Watch worker log
+docker compose logs -f worker | grep render_id
+
+# 3. Verify the MP4 was created
+docker compose exec api ls /tmp/signalforge_renders/
+
+# 4. Query the render record
+curl "http://localhost:8000/assets?workspace_slug=default&status=needs_review"
+# Look for: assembly_status=success, assembly_engine=ffmpeg, file_path set
+```
+
+### Disable FFmpeg (revert to mock)
+
+```bash
+# Stop containers, set env var, restart
+FFMPEG_ENABLED=false docker compose up -d
+# OR add to a .env file:
+echo "FFMPEG_ENABLED=false" >> .env
+docker compose up -d
+```
+
+### Operating Rules (v5.5)
+
+- `FFMPEG_ENABLED=true` is now the default — rebuild both `api` and `worker` images if changing Python files: `docker compose build --no-cache api worker`
+- Test tone generation uses FFmpeg lavfi — it never downloads external audio
+- Placeholder image uses FFmpeg lavfi color source — no network calls
+- All renders continue to carry `simulation_only: true` and `outbound_actions_taken: 0`
+- `assembly_status` and `assembly_engine` are stored on every render record and visible in the dashboard
+- Dashboard shows green "Real Render" badge when `assembly_status=success`, violet "FFmpeg" badge when `assembly_engine=ffmpeg`
+- `COMFYUI_ENABLED` remains `false` by default — ComfyUI is not required for v5.5 renders

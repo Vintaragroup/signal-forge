@@ -98,9 +98,38 @@ docker compose --profile comfyui down
 
 ## Render Output Volume
 
-The `render-output` Docker volume is shared between the api and worker containers at `/tmp/signalforge_renders`. When `FFMPEG_ENABLED=true`, assembled mp4 files are written here.
+The `render-output` Docker volume is shared between the api and worker containers at `/tmp/signalforge_renders`. With `FFMPEG_ENABLED=true` (default in v5.5), real `.mp4` files, test-tone `.wav` files, and placeholder `.png` files are written here.
 
 ```bash
 # Inspect rendered files (from api container)
-docker compose exec api ls /tmp/signalforge_renders/
+docker compose exec api ls -lh /tmp/signalforge_renders/
+
+# Verify FFmpeg binary is installed in both containers
+docker compose exec api ffmpeg -version
+docker compose exec worker ffmpeg -version
+
+# Check FFmpeg health via API
+curl http://localhost:8000/health/ffmpeg
+
+# Watch worker logs for FFmpeg diagnostics at startup
+docker compose logs worker | grep -i ffmpeg
+```
+
+## v5.5 Rebuild Requirements
+
+When updating Python files (video_assembler.py, worker.py, main.py), **both** api and worker images must be rebuilt:
+
+```bash
+docker compose build --no-cache api worker
+docker compose up -d
+```
+
+> The api and worker containers share the same Dockerfile but produce separate images. Rebuilding `api` does not rebuild `worker`.
+
+## Disabling FFmpeg (revert to mock)
+
+```bash
+FFMPEG_ENABLED=false docker compose up -d
+# OR
+echo "FFMPEG_ENABLED=false" >> .env && docker compose up -d
 ```

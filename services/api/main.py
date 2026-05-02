@@ -1172,6 +1172,22 @@ def health() -> dict:
     }
 
 
+@app.get("/health/ffmpeg")
+def health_ffmpeg() -> dict:
+    """Return FFmpeg availability diagnostics. No subprocess is spawned if FFmpeg is not installed."""
+    try:
+        from video_assembler import ffmpeg_diagnostics  # type: ignore
+        return ffmpeg_diagnostics()
+    except ImportError:
+        return {
+            "ffmpeg_available": False,
+            "ffmpeg_path": "",
+            "ffmpeg_version": "",
+            "ffmpeg_enabled": False,
+            "error": "video_assembler module not importable",
+        }
+
+
 @app.get("/settings/gpt-runtime")
 def gpt_runtime_settings() -> dict:
     return gpt_runtime_status()
@@ -4683,6 +4699,8 @@ def render_asset(payload: AssetRenderRequest) -> dict:
             "ffmpeg_enabled": ffmpeg_enabled,
             "comfyui_result": {},
             "assembly_result": {},
+            "assembly_status": "",
+            "assembly_engine": "",
             "file_path": "",
             "duration_seconds": 0.0,
             "resolution": "1080x1920",

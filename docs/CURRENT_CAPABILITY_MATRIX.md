@@ -139,3 +139,25 @@ All `asset_renders` records carry `simulation_only: true` and `outbound_actions_
 ### v5 Runtime Safety Boundary
 
 All safety guarantees from v5 Asset Rendering are preserved. The worker process carries the same `simulation_only: true`, `outbound_actions_taken: 0` invariants as the API. Redis is used only for internal job handoff — no job payload is ever sent to an external service. The ComfyUI service definition uses a local stub server and is fully isolated within the Docker network. `COMFYUI_ENABLED=false` (default) means the worker uses the mock render path regardless of whether the ComfyUI container is running.
+
+---
+
+## Social Creative Engine v5.5 — Real Local FFmpeg Render
+
+| Capability | Dashboard-supported | Simulated | Manual | Real/local | Notes |
+|---|---|---|---|---|---|
+| Real local MP4 generation | Yes | No | No | Yes | `FFMPEG_ENABLED=true` (now default). Worker calls FFmpeg subprocess to produce actual `.mp4` file. |
+| Test tone fallback | No | N/A | N/A | Yes | `generate_test_tone()` creates a 440 Hz sine-wave WAV via FFmpeg lavfi when no `source_audio_path` is provided. No external downloads. |
+| Placeholder visual | No | N/A | N/A | Yes | `_placeholder_image()` generates a 1080×1920 dark-background PNG with SignalForge label via FFmpeg lavfi when no `image_path` provided. |
+| assembly_status field | Yes | N/A | N/A | N/A | `success` / `failed` / `mock` / `skipped`. Stored on every render record and shown in dashboard. |
+| assembly_engine badge | Yes | N/A | N/A | N/A | `ffmpeg` or `mock`. Dashboard badge in Rendered Assets tab. |
+| duration_seconds from snippet | No | N/A | N/A | Yes | Worker derives `duration_seconds = end_time − start_time` from snippet when both fields are set. |
+| GET /health/ffmpeg | No | N/A | N/A | Yes | Returns `ffmpeg_available`, `ffmpeg_path`, `ffmpeg_version`, `ffmpeg_enabled`. |
+| FFmpeg diagnostics at worker startup | No | N/A | N/A | Yes | Worker logs FFmpeg availability, path, and version line on startup. |
+| Real Render badge | Yes | N/A | N/A | N/A | Dashboard shows green "Real Render" badge when `assembly_status=success`, violet "FFmpeg" engine badge when `assembly_engine=ffmpeg`. |
+| Local render file path display | Yes | N/A | N/A | N/A | Dashboard Rendered Assets tab shows "Local render — /tmp/signalforge_renders/..." for real renders vs "Mock path —" for mock. |
+| Assembly error display | Yes | N/A | N/A | N/A | `assembly_result.error` shown in dashboard on failed renders. |
+
+### v5.5 Safety Boundary
+
+All v5 and v5 Runtime safety guarantees are preserved. `FFMPEG_ENABLED=true` is now the default — FFmpeg is invoked **locally** via subprocess only, writing `.mp4` files to the `render-output` Docker volume (`/tmp/signalforge_renders`). No file is uploaded, streamed, or sent to any external service. The test tone generator uses FFmpeg lavfi (a built-in source) — it never downloads audio from any URL. The placeholder image generator uses FFmpeg lavfi color source — no network calls. All renders remain `simulation_only: true`, `outbound_actions_taken: 0`. ComfyUI remains disabled by default (`COMFYUI_ENABLED=false`). Approved renders still require explicit operator action before any downstream use.

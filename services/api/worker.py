@@ -179,7 +179,16 @@ def process_render_job(job: dict, db: Any) -> dict:
         # Snippet lookup for duration / captions
         # --------------------------------------------------------------
         snippet = _find_by_id(db.content_snippets, record.get("snippet_id", ""))
-        duration_seconds = float((snippet or {}).get("duration_seconds") or 30.0)
+        # Prefer end_time - start_time from snippet; fallback to duration_seconds or 30s
+        if snippet:
+            start_t = float(snippet.get("start_time") or 0.0)
+            end_t = float(snippet.get("end_time") or 0.0)
+            if end_t > start_t:
+                duration_seconds = end_t - start_t
+            else:
+                duration_seconds = float(snippet.get("duration_seconds") or 30.0)
+        else:
+            duration_seconds = 30.0
 
         # --------------------------------------------------------------
         # FFmpeg / video assembly step
@@ -232,6 +241,8 @@ def process_render_job(job: dict, db: Any) -> dict:
         # --------------------------------------------------------------
         # Transition to needs_review
         # --------------------------------------------------------------
+        assembly_status = assembly_result.get("assembly_status", "mock")
+        assembly_engine = assembly_result.get("assembly_engine", "mock")
         db.asset_renders.update_one(
             {"_id": record["_id"]},
             {
@@ -240,19 +251,25 @@ def process_render_job(job: dict, db: Any) -> dict:
                     "assembly_result": assembly_result,
                     "file_path": final_file_path,
                     "duration_seconds": duration_seconds,
+                    "assembly_status": assembly_status,
+                    "assembly_engine": assembly_engine,
                     "simulation_only": True,
                     "outbound_actions_taken": 0,
                     "updated_at": _utc_now(),
                 }
             },
         )
-        logger.info("render_id=%s status=needs_review", render_id_str)
+        logger.info("render_id=%s status=needs_review assembly_status=%s assembly_engine=%s file_path=%s",
+                    render_id_str, assembly_status, assembly_engine, final_file_path)
 
         return {
             "render_id": render_id_str,
             "status": "needs_review",
             "comfyui_result": comfyui_result,
             "assembly_result": assembly_result,
+            "assembly_status": assembly_status,
+            "assembly_engine": assembly_engine,
+            "file_path": final_file_path,
             "simulation_only": True,
             "outbound_actions_taken": 0,
         }
@@ -307,6 +324,20 @@ def run_worker_loop() -> None:
         os.getenv("FFMPEG_ENABLED", "false"),
         os.getenv("REDIS_URL", "redis://redis:6379"),
     )
+
+    # Log FFmpeg diagnostics at startup
+    try:
+        from video_assembler import ffmpeg_diagnostics  # type: ignore
+        diag = ffmpeg_diagnostics()
+        logger.info(
+            "FFmpeg diagnostics: available=%s path=%s version=%s enabled=%s",
+            diag["ffmpeg_available"],
+            diag["ffmpeg_path"],
+            diag["ffmpeg_version"][:60] if diag["ffmpeg_version"] else "n/a",
+            diag["ffmpeg_enabled"],
+        )
+    except Exception as exc:
+        logger.warning("Could not load FFmpeg diagnostics: %s", exc)
 
     mongo_client, db = _make_db()
     try:

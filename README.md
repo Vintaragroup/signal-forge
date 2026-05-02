@@ -259,12 +259,21 @@ v5 adds a rendering pipeline on top of the v4.5 prompt approval layer. An approv
 - Shared `render-output` Docker volume between api and worker containers.
 - **Graceful fallback**: if Redis is unreachable, render runs synchronously inline.
 
+**v5.5 — Real Local FFmpeg Render:**
+- `FFMPEG_ENABLED=true` is now the default — the worker produces actual `.mp4` files locally.
+- `generate_test_tone()` auto-generates a 440 Hz sine-wave WAV via FFmpeg lavfi when no audio is provided (no external downloads).
+- `_placeholder_image()` generates a 1080×1920 placeholder PNG via FFmpeg lavfi when no image is provided.
+- `assembly_status` (`success` / `failed` / `mock`) and `assembly_engine` (`ffmpeg` / `mock`) stored on every render record.
+- `GET /health/ffmpeg` endpoint returns `ffmpeg_available`, `ffmpeg_path`, `ffmpeg_version`, `ffmpeg_enabled`.
+- Duration derived from `snippet.end_time - snippet.start_time` when both fields are set.
+- Dashboard shows green "Real Render" badge and violet "FFmpeg" engine badge for real renders.
+
 **Safety:**
 - Both snippet AND prompt_generation must be `status='approved'` before any render can start.
 - All renders start as `status: needs_review` — no auto-publish path exists.
-- `COMFYUI_ENABLED` and `FFMPEG_ENABLED` default to `false` — zero external calls in default mode.
+- `COMFYUI_ENABLED` defaults to `false`. `FFMPEG_ENABLED` defaults to `true` (local subprocess only).
 - All records carry `simulation_only: true`, `outbound_actions_taken: 0`.
-- FFmpeg writes only to local filesystem (`FFMPEG_OUTPUT_DIR`, default `/tmp/signalforge_renders`).
+- FFmpeg writes only to local filesystem (`FFMPEG_OUTPUT_DIR`, default `/tmp/signalforge_renders`) — no uploads to external services.
 
 ## Local Setup
 
