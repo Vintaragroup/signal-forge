@@ -6,6 +6,10 @@ COPY services/api/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY services/api/main.py .
+COPY services/api/transcript_provider.py .
+COPY services/api/audio_extractor.py .
+COPY services/api/media_intake.py .
+COPY services/api/prompt_generator.py .
 COPY agents ./agents
 COPY tools ./tools
 COPY modules ./modules

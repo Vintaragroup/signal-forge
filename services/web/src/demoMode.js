@@ -479,6 +479,223 @@ const seedState = {
       updated_at: daysAgo(1),
     },
   ],
+  // v3 seed data
+  audio_extraction_runs: [
+    {
+      _id: "demo-audio-run-1",
+      workspace_slug: "demo",
+      source_content_id: "demo-source-content-1",
+      source_url: "https://youtube.com/watch?v=demoabc123.invalid",
+      notes: "Demo audio extraction run.",
+      extractor: "stub",
+      status: "skipped",
+      skip_reason: "ffmpeg_disabled",
+      output_path: "",
+      error: "",
+      simulation_only: true,
+      outbound_actions_taken: 0,
+      is_demo: true,
+      demo_label: "Demo Mode",
+      created_at: daysAgo(2),
+      updated_at: daysAgo(2),
+    },
+  ],
+  transcript_runs: [
+    {
+      _id: "demo-transcript-run-1",
+      workspace_slug: "demo",
+      source_content_id: "demo-source-content-1",
+      audio_extraction_run_id: "demo-audio-run-1",
+      provider: "stub",
+      language: "en",
+      segment_count: 4,
+      status: "complete",
+      simulation_only: true,
+      outbound_actions_taken: 0,
+      is_demo: true,
+      demo_label: "Demo Mode",
+      created_at: daysAgo(2),
+      updated_at: daysAgo(2),
+    },
+  ],
+  transcript_segments: [
+    {
+      _id: "demo-seg-1",
+      workspace_slug: "demo",
+      source_content_id: "demo-source-content-1",
+      transcript_run_id: "demo-transcript-run-1",
+      index: 0,
+      start_ms: 0,
+      end_ms: 4640,
+      text: "Hey everyone, I want to walk you through exactly how we closed 10 roofing jobs in one week.",
+      speaker: "speaker_1",
+      confidence: 0.92,
+      provider: "stub",
+      simulation_only: true,
+      outbound_actions_taken: 0,
+      is_demo: true,
+      demo_label: "Demo Mode",
+      created_at: daysAgo(2),
+    },
+    {
+      _id: "demo-seg-2",
+      workspace_slug: "demo",
+      source_content_id: "demo-source-content-1",
+      transcript_run_id: "demo-transcript-run-1",
+      index: 1,
+      start_ms: 4840,
+      end_ms: 9680,
+      text: "First thing we did was clean up our follow-up game. Every estimate got a next-day check-in text from a real person.",
+      speaker: "speaker_1",
+      confidence: 0.92,
+      provider: "stub",
+      simulation_only: true,
+      outbound_actions_taken: 0,
+      is_demo: true,
+      demo_label: "Demo Mode",
+      created_at: daysAgo(2),
+    },
+    {
+      _id: "demo-seg-3",
+      workspace_slug: "demo",
+      source_content_id: "demo-source-content-1",
+      transcript_run_id: "demo-transcript-run-1",
+      index: 2,
+      start_ms: 9880,
+      end_ms: 14720,
+      text: "Then we started asking every happy customer for a Google review right at job completion.",
+      speaker: "speaker_1",
+      confidence: 0.92,
+      provider: "stub",
+      simulation_only: true,
+      outbound_actions_taken: 0,
+      is_demo: true,
+      demo_label: "Demo Mode",
+      created_at: daysAgo(2),
+    },
+    {
+      _id: "demo-seg-4",
+      workspace_slug: "demo",
+      source_content_id: "demo-source-content-1",
+      transcript_run_id: "demo-transcript-run-1",
+      index: 3,
+      start_ms: 14920,
+      end_ms: 18360,
+      text: "By the end of the week, ten jobs booked.",
+      speaker: "speaker_1",
+      confidence: 0.92,
+      provider: "stub",
+      simulation_only: true,
+      outbound_actions_taken: 0,
+      is_demo: true,
+      demo_label: "Demo Mode",
+      created_at: daysAgo(2),
+    },
+  ],
+
+  // Social Creative Engine v4
+  media_intake_records: [
+    {
+      _id: "demo-media-intake-1",
+      workspace_slug: "demo",
+      source_content_id: "demo-source-content-1",
+      intake_method: "url_metadata_only",
+      media_path: "",
+      source_url: "https://youtube.com/watch?v=demoabc123.invalid",
+      extension: "",
+      status: "registered",
+      skip_reason: "url_download_not_enabled",
+      error: "",
+      approved_for_download: false,
+      notes: "Demo media intake record — URL metadata only.",
+      simulation_only: true,
+      outbound_actions_taken: 0,
+      is_demo: true,
+      demo_label: "Demo Mode",
+      created_at: daysAgo(2),
+      updated_at: daysAgo(2),
+    },
+  ],
+  prompt_generations: [
+    {
+      _id: "demo-prompt-gen-1",
+      workspace_slug: "demo",
+      client_id: "demo-company-1",
+      snippet_id: "demo-snippet-1",
+      brief_id: "",
+      prompt_type: "faceless_motivational",
+      generation_engine_target: "comfyui",
+      positive_prompt:
+        "Cinematic faceless motivational video, abstract energy, dynamic motion graphics, bold typography overlay, theme: grow contractor pipeline, no faces, no identifiable people, 9:16 vertical format",
+      negative_prompt:
+        "realistic human face, identifiable person, likeness, specific individual, avatar of named person, voice cloning instructions, low quality, blurry, watermark, text artifacts, nsfw",
+      visual_style: "cinematic, high contrast, modern",
+      camera_direction: "slow push-in, slight upward tilt",
+      lighting: "dramatic rim lighting, warm tones",
+      motion_notes: "subtle particle effects, smooth text transitions",
+      scene_beats: [
+        "Opening: abstract motion background establishes energy",
+        "Mid: bold text appears with quote from transcript",
+        "Close: brand safe zone fade out",
+      ],
+      caption_overlay_suggestion: "Every estimate got a next-day check-in text.",
+      safety_notes:
+        "Default faceless visual — no faces, likenesses, or voice cloning requested. Requires operator review.",
+      status: "approved",
+      review_events: [
+        { decision: "approve", note: "Looks great for demo.", reviewed_at: daysAgo(1) },
+      ],
+      notes: "",
+      use_likeness: false,
+      simulation_only: true,
+      outbound_actions_taken: 0,
+      source_url: "https://youtube.com/watch?v=demoabc123.invalid",
+      snippet_transcript: "Every estimate got a next-day check-in text from a real person.",
+      snippet_usage_status: "approved",
+      is_demo: true,
+      demo_label: "Demo Mode",
+      created_at: daysAgo(2),
+      updated_at: daysAgo(1),
+    },
+    {
+      _id: "demo-prompt-gen-2",
+      workspace_slug: "demo",
+      client_id: "demo-company-1",
+      snippet_id: "demo-snippet-1",
+      brief_id: "",
+      prompt_type: "podcast_clip_visual",
+      generation_engine_target: "manual",
+      positive_prompt:
+        "Podcast clip visual, waveform animation, microphone silhouette, no identifiable faces, branded color background, audio visualizer style, 9:16 vertical",
+      negative_prompt:
+        "realistic human face, identifiable person, likeness, specific individual, avatar of named person, voice cloning instructions, low quality, blurry, watermark, text artifacts, nsfw",
+      visual_style: "dark background, waveform accent, branded",
+      camera_direction: "static split screen: waveform + text",
+      lighting: "dark studio atmosphere, accent glow on waveform",
+      motion_notes: "waveform pulses with audio beat markers",
+      scene_beats: [
+        "Show waveform animation with episode context",
+        "Transcript quote appears as subtitle",
+        "Outro with channel branding",
+      ],
+      caption_overlay_suggestion: "Every estimate got a next-day check-in text from a real p",
+      safety_notes:
+        "Default faceless visual — no faces, likenesses, or voice cloning requested. Requires operator review.",
+      status: "draft",
+      review_events: [],
+      notes: "Needs operator review before asset generation.",
+      use_likeness: false,
+      simulation_only: true,
+      outbound_actions_taken: 0,
+      source_url: "https://youtube.com/watch?v=demoabc123.invalid",
+      snippet_transcript: "Every estimate got a next-day check-in text from a real person.",
+      snippet_usage_status: "approved",
+      is_demo: true,
+      demo_label: "Demo Mode",
+      created_at: daysAgo(1),
+      updated_at: daysAgo(1),
+    },
+  ],
 };
 
 function clone(value) {
@@ -626,6 +843,34 @@ export function reviewDemoCreativeAsset(assetId, decision, note = "") {
   return (state.creative_assets || []).find((a) => a._id === assetId) || {};
 }
 
+export function reviewDemoPromptGeneration(genId, decision, note = "") {
+  const state = readState();
+  const newStatus =
+    decision === "approve"
+      ? "approved"
+      : decision === "reject"
+        ? "rejected"
+        : "needs_revision";
+  state.prompt_generations = (state.prompt_generations || []).map((gen) =>
+    gen._id === genId
+      ? {
+          ...gen,
+          status: newStatus,
+          review_decision: decision,
+          review_note: note || "Demo review saved.",
+          reviewed_at: nowIso(),
+          updated_at: nowIso(),
+          review_events: [
+            ...(gen.review_events || []),
+            { decision, note: note || "Demo review", reviewed_at: nowIso() },
+          ],
+        }
+      : gen,
+  );
+  writeState(state);
+  return (state.prompt_generations || []).find((g) => g._id === genId) || {};
+}
+
 export function simulateDemoResponse(messageId) {
   const state = readState();
   state.responseSimulated = true;
@@ -716,6 +961,43 @@ export function demoOverview() {
     ],
     agent_activity: [],
   };
+}
+
+export function generateDemoSnippets(sourceContentId) {
+  const state = readState();
+  const segments = (state.transcript_segments || []).filter(
+    (seg) => seg.source_content_id === sourceContentId,
+  );
+  const now = nowIso();
+  const newSnippets = segments.map((seg, i) => ({
+    _id: `demo-generated-snippet-${sourceContentId}-${i}`,
+    workspace_slug: "demo",
+    source_content_id: sourceContentId,
+    transcript_run_id: seg.transcript_run_id,
+    transcript_id: seg.transcript_run_id,
+    speaker: seg.speaker || "speaker_1",
+    start_time: Math.round(seg.start_ms / 1000),
+    end_time: Math.round(seg.end_ms / 1000),
+    transcript_text: seg.text,
+    score: 0.72,
+    score_reason: "heuristic score (demo)",
+    theme: "general",
+    hook_angle: "",
+    platform_fit: [],
+    status: "needs_review",
+    review_events: [],
+    generation_source: "auto",
+    segment_index: seg.index,
+    simulation_only: true,
+    outbound_actions_taken: 0,
+    is_demo: true,
+    demo_label: "Demo Mode",
+    created_at: now,
+    updated_at: now,
+  }));
+  state.content_snippets = [...(state.content_snippets || []), ...newSnippets];
+  writeState(state);
+  return newSnippets;
 }
 
 export function demoItems(collection) {

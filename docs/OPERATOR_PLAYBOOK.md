@@ -586,3 +586,188 @@ If disabled (default) or unavailable, `creative_tool_runs` record the skipped/fa
 - Never set `likeness_permissions: true` without written client authorization
 - Every creative asset requires explicit operator review before external use
 - `simulation_only: true` and `outbound_actions_taken: 0` on all records — always
+
+---
+
+## 23. Social Creative Engine v3 — Audio, Transcripts, Snippets
+
+### Overview
+v3 adds an ingest pipeline: extract audio metadata from source content, generate synthetic transcripts, and score transcript segments into snippet candidates.
+
+### Ingest Pipeline Flow
+1. Add source content (URL + title) in the Source Content tab
+2. Navigate to **Ingest Pipeline** tab in Creative Studio
+3. Click **Run Transcript** on any content item — generates stub transcript segments
+4. Click **Generate Snippets** — scores segments, creates snippet candidates
+5. Review candidates in the Snippets tab; approve/reject each one
+
+### Env Vars
+| Variable | Default | Description |
+|---|---|---|
+| `FFMPEG_ENABLED` | `false` | Enable real FFmpeg audio extraction |
+| `FFMPEG_OUTPUT_DIR` | `/tmp/signalforge_audio` | Output directory for extracted audio |
+| `TRANSCRIPT_PROVIDER` | `stub` | Transcript provider (`stub` only in v3) |
+
+### Safety (v3)
+- All audio extraction runs record `simulation_only: true`, `outbound_actions_taken: 0`
+- FFmpeg disabled by default — set `FFMPEG_ENABLED=true` only for local file processing
+- No audio sent externally; no content posted or scheduled
+
+---
+
+## 24. Social Creative Engine v4 — Media Intake, Approval Gates, Real FFmpeg
+
+### Overview
+v4 adds formal approval gates before each pipeline stage and real FFmpeg support for local media files.
+
+### Approval Chain
+```
+Source Content (status=approved)
+  → Media Intake Registration (POST /media-intake-records)
+    → Audio Extraction (POST /audio-extraction-runs/v4)
+      → Transcript Run (POST /transcript-runs/v4)
+        → Snippet Generation (POST /source-content/{id}/generate-snippets/v4)
+```
+
+### Source Content Approval
+Before any extraction, the source content item must be approved:
+```bash
+curl -X PATCH http://localhost:8000/source-content/{id}/status \
+  -H "Content-Type: application/json" \
+  -d '{"status": "approved"}'
+```
+Status values: `needs_review` (default) | `approved` | `rejected`
+
+### Media Intake
+Register a local file or URL metadata (no download):
+```bash
+# Local file
+curl -X POST http://localhost:8000/media-intake-records \
+  -H "Content-Type: application/json" \
+  -d '{"source_content_id": "{id}", "media_path": "/path/to/video.mp4", "workspace_slug": "default"}'
+
+# URL metadata only (no download)
+curl -X POST http://localhost:8000/media-intake-records \
+  -H "Content-Type: application/json" \
+  -d '{"source_content_id": "{id}", "source_url": "https://youtube.com/...", "workspace_slug": "default"}'
+```
+Allowed extensions: `.mp4 .mov .mkv .avi .webm .mp3 .wav .m4a .aac .flac`
+
+### Audio Extraction (v4)
+Uses registered intake record's `media_path` when FFmpeg is enabled:
+```bash
+curl -X POST http://localhost:8000/audio-extraction-runs/v4 \
+  -H "Content-Type: application/json" \
+  -d '{"source_content_id": "{id}", "workspace_slug": "default"}'
+```
+
+### Transcript Runs (v4)
+Stub provider works without prior audio extraction (manual text_hint flow):
+```bash
+curl -X POST http://localhost:8000/transcript-runs/v4 \
+  -H "Content-Type: application/json" \
+  -d '{"source_content_id": "{id}", "text_hint": "Paste transcript text here.", "workspace_slug": "default"}'
+```
+
+### Env Vars (v4)
+| Variable | Default | Description |
+|---|---|---|
+| `FFMPEG_ENABLED` | `false` | Enable real FFmpeg extraction |
+| `FFMPEG_OUTPUT_DIR` | `/tmp/signalforge_audio` | Audio output directory |
+| `MEDIA_DOWNLOAD_ENABLED` | `false` | (Reserved) URL download — not yet enabled |
+| `TRANSCRIPT_PROVIDER` | `stub` | `stub` or `whisper` (whisper not yet live) |
+| `TRANSCRIPT_LIVE_ENABLED` | `false` | Second gate for live transcript providers |
+
+### Operating Rules (v4)
+- Never approve source content without verifying the creator owns/has licensed the material
+- `approved_for_download: false` on all intake records by default — URL download is never enabled automatically
+- `WhisperTranscriptProvider` is a placeholder — set `TRANSCRIPT_PROVIDER=stub` until fully implemented
+- All records carry `simulation_only: true`, `outbound_actions_taken: 0`
+- No audio is sent to any external API unless `TRANSCRIPT_LIVE_ENABLED=true` AND `TRANSCRIPT_PROVIDER=whisper` (both required)
+
+---
+
+## Section 25: Social Creative Engine v4.5 — Prompt Generator Library
+
+### Overview
+
+v4.5 adds a structured visual prompt generation layer on top of the v4 approval pipeline. Approved content snippets feed into the Prompt Generator to produce structured visual prompts for faceless short-form creative content. All prompts are operator-reviewed before any asset generation begins.
+
+**Architecture**: `prompt_generator.py` module → `POST /prompt-generations` endpoint → `prompt_generations` MongoDB collection → Prompt Library tab in Creative Studio.
+
+### Key Rules
+
+1. **Approved snippets only** — only snippets with `status='approved'` may generate a prompt. Attempting to generate from a `needs_review` or `rejected` snippet returns 422.
+2. **Likeness gate** — `use_likeness=True` requires `avatar_permissions=True` or `likeness_permissions=True` on the client profile. Default: both `false`.
+3. **Default faceless** — every generated prompt includes "no faces, no identifiable people" in the positive prompt and blocks `realistic human face, identifiable person, likeness` in the negative prompt.
+4. **No voice cloning** — no voice clone instructions are ever generated by the module.
+5. **No auto-execution** — SignalForge never calls ComfyUI, Seedance, Higgsfield, or Runway automatically. The operator runs asset generation externally after approval.
+6. **Review gate** — all prompts start as `draft`. They must be approved before operator use.
+7. **Safety invariants** — every record carries `simulation_only: true`, `outbound_actions_taken: 0`.
+
+### Supported Prompt Types
+
+| Type | Description |
+|---|---|
+| `faceless_motivational` | Abstract energy, bold typography, motivational theme |
+| `cinematic_broll` | Professional B-roll, no faces, shallow depth of field |
+| `abstract_motion` | Pure abstract motion design, no people |
+| `business_explainer` | Flat design infographic animation |
+| `quote_card_motion` | Animated quote card with text reveal |
+| `podcast_clip_visual` | Waveform animation with branded background |
+| `educational_breakdown` | Numbered steps, educational infographic style |
+| `luxury_brand_story` | High-end product/lifestyle detail shots |
+| `product_service_ad` | Direct commercial with product hero shot |
+
+### Supported Engine Targets
+
+| Engine | Status | Notes |
+|---|---|---|
+| `comfyui` | Local (operator must run separately) | Default. Communicates only with local ComfyUI instance. |
+| `seedance` | Not yet integrated | Export prompt and use manually. |
+| `higgsfield` | Not yet integrated | Export prompt and use manually. |
+| `runway` | Not yet integrated | Export prompt and use manually. |
+| `manual` | Always available | Operator uses prompt with any external tool. |
+
+### Operator Workflow
+
+```
+1. Approve a snippet via the Snippets tab or Approval Queue.
+2. Open the Prompt Library tab in Creative Studio.
+3. Click an approved snippet button to generate a prompt (defaults to faceless_motivational / comfyui).
+4. Review the generated prompt: check positive_prompt, negative_prompt, scene_beats, caption_overlay.
+5. Approve, reject, or request revision.
+6. For approved prompts: export/copy the prompt and run ComfyUI (or chosen engine) externally.
+7. Import the result back into SignalForge as a creative asset (manual workflow for now).
+```
+
+### API Quick Reference
+
+```bash
+# Generate a prompt from an approved snippet
+curl -X POST http://localhost:8000/prompt-generations \
+  -H "Content-Type: application/json" \
+  -d '{
+    "workspace_slug": "default",
+    "snippet_id": "<approved_snippet_id>",
+    "prompt_type": "faceless_motivational",
+    "generation_engine_target": "comfyui",
+    "use_likeness": false
+  }'
+
+# List all prompt generations
+curl "http://localhost:8000/prompt-generations?workspace_slug=default"
+
+# Review a prompt generation
+curl -X POST "http://localhost:8000/prompt-generations/<gen_id>/review" \
+  -H "Content-Type: application/json" \
+  -d '{"decision": "approve", "note": "Ready for ComfyUI run."}'
+```
+
+### Operating Rules (v4.5)
+
+- Never enable `use_likeness=True` without verifying the client has signed appropriate permissions
+- Prompt approval does not automatically trigger any asset generation — operator action required
+- All records carry `simulation_only: true`, `outbound_actions_taken: 0`
+- The `prompt_generator.py` module makes zero external API calls
+- Default engine target is `comfyui` — local only, no remote API

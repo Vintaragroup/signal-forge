@@ -16,6 +16,17 @@ from pymongo import MongoClient
 from core.constants import MESSAGE_REVIEW_DECISIONS, OPEN_DEAL_OUTCOMES, VALID_MODULES
 
 try:
+    from prompt_generator import (
+        generate_prompt as _generate_visual_prompt,
+        PROMPT_TYPES as VISUAL_PROMPT_TYPES,
+        GENERATION_ENGINES,
+    )
+except Exception:  # pragma: no cover — import guard for test isolation
+    _generate_visual_prompt = None  # type: ignore[assignment]
+    VISUAL_PROMPT_TYPES = frozenset()
+    GENERATION_ENGINES = frozenset()
+
+try:
     from agents.base_agent import SUPPORTED_MODULES
     from agents.content_agent import ContentAgent
     from agents.fan_engagement_agent import FanEngagementAgent
@@ -3243,6 +3254,1309 @@ def trigger_creative_tool_run(payload: CreativeToolRunRequest) -> dict:
             "item": serialize(created),
             "message": "Creative tool run recorded. No post published or scheduled.",
             "simulation_only": True,
+        }
+    finally:
+        client.close()
+
+
+# ---------------------------------------------------------------------------
+# Social Creative Engine v3 — Request Models
+# ---------------------------------------------------------------------------
+
+
+class SourceContentMetadataUpdateRequest(BaseModel):
+    thumbnail_url: str = ""
+    tags: list[str] = Field(default_factory=list)
+    language: str = "en"
+    content_type_hint: str = ""
+    description: str = ""
+    notes: str = ""
+
+
+class AudioExtractionRunCreateRequest(BaseModel):
+    workspace_slug: str = ""
+    source_content_id: str = ""
+    source_url: str = ""
+    notes: str = ""
+
+
+class TranscriptRunCreateRequest(BaseModel):
+    workspace_slug: str = ""
+    source_content_id: str = ""
+    audio_extraction_run_id: str = ""
+    provider: str = "stub"
+    language: str = "en"
+    text_hint: str = ""
+
+
+class SnippetGenerationRequest(BaseModel):
+    workspace_slug: str = ""
+    source_content_id: str = ""
+    transcript_run_id: str = ""
+    max_snippets: int = Field(default=10, ge=1, le=50)
+    min_score: float = Field(default=0.5, ge=0.0, le=1.0)
+
+
+# ---------------------------------------------------------------------------
+# Social Creative Engine v3 — Snippet scoring helpers
+# ---------------------------------------------------------------------------
+
+_HIGH_SIGNAL_WORDS = frozenset({
+    "every", "always", "never", "secret", "biggest", "mistake",
+    "important", "simple", "trust", "real", "proven", "booked",
+    "week", "day", "results", "numbers", "system", "strategy",
+    "consistent", "consistently", "nothing", "everything",
+})
+
+_THEME_MAP: dict[str, str] = {
+    "trust": "trust_building",
+    "real": "authenticity",
+    "results": "results",
+    "booked": "results",
+    "numbers": "results",
+    "system": "system",
+    "strategy": "system",
+    "mistake": "lessons",
+    "simple": "simplicity",
+    "every": "consistency",
+    "always": "consistency",
+    "consistently": "consistency",
+    "week": "urgency",
+    "day": "urgency",
+    "important": "priority",
+    "nothing": "origin_story",
+}
+
+
+def _score_segment(text: str) -> tuple[float, str]:
+    """Heuristic scoring for a transcript segment.
+
+    Returns (score: float, reason: str).
+    Local computation only — no external API calls.
+    """
+    words = text.split()
+    word_count = len(words)
+    score = 0.5
+    reasons: list[str] = []
+
+    if 10 <= word_count <= 30:
+        score += 0.2
+        reasons.append("good length for social")
+    elif word_count < 8:
+        score -= 0.2
+        reasons.append("too short")
+    elif word_count > 40:
+        score -= 0.1
+        reasons.append("may be too long")
+
+    keyword_hits = sum(
+        1 for w in words if w.lower().rstrip(".,!?") in _HIGH_SIGNAL_WORDS
+    )
+    if keyword_hits >= 2:
+        score += 0.15
+        reasons.append("strong signal keywords")
+    elif keyword_hits == 1:
+        score += 0.05
+        reasons.append("has signal keyword")
+
+    if text.rstrip().endswith((".", "!", "?")):
+        score += 0.05
+        reasons.append("complete sentence")
+
+    score = round(min(1.0, max(0.0, score)), 3)
+    reason = "; ".join(reasons) if reasons else "heuristic score"
+    return score, reason
+
+
+def _infer_theme(text: str) -> str:
+    words = [w.lower().rstrip(".,!?") for w in text.split()]
+    for word in words:
+        if word in _THEME_MAP:
+            return _THEME_MAP[word]
+    return "general"
+
+
+# ---------------------------------------------------------------------------
+# Social Creative Engine v3 — Part 1: Source Content Metadata Update
+# ---------------------------------------------------------------------------
+
+
+@app.patch("/source-content/{source_content_id}/metadata")
+def update_source_content_metadata(
+    source_content_id: str,
+    payload: SourceContentMetadataUpdateRequest,
+) -> dict:
+    now = utc_now()
+    client = get_client()
+    try:
+        db = get_database(client)
+        doc = find_source_content(db, source_content_id)
+        if not doc:
+            raise HTTPException(status_code=404, detail="Source content not found.")
+        update_fields = {
+            "thumbnail_url": clean_text(payload.thumbnail_url),
+            "tags": [clean_text(t) for t in payload.tags if clean_text(t)],
+            "language": clean_text(payload.language) or "en",
+            "content_type_hint": clean_text(payload.content_type_hint),
+            "description": clean_text(payload.description),
+            "notes": clean_text(payload.notes),
+            "updated_at": now,
+        }
+        db.source_content.update_one({"_id": doc["_id"]}, {"$set": update_fields})
+        updated = db.source_content.find_one({"_id": doc["_id"]})
+        return {
+            "item": serialize(updated),
+            "message": "Source content metadata updated. No post published or scheduled.",
+        }
+    finally:
+        client.close()
+
+
+# ---------------------------------------------------------------------------
+# Social Creative Engine v3 — Part 2: Audio Extraction Runs
+# ---------------------------------------------------------------------------
+
+
+@app.get("/audio-extraction-runs")
+def list_audio_extraction_runs(
+    workspace_slug: str = Query(""),
+    source_content_id: str = "",
+    status: str = "",
+    include_legacy: bool = Query(False),
+    include_test: bool = Query(False),
+    limit: int = Query(100, ge=1, le=500),
+) -> dict:
+    client = get_client()
+    try:
+        db = get_database(client)
+        query: dict[str, Any] = {}
+        if workspace_slug:
+            query["workspace_slug"] = workspace_slug
+        if source_content_id:
+            query["source_content_id"] = source_content_id
+        if status:
+            query["status"] = status
+        records = list(
+            db.audio_extraction_runs.find(query).sort([("created_at", -1)]).limit(limit)
+        )
+        records = apply_real_mode_filters(
+            records,
+            workspace_slug=workspace_slug,
+            include_legacy=include_legacy,
+            include_test=include_test,
+        )
+        return {"items": serialize(records), "simulation_only": True}
+    finally:
+        client.close()
+
+
+@app.post("/audio-extraction-runs")
+def create_audio_extraction_run(payload: AudioExtractionRunCreateRequest) -> dict:
+    from audio_extractor import get_audio_extractor
+
+    now = utc_now()
+    extractor = get_audio_extractor()
+    result = extractor.extract(source_url=clean_text(payload.source_url))
+
+    record: dict[str, Any] = {
+        "workspace_slug": clean_text(payload.workspace_slug),
+        "source_content_id": clean_text(payload.source_content_id),
+        "source_url": clean_text(payload.source_url),
+        "notes": clean_text(payload.notes),
+        "extractor": extractor.extractor_name,
+        "status": result.status,
+        "skip_reason": result.skip_reason,
+        "output_path": result.output_path,
+        "error": result.error,
+        "simulation_only": True,
+        "outbound_actions_taken": 0,
+        "created_at": now,
+        "updated_at": now,
+    }
+    client = get_client()
+    try:
+        db = get_database(client)
+        res = db.audio_extraction_runs.insert_one(record)
+        created = db.audio_extraction_runs.find_one({"_id": res.inserted_id})
+        return {
+            "item": serialize(created),
+            "message": (
+                "Audio extraction run recorded. FFMPEG disabled — no audio downloaded or processed."
+                if result.skip_reason == "ffmpeg_disabled"
+                else "Audio extraction run recorded. No post published or scheduled."
+            ),
+            "simulation_only": True,
+        }
+    finally:
+        client.close()
+
+
+# ---------------------------------------------------------------------------
+# Social Creative Engine v3 — Part 3: Transcript Runs and Segments
+# ---------------------------------------------------------------------------
+
+
+@app.get("/transcript-runs")
+def list_transcript_runs(
+    workspace_slug: str = Query(""),
+    source_content_id: str = "",
+    status: str = "",
+    include_legacy: bool = Query(False),
+    include_test: bool = Query(False),
+    limit: int = Query(100, ge=1, le=500),
+) -> dict:
+    client = get_client()
+    try:
+        db = get_database(client)
+        query: dict[str, Any] = {}
+        if workspace_slug:
+            query["workspace_slug"] = workspace_slug
+        if source_content_id:
+            query["source_content_id"] = source_content_id
+        if status:
+            query["status"] = status
+        records = list(
+            db.transcript_runs.find(query).sort([("created_at", -1)]).limit(limit)
+        )
+        records = apply_real_mode_filters(
+            records,
+            workspace_slug=workspace_slug,
+            include_legacy=include_legacy,
+            include_test=include_test,
+        )
+        return {"items": serialize(records), "simulation_only": True}
+    finally:
+        client.close()
+
+
+@app.post("/transcript-runs")
+def create_transcript_run(payload: TranscriptRunCreateRequest) -> dict:
+    from transcript_provider import get_transcript_provider
+
+    now = utc_now()
+    provider = get_transcript_provider()
+    segments = provider.transcribe(
+        source_content_id=clean_text(payload.source_content_id),
+        audio_path="",
+        text_hint=clean_text(payload.text_hint),
+    )
+
+    run_record: dict[str, Any] = {
+        "workspace_slug": clean_text(payload.workspace_slug),
+        "source_content_id": clean_text(payload.source_content_id),
+        "audio_extraction_run_id": clean_text(payload.audio_extraction_run_id),
+        "provider": provider.provider_name,
+        "language": clean_text(payload.language) or "en",
+        "segment_count": len(segments),
+        "status": "complete",
+        "simulation_only": True,
+        "outbound_actions_taken": 0,
+        "created_at": now,
+        "updated_at": now,
+    }
+
+    client = get_client()
+    try:
+        db = get_database(client)
+        res = db.transcript_runs.insert_one(run_record)
+        run_id = res.inserted_id
+
+        for seg in segments:
+            seg_record: dict[str, Any] = {
+                "workspace_slug": clean_text(payload.workspace_slug),
+                "source_content_id": clean_text(payload.source_content_id),
+                "transcript_run_id": str(run_id),
+                "index": seg["index"],
+                "start_ms": seg["start_ms"],
+                "end_ms": seg["end_ms"],
+                "text": seg["text"],
+                "speaker": seg["speaker"],
+                "confidence": seg["confidence"],
+                "provider": seg["provider"],
+                "simulation_only": True,
+                "outbound_actions_taken": 0,
+                "created_at": now,
+            }
+            db.transcript_segments.insert_one(seg_record)
+
+        created = db.transcript_runs.find_one({"_id": run_id})
+        return {
+            "item": serialize(created),
+            "segment_count": len(segments),
+            "message": (
+                f"Transcript run complete. {len(segments)} segments created. "
+                "No post published or scheduled."
+            ),
+            "simulation_only": True,
+        }
+    finally:
+        client.close()
+
+
+@app.get("/transcript-segments")
+def list_transcript_segments(
+    workspace_slug: str = Query(""),
+    transcript_run_id: str = "",
+    source_content_id: str = "",
+    include_legacy: bool = Query(False),
+    include_test: bool = Query(False),
+    limit: int = Query(200, ge=1, le=1000),
+) -> dict:
+    client = get_client()
+    try:
+        db = get_database(client)
+        query: dict[str, Any] = {}
+        if workspace_slug:
+            query["workspace_slug"] = workspace_slug
+        if transcript_run_id:
+            query["transcript_run_id"] = transcript_run_id
+        if source_content_id:
+            query["source_content_id"] = source_content_id
+        records = list(
+            db.transcript_segments.find(query).sort([("index", 1)]).limit(limit)
+        )
+        records = apply_real_mode_filters(
+            records,
+            workspace_slug=workspace_slug,
+            include_legacy=include_legacy,
+            include_test=include_test,
+        )
+        return {"items": serialize(records), "simulation_only": True}
+    finally:
+        client.close()
+
+
+# ---------------------------------------------------------------------------
+# Social Creative Engine v3 — Part 4: Snippet Generation
+# ---------------------------------------------------------------------------
+
+
+@app.post("/source-content/{source_content_id}/generate-snippets")
+def generate_snippets_from_transcript(
+    source_content_id: str,
+    payload: SnippetGenerationRequest,
+) -> dict:
+    now = utc_now()
+    workspace_slug = clean_text(payload.workspace_slug)
+    transcript_run_id = clean_text(payload.transcript_run_id)
+
+    client = get_client()
+    try:
+        db = get_database(client)
+
+        seg_query: dict[str, Any] = {"source_content_id": source_content_id}
+        if transcript_run_id:
+            seg_query["transcript_run_id"] = transcript_run_id
+        segments = list(db.transcript_segments.find(seg_query).sort([("index", 1)]))
+
+        if not segments:
+            return {
+                "items": [],
+                "created_count": 0,
+                "message": "No transcript segments found for this source content.",
+                "simulation_only": True,
+            }
+
+        candidates: list[tuple[float, str, dict]] = []
+        for seg in segments:
+            score, reason = _score_segment(seg.get("text", ""))
+            if score >= payload.min_score:
+                candidates.append((score, reason, seg))
+
+        candidates.sort(key=lambda x: x[0], reverse=True)
+        top_candidates = candidates[: payload.max_snippets]
+
+        created_snippets = []
+        for score, reason, seg in top_candidates:
+            start_s = round(seg.get("start_ms", 0) / 1000, 3)
+            end_s = round(seg.get("end_ms", 0) / 1000, 3)
+            theme = _infer_theme(seg.get("text", ""))
+            snippet_record: dict[str, Any] = {
+                "workspace_slug": workspace_slug,
+                "source_content_id": source_content_id,
+                "transcript_run_id": transcript_run_id,
+                "transcript_id": transcript_run_id,
+                "speaker": seg.get("speaker", ""),
+                "start_time": start_s,
+                "end_time": end_s,
+                "transcript_text": seg.get("text", ""),
+                "score": score,
+                "score_reason": reason,
+                "theme": theme,
+                "hook_angle": "",
+                "platform_fit": [],
+                "status": "needs_review",
+                "review_events": [],
+                "generation_source": "auto",
+                "segment_index": seg.get("index", 0),
+                "simulation_only": True,
+                "outbound_actions_taken": 0,
+                "created_at": now,
+                "updated_at": now,
+            }
+            insert_res = db.content_snippets.insert_one(snippet_record)
+            created = db.content_snippets.find_one({"_id": insert_res.inserted_id})
+            created_snippets.append(serialize(created))
+
+        return {
+            "items": created_snippets,
+            "created_count": len(created_snippets),
+            "segment_count": len(segments),
+            "message": (
+                f"{len(created_snippets)} snippet candidates created from "
+                f"{len(segments)} transcript segments. "
+                "All require operator review. No post published or scheduled."
+            ),
+            "simulation_only": True,
+            "outbound_actions_taken": 0,
+        }
+    finally:
+        client.close()
+
+
+# ===========================================================================
+# Social Creative Engine v4 — Media Intake, Approval Gates, FFmpeg
+# ===========================================================================
+#
+# v4 adds:
+#   1. MediaIntakeRecord registration (local file or URL metadata)
+#   2. Approval gate on source content before audio extraction
+#   3. FFmpegAudioExtractor support when FFMPEG_ENABLED=true
+#   4. Approval gate: audio extraction must complete before transcript
+#      (unless stub/manual text_hint is used)
+#   5. Approval gate: transcript must exist before snippet generation
+#   6. Source content status update endpoint
+#
+# Safety: all records carry simulation_only=True, outbound_actions_taken=0.
+# ===========================================================================
+
+
+# ---------------------------------------------------------------------------
+# v4 Pydantic models
+# ---------------------------------------------------------------------------
+
+class MediaIntakeCreateRequest(BaseModel):
+    workspace_slug: str = ""
+    source_content_id: str = ""
+    media_path: str = ""          # local file path (preferred)
+    source_url: str = ""          # URL for metadata-only registration
+    notes: str = ""
+
+
+class SourceContentStatusUpdateRequest(BaseModel):
+    status: Literal["needs_review", "approved", "rejected"]
+    note: str = ""
+
+
+# ---------------------------------------------------------------------------
+# v4 helper: find_audio_extraction_run
+# ---------------------------------------------------------------------------
+
+def find_audio_extraction_run(db, run_id: str) -> dict | None:
+    query: dict[str, Any] = {"_id": run_id}
+    if ObjectId.is_valid(run_id):
+        query = {"$or": [{"_id": ObjectId(run_id)}, {"_id": run_id}]}
+    return db.audio_extraction_runs.find_one(query)
+
+
+def find_transcript_run(db, run_id: str) -> dict | None:
+    query: dict[str, Any] = {"_id": run_id}
+    if ObjectId.is_valid(run_id):
+        query = {"$or": [{"_id": ObjectId(run_id)}, {"_id": run_id}]}
+    return db.transcript_runs.find_one(query)
+
+
+# ---------------------------------------------------------------------------
+# v4 — Part 1: Source Content Status Update
+# ---------------------------------------------------------------------------
+
+@app.patch("/source-content/{source_content_id}/status")
+def update_source_content_status(
+    source_content_id: str,
+    payload: SourceContentStatusUpdateRequest,
+) -> dict:
+    """
+    Approve or reject a source content item.
+
+    Source content must be approved before audio extraction can proceed.
+    """
+    now = utc_now()
+    client = get_client()
+    try:
+        db = get_database(client)
+        doc = find_source_content(db, source_content_id)
+        if not doc:
+            raise HTTPException(status_code=404, detail="Source content not found.")
+
+        update_fields: dict[str, Any] = {
+            "status": payload.status,
+            "updated_at": now,
+        }
+        if payload.note.strip():
+            update_fields["status_note"] = clean_text(payload.note)
+
+        db.source_content.update_one({"_id": doc["_id"]}, {"$set": update_fields})
+        updated = db.source_content.find_one({"_id": doc["_id"]})
+        return {
+            "item": serialize(updated),
+            "message": (
+                f"Source content status updated to '{payload.status}'. "
+                "No post published or scheduled."
+            ),
+        }
+    finally:
+        client.close()
+
+
+# ---------------------------------------------------------------------------
+# v4 — Part 2: Media Intake Registration
+# ---------------------------------------------------------------------------
+
+@app.post("/media-intake-records")
+def create_media_intake_record(payload: MediaIntakeCreateRequest) -> dict:
+    """
+    Register a local media file or URL metadata for a source content item.
+
+    For local files: validates path and extension; does not read file contents.
+    For URLs: stores metadata only; never fetches the URL.
+
+    Gate: source content must have status='approved'.
+    """
+    from media_intake import register_local_file, register_url_metadata
+
+    now = utc_now()
+    workspace_slug = clean_text(payload.workspace_slug)
+    source_content_id = clean_text(payload.source_content_id)
+
+    client = get_client()
+    try:
+        db = get_database(client)
+
+        # Approval gate
+        content_doc = find_source_content(db, source_content_id) if source_content_id else None
+        if source_content_id and content_doc and content_doc.get("status") != "approved":
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    "Source content must be approved before registering media. "
+                    f"Current status: '{content_doc.get('status', 'unknown')}'."
+                ),
+            )
+
+        media_path = clean_text(payload.media_path)
+        source_url = clean_text(payload.source_url)
+
+        if media_path:
+            result = register_local_file(media_path)
+        elif source_url:
+            result = register_url_metadata(source_url)
+        else:
+            raise HTTPException(
+                status_code=400,
+                detail="Either media_path or source_url is required.",
+            )
+
+        record: dict[str, Any] = {
+            "workspace_slug": workspace_slug,
+            "source_content_id": source_content_id,
+            "intake_method": result.intake_method,
+            "status": result.status,
+            "media_path": result.media_path,
+            "source_url": result.source_url or source_url,
+            "extension": result.extension,
+            "approved_for_download": False,  # always starts False; operator must set explicitly
+            "error": result.error,
+            "skip_reason": result.skip_reason,
+            "notes": clean_text(payload.notes),
+            "simulation_only": True,
+            "outbound_actions_taken": 0,
+            "created_at": now,
+            "updated_at": now,
+        }
+        res = db.media_intake_records.insert_one(record)
+        created = db.media_intake_records.find_one({"_id": res.inserted_id})
+        return {
+            "item": serialize(created),
+            "message": (
+                f"Media intake record created (method: {result.intake_method}). "
+                "No file downloaded. No content published."
+            ),
+            "simulation_only": True,
+        }
+    finally:
+        client.close()
+
+
+@app.get("/media-intake-records")
+def list_media_intake_records(
+    workspace_slug: str = Query(""),
+    source_content_id: str = "",
+    status: str = "",
+    include_legacy: bool = Query(False),
+    include_test: bool = Query(False),
+    limit: int = Query(100, ge=1, le=500),
+) -> dict:
+    client = get_client()
+    try:
+        db = get_database(client)
+        query: dict[str, Any] = {}
+        if workspace_slug:
+            query["workspace_slug"] = workspace_slug
+        if source_content_id:
+            query["source_content_id"] = source_content_id
+        if status:
+            query["status"] = status
+        records = list(
+            db.media_intake_records.find(query).sort([("created_at", -1)]).limit(limit)
+        )
+        records = apply_real_mode_filters(
+            records,
+            workspace_slug=workspace_slug,
+            include_legacy=include_legacy,
+            include_test=include_test,
+        )
+        return {"items": serialize(records), "simulation_only": True}
+    finally:
+        client.close()
+
+
+# ---------------------------------------------------------------------------
+# v4 — Part 3: Audio Extraction with approval gate + media_path support
+# ---------------------------------------------------------------------------
+# Overrides v3 POST /audio-extraction-runs with approval gate + media_path.
+# The GET /audio-extraction-runs endpoint from v3 is reused unchanged.
+
+@app.post("/audio-extraction-runs/v4")
+def create_audio_extraction_run_v4(payload: AudioExtractionRunCreateRequest) -> dict:
+    """
+    Create an audio extraction run with v4 approval gate.
+
+    Gate: source content must be status='approved'.
+    If FFMPEG_ENABLED=true, uses FFmpegAudioExtractor with media_path.
+    If FFMPEG_ENABLED=false (default), returns skipped safely.
+    """
+    from audio_extractor import get_audio_extractor, FFmpegAudioExtractor
+
+    now = utc_now()
+    workspace_slug = clean_text(payload.workspace_slug)
+    source_content_id = clean_text(payload.source_content_id)
+
+    client = get_client()
+    try:
+        db = get_database(client)
+
+        # Approval gate
+        content_doc = find_source_content(db, source_content_id) if source_content_id else None
+        if source_content_id and content_doc and content_doc.get("status") != "approved":
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    "Source content must be approved before audio extraction. "
+                    f"Current status: '{content_doc.get('status', 'unknown')}'."
+                ),
+            )
+
+        extractor = get_audio_extractor()
+        media_path = clean_text(payload.notes)  # notes field reused as media_path hint
+
+        # Resolve media_path from registered intake records
+        intake_doc = db.media_intake_records.find_one(
+            {"source_content_id": source_content_id, "intake_method": "local_file", "status": "registered"}
+        ) if source_content_id else None
+        resolved_media_path = (
+            intake_doc.get("media_path", "") if intake_doc else ""
+        )
+
+        output_dir = os.getenv("FFMPEG_OUTPUT_DIR", "/tmp/signalforge_audio")
+        result = extractor.extract(
+            source_url=clean_text(payload.source_url),
+            media_path=resolved_media_path,
+            output_dir=output_dir,
+        )
+
+        record: dict[str, Any] = {
+            "workspace_slug": workspace_slug,
+            "source_content_id": source_content_id,
+            "source_url": clean_text(payload.source_url),
+            "media_path": resolved_media_path,
+            "notes": clean_text(payload.notes),
+            "extractor": result.extractor,
+            "status": result.status,
+            "skip_reason": result.skip_reason,
+            "output_path": result.output_path,
+            "duration_seconds": getattr(result, "duration_seconds", 0.0),
+            "error": result.error,
+            "simulation_only": True,
+            "outbound_actions_taken": 0,
+            "created_at": now,
+            "updated_at": now,
+        }
+
+        res = db.audio_extraction_runs.insert_one(record)
+        created = db.audio_extraction_runs.find_one({"_id": res.inserted_id})
+
+        if result.status == "skipped":
+            msg = "Audio extraction skipped — FFMPEG disabled. No audio downloaded or processed."
+        elif result.status == "complete":
+            msg = f"Audio extracted to {result.output_path}. No content published."
+        else:
+            msg = f"Audio extraction failed: {result.error}"
+
+        return {
+            "item": serialize(created),
+            "message": msg,
+            "simulation_only": True,
+        }
+    finally:
+        client.close()
+
+
+# ---------------------------------------------------------------------------
+# v4 — Part 4: Transcript run with approval gate
+# ---------------------------------------------------------------------------
+# Overrides v3 POST /transcript-runs with stricter approval chain.
+# GET /transcript-runs and GET /transcript-segments are reused unchanged.
+
+@app.post("/transcript-runs/v4")
+def create_transcript_run_v4(payload: TranscriptRunCreateRequest) -> dict:
+    """
+    Create a transcript run with v4 approval gate.
+
+    Gate: if audio_extraction_run_id is provided, that run must exist and
+    have status='complete'. If no run_id is given, only the stub provider
+    (or a manual text_hint) is allowed — this enables stub/manual text flow
+    without requiring FFmpeg.
+    """
+    from transcript_provider import get_transcript_provider
+
+    now = utc_now()
+    workspace_slug = clean_text(payload.workspace_slug)
+    source_content_id = clean_text(payload.source_content_id)
+    audio_run_id = clean_text(payload.audio_extraction_run_id)
+
+    client = get_client()
+    try:
+        db = get_database(client)
+
+        # Approval gate: if audio run id is given, it must be complete
+        if audio_run_id:
+            audio_run = find_audio_extraction_run(db, audio_run_id)
+            if not audio_run:
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"Audio extraction run '{audio_run_id}' not found.",
+                )
+            if audio_run.get("status") not in ("complete", "skipped"):
+                raise HTTPException(
+                    status_code=422,
+                    detail=(
+                        "Audio extraction run must be complete (or skipped/stub) "
+                        f"before transcript generation. Current status: '{audio_run.get('status')}'."
+                    ),
+                )
+
+        provider = get_transcript_provider()
+        # Pass audio path from extraction run if available
+        audio_path = ""
+        if audio_run_id:
+            audio_run = find_audio_extraction_run(db, audio_run_id)
+            if audio_run:
+                audio_path = audio_run.get("output_path", "")
+
+        segments = provider.transcribe(
+            source_content_id=source_content_id,
+            audio_path=audio_path,
+            text_hint=clean_text(payload.text_hint),
+        )
+
+        run_record: dict[str, Any] = {
+            "workspace_slug": workspace_slug,
+            "source_content_id": source_content_id,
+            "audio_extraction_run_id": audio_run_id,
+            "provider": provider.provider_name,
+            "language": clean_text(payload.language) or "en",
+            "segment_count": len(segments),
+            "status": "complete",
+            "simulation_only": True,
+            "outbound_actions_taken": 0,
+            "created_at": now,
+            "updated_at": now,
+        }
+
+        res = db.transcript_runs.insert_one(run_record)
+        run_id = res.inserted_id
+
+        for seg in segments:
+            seg_record: dict[str, Any] = {
+                "workspace_slug": workspace_slug,
+                "source_content_id": source_content_id,
+                "transcript_run_id": str(run_id),
+                "index": seg["index"],
+                "start_ms": seg["start_ms"],
+                "end_ms": seg["end_ms"],
+                "text": seg["text"],
+                "speaker": seg["speaker"],
+                "confidence": seg["confidence"],
+                "provider": seg["provider"],
+                "simulation_only": True,
+                "outbound_actions_taken": 0,
+                "created_at": now,
+            }
+            db.transcript_segments.insert_one(seg_record)
+
+        created = db.transcript_runs.find_one({"_id": run_id})
+        return {
+            "item": serialize(created),
+            "segment_count": len(segments),
+            "message": (
+                f"Transcript run complete. {len(segments)} segments created. "
+                "No post published or scheduled."
+            ),
+            "simulation_only": True,
+        }
+    finally:
+        client.close()
+
+
+# ---------------------------------------------------------------------------
+# v4 — Part 5: Snippet generation with transcript gate
+# ---------------------------------------------------------------------------
+
+@app.post("/source-content/{source_content_id}/generate-snippets/v4")
+def generate_snippets_from_transcript_v4(
+    source_content_id: str,
+    payload: SnippetGenerationRequest,
+) -> dict:
+    """
+    Generate snippet candidates with v4 approval gate.
+
+    Gate: a transcript run with status='complete' must exist for this
+    source_content_id before snippet generation is permitted.
+    """
+    now = utc_now()
+    workspace_slug = clean_text(payload.workspace_slug)
+    transcript_run_id = clean_text(payload.transcript_run_id)
+
+    client = get_client()
+    try:
+        db = get_database(client)
+
+        # Approval gate: at least one completed transcript run must exist
+        transcript_query: dict[str, Any] = {
+            "source_content_id": source_content_id,
+            "status": "complete",
+        }
+        if transcript_run_id:
+            transcript_query["_id_str"] = transcript_run_id  # resolved below
+
+        existing_run = None
+        if transcript_run_id:
+            existing_run = find_transcript_run(db, transcript_run_id)
+            if not existing_run:
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"Transcript run '{transcript_run_id}' not found.",
+                )
+            if existing_run.get("status") != "complete":
+                raise HTTPException(
+                    status_code=422,
+                    detail=(
+                        "Transcript run must be complete before generating snippets. "
+                        f"Current status: '{existing_run.get('status')}'."
+                    ),
+                )
+        else:
+            # No specific run given — check any completed run for this content
+            completed = db.transcript_runs.find_one(
+                {"source_content_id": source_content_id, "status": "complete"}
+            )
+            if not completed:
+                raise HTTPException(
+                    status_code=422,
+                    detail=(
+                        "No completed transcript run found for this source content. "
+                        "Run a transcript first."
+                    ),
+                )
+
+        # Fetch segments
+        seg_query: dict[str, Any] = {"source_content_id": source_content_id}
+        if transcript_run_id:
+            seg_query["transcript_run_id"] = transcript_run_id
+        segments = list(db.transcript_segments.find(seg_query).sort([("index", 1)]))
+
+        if not segments:
+            return {
+                "items": [],
+                "created_count": 0,
+                "message": "No transcript segments found for this source content.",
+                "simulation_only": True,
+            }
+
+        candidates: list[tuple[float, str, dict]] = []
+        for seg in segments:
+            score, reason = _score_segment(seg.get("text", ""))
+            if score >= payload.min_score:
+                candidates.append((score, reason, seg))
+
+        candidates.sort(key=lambda x: x[0], reverse=True)
+        top_candidates = candidates[: payload.max_snippets]
+
+        created_snippets = []
+        for score, reason, seg in top_candidates:
+            start_s = round(seg.get("start_ms", 0) / 1000, 3)
+            end_s = round(seg.get("end_ms", 0) / 1000, 3)
+            theme = _infer_theme(seg.get("text", ""))
+            snippet_record: dict[str, Any] = {
+                "workspace_slug": workspace_slug,
+                "source_content_id": source_content_id,
+                "transcript_run_id": transcript_run_id,
+                "transcript_id": transcript_run_id,
+                "speaker": seg.get("speaker", ""),
+                "start_time": start_s,
+                "end_time": end_s,
+                "transcript_text": seg.get("text", ""),
+                "score": score,
+                "score_reason": reason,
+                "theme": theme,
+                "hook_angle": "",
+                "platform_fit": [],
+                "status": "needs_review",
+                "review_events": [],
+                "generation_source": "auto",
+                "segment_index": seg.get("index", 0),
+                "simulation_only": True,
+                "outbound_actions_taken": 0,
+                "created_at": now,
+                "updated_at": now,
+            }
+            insert_res = db.content_snippets.insert_one(snippet_record)
+            created = db.content_snippets.find_one({"_id": insert_res.inserted_id})
+            created_snippets.append(serialize(created))
+
+        return {
+            "items": created_snippets,
+            "created_count": len(created_snippets),
+            "segment_count": len(segments),
+            "message": (
+                f"{len(created_snippets)} snippet candidates created from "
+                f"{len(segments)} transcript segments. "
+                "All require operator review. No post published or scheduled."
+            ),
+            "simulation_only": True,
+            "outbound_actions_taken": 0,
+        }
+    finally:
+        client.close()
+
+
+
+# ---------------------------------------------------------------------------
+# Social Creative Engine v4.5 — Prompt Generator Library
+# ---------------------------------------------------------------------------
+# Generates structured visual prompts for faceless short-form creative content.
+# All prompts are stored with status='draft' and require operator review before
+# any asset generation can occur.  No external API calls are made.
+# ---------------------------------------------------------------------------
+
+
+class PromptGenerationCreateRequest(BaseModel):
+    workspace_slug: str
+    client_id: str = ""
+    snippet_id: str = ""
+    brief_id: str = ""
+    prompt_type: Literal[
+        "faceless_motivational",
+        "cinematic_broll",
+        "abstract_motion",
+        "business_explainer",
+        "quote_card_motion",
+        "podcast_clip_visual",
+        "educational_breakdown",
+        "luxury_brand_story",
+        "product_service_ad",
+    ] = "faceless_motivational"
+    generation_engine_target: Literal[
+        "comfyui", "seedance", "higgsfield", "runway", "manual"
+    ] = "comfyui"
+    use_likeness: bool = False
+    notes: str = ""
+
+
+class PromptGenerationReviewRequest(BaseModel):
+    decision: Literal["approve", "reject", "revise"]
+    note: str = ""
+
+
+def find_prompt_generation(db: Any, gen_id: str) -> dict | None:
+    """Return a single prompt_generations record by str or ObjectId."""
+    record = db.prompt_generations.find_one({"_id": gen_id})
+    if record:
+        return record
+    try:
+        record = db.prompt_generations.find_one({"_id": ObjectId(gen_id)})
+    except Exception:
+        pass
+    return record
+
+
+@app.post("/prompt-generations")
+def create_prompt_generation(payload: PromptGenerationCreateRequest):
+    """
+    Generate a visual prompt from an approved content snippet.
+
+    Rules
+    -----
+    * The snippet must exist and have ``status='approved'``.
+    * ``use_likeness=True`` requires avatar_permissions or likeness_permissions
+      on the client profile; returns 422 otherwise.
+    * No external calls are made.  ``simulation_only`` is always ``True``.
+    """
+    client = get_client()
+    try:
+        db = get_database(client)
+
+        # Validate snippet exists and is approved
+        snippet = None
+        if payload.snippet_id:
+            snippet = db.content_snippets.find_one({"_id": payload.snippet_id})
+            if not snippet:
+                try:
+                    snippet = db.content_snippets.find_one(
+                        {"_id": ObjectId(payload.snippet_id)}
+                    )
+                except Exception:
+                    pass
+        if not snippet:
+            raise HTTPException(
+                status_code=404, detail="Snippet not found."
+            )
+        if snippet.get("status") != "approved":
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    "Snippet must be in 'approved' status before generating a "
+                    "visual prompt. Current status: "
+                    f"'{snippet.get('status', 'unknown')}'."
+                ),
+            )
+
+        # Fetch client profile for permissions check
+        client_profile: dict = {}
+        if payload.client_id:
+            client_profile = db.companies.find_one({"_id": payload.client_id}) or {}
+            if not client_profile:
+                try:
+                    client_profile = (
+                        db.companies.find_one({"_id": ObjectId(payload.client_id)}) or {}
+                    )
+                except Exception:
+                    pass
+
+        avatar_permissions: bool = bool(client_profile.get("avatar_permissions", False))
+        likeness_permissions: bool = bool(
+            client_profile.get("likeness_permissions", False)
+        )
+
+        # Likeness gate
+        if payload.use_likeness and not (avatar_permissions or likeness_permissions):
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    "use_likeness=True requires avatar_permissions or "
+                    "likeness_permissions on the client profile. "
+                    "Update the client profile before enabling likeness prompts."
+                ),
+            )
+
+        # Load brief if provided
+        brief: dict = {}
+        if payload.brief_id:
+            brief = db.briefs.find_one({"_id": payload.brief_id}) or {}
+            if not brief:
+                try:
+                    brief = db.briefs.find_one({"_id": ObjectId(payload.brief_id)}) or {}
+                except Exception:
+                    pass
+
+        # Guard: ensure prompt_generator module loaded
+        if _generate_visual_prompt is None:
+            raise HTTPException(
+                status_code=500,
+                detail="Prompt generator module is unavailable.",
+            )
+
+        snippet_text: str = snippet.get("transcript_text", "")
+        source_url: str = snippet.get("source_url", "")
+        snippet_usage_status: str = snippet.get("status", "")
+
+        try:
+            result = _generate_visual_prompt(
+                prompt_type=payload.prompt_type,
+                snippet_text=snippet_text,
+                brief=brief,
+                engine=payload.generation_engine_target,
+                client_id=payload.client_id,
+                snippet_id=payload.snippet_id,
+                brief_id=payload.brief_id,
+                source_url=source_url,
+                snippet_usage_status=snippet_usage_status,
+                avatar_permissions=avatar_permissions,
+                likeness_permissions=likeness_permissions,
+                use_likeness=payload.use_likeness,
+            )
+        except (ValueError, PermissionError) as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+        now = datetime.now(timezone.utc).isoformat()
+        record = {
+            "workspace_slug": payload.workspace_slug,
+            "client_id": payload.client_id,
+            "snippet_id": payload.snippet_id,
+            "brief_id": payload.brief_id,
+            "prompt_type": result.prompt_type,
+            "generation_engine_target": result.generation_engine_target,
+            "positive_prompt": result.positive_prompt,
+            "negative_prompt": result.negative_prompt,
+            "visual_style": result.visual_style,
+            "camera_direction": result.camera_direction,
+            "lighting": result.lighting,
+            "motion_notes": result.motion_notes,
+            "scene_beats": result.scene_beats,
+            "caption_overlay_suggestion": result.caption_overlay_suggestion,
+            "safety_notes": result.safety_notes,
+            "status": "draft",
+            "review_events": [],
+            "notes": payload.notes,
+            "use_likeness": payload.use_likeness,
+            "simulation_only": True,
+            "outbound_actions_taken": 0,
+            "source_url": result.source_url,
+            "snippet_transcript": result.snippet_transcript,
+            "snippet_usage_status": result.snippet_usage_status,
+            "created_at": now,
+            "updated_at": now,
+        }
+
+        insert_res = db.prompt_generations.insert_one(record)
+        created = db.prompt_generations.find_one({"_id": insert_res.inserted_id})
+
+        return {
+            "item": serialize(created),
+            "message": (
+                "Visual prompt generated and saved as draft. "
+                "Requires operator review before any asset generation."
+            ),
+            "simulation_only": True,
+            "outbound_actions_taken": 0,
+        }
+    finally:
+        client.close()
+
+
+@app.get("/prompt-generations")
+def list_prompt_generations(
+    workspace_slug: str = Query(""),
+    snippet_id: str = Query(""),
+    client_id: str = Query(""),
+    brief_id: str = Query(""),
+    status: str = Query(""),
+    prompt_type: str = Query(""),
+    generation_engine_target: str = Query(""),
+    demo: str = Query("false"),
+):
+    """List prompt generation records with optional filters."""
+    client = get_client()
+    try:
+        db = get_database(client)
+
+        query: dict = {}
+        if workspace_slug:
+            query["workspace_slug"] = workspace_slug
+        if snippet_id:
+            query["snippet_id"] = snippet_id
+        if client_id:
+            query["client_id"] = client_id
+        if brief_id:
+            query["brief_id"] = brief_id
+        if status:
+            query["status"] = status
+        if prompt_type:
+            query["prompt_type"] = prompt_type
+        if generation_engine_target:
+            query["generation_engine_target"] = generation_engine_target
+
+        # Exclude demo workspace when not in demo mode
+        demo_flag = str(demo).lower() not in ("true", "1")
+        if demo_flag and not workspace_slug:
+            query["workspace_slug"] = {"$nin": ["demo", "test"]}
+        elif demo_flag and workspace_slug and workspace_slug in ("demo", "test"):
+            return {
+                "items": [],
+                "count": 0,
+                "simulation_only": True,
+                "outbound_actions_taken": 0,
+            }
+
+        raw_items = [serialize(r) for r in db.prompt_generations.find(query)]
+        items = apply_real_mode_filters(raw_items, workspace_slug=workspace_slug)
+
+        return {
+            "items": items,
+            "count": len(items),
+            "simulation_only": True,
+            "outbound_actions_taken": 0,
+        }
+    finally:
+        client.close()
+
+
+@app.post("/prompt-generations/{gen_id}/review")
+def review_prompt_generation(gen_id: str, payload: PromptGenerationReviewRequest):
+    """
+    Approve, reject, or request revision on a prompt generation record.
+
+    * ``approve`` -> status becomes ``'approved'``
+    * ``reject``  -> status becomes ``'rejected'``
+    * ``revise``  -> status becomes ``'needs_revision'``
+    """
+    client = get_client()
+    try:
+        db = get_database(client)
+
+        record = find_prompt_generation(db, gen_id)
+        if not record:
+            raise HTTPException(status_code=404, detail="Prompt generation not found.")
+
+        status_map = {
+            "approve": "approved",
+            "reject": "rejected",
+            "revise": "needs_revision",
+        }
+        new_status = status_map[payload.decision]
+
+        now = datetime.now(timezone.utc).isoformat()
+        review_event = {
+            "decision": payload.decision,
+            "note": payload.note,
+            "reviewed_at": now,
+        }
+
+        db.prompt_generations.update_one(
+            {"_id": record["_id"]},
+            {
+                "$set": {"status": new_status, "updated_at": now},
+                "$push": {"review_events": review_event},
+            },
+        )
+
+        updated = find_prompt_generation(db, str(record["_id"]))
+
+        return {
+            "item": serialize(updated),
+            "message": f"Prompt generation {payload.decision}d.",
+            "simulation_only": True,
+            "outbound_actions_taken": 0,
         }
     finally:
         client.close()

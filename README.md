@@ -222,7 +222,22 @@ COMFYUI_BASE_URL=http://host.docker.internal:8188
 COMFYUI_WORKFLOW_PATH=/path/to/workflow.json
 ```
 
-**Dashboard:** The Creative Studio page now includes Clients, Source Channels, Source Content, Snippets, Assets, and Approval Queue tabs.
+**Dashboard:** The Creative Studio page now includes Clients, Source Channels, Source Content, Snippets, Assets, Approval Queue, Ingest Pipeline, and **Prompt Library** tabs.
+
+## Social Creative Engine v4.5 — Prompt Generator Library
+
+v4.5 adds a structured visual prompt generation layer on top of the v4 approval pipeline. Approved content snippets feed into the Prompt Generator to produce structured visual prompts for faceless short-form creative content.
+
+**Supported prompt types:** `faceless_motivational`, `cinematic_broll`, `abstract_motion`, `business_explainer`, `quote_card_motion`, `podcast_clip_visual`, `educational_breakdown`, `luxury_brand_story`, `product_service_ad`.
+
+**Supported engine targets:** `comfyui` (default, local only), `seedance`, `higgsfield`, `runway`, `manual`. No engine is auto-invoked — operator runs generation externally after prompt approval.
+
+**Safety:**
+- Snippets must be `status='approved'` before a prompt can be generated.
+- `use_likeness=True` requires explicit `avatar_permissions` or `likeness_permissions` on the client profile.
+- Default negative prompt always blocks identifiable faces, likenesses, and voice cloning.
+- All records carry `simulation_only: true`, `outbound_actions_taken: 0`.
+- Prompts start as `draft` and require operator review before use.
 
 ## Local Setup
 

@@ -3,10 +3,12 @@ import {
   approveDemoMessage,
   demoItems,
   demoOverview,
+  generateDemoSnippets,
   getDemoState,
   isDemoModeEnabled,
   resetDemoData,
   reviewDemoCreativeAsset,
+  reviewDemoPromptGeneration,
   reviewDemoSnippet,
   runDemoOutreach,
   showDemoDealOutcome,
@@ -240,6 +242,121 @@ export const api = {
     isDemoModeEnabled()
       ? Promise.resolve({ items: [], simulation_only: true })
       : request(`/creative-tool-runs?${new URLSearchParams({ ...wsParam(), ...params })}`),
+
+  // -------------------------------------------------------------------------
+  // Social Creative Engine v3
+  // -------------------------------------------------------------------------
+  updateSourceContentMetadata: (id, payload) =>
+    request(`/source-content/${encodeURIComponent(id)}/metadata`, {
+      method: "PATCH",
+      body: JSON.stringify(payload),
+    }),
+
+  audioExtractionRuns: (params = {}) =>
+    isDemoModeEnabled()
+      ? Promise.resolve({ items: demoItems("audio_extraction_runs"), simulation_only: true })
+      : request(`/audio-extraction-runs?${new URLSearchParams({ ...wsParam(), ...params })}`),
+  createAudioExtractionRun: (payload) =>
+    request("/audio-extraction-runs", {
+      method: "POST",
+      body: JSON.stringify({ ...wsParam(), ...payload }),
+    }),
+
+  transcriptRuns: (params = {}) =>
+    isDemoModeEnabled()
+      ? Promise.resolve({ items: demoItems("transcript_runs"), simulation_only: true })
+      : request(`/transcript-runs?${new URLSearchParams({ ...wsParam(), ...params })}`),
+  createTranscriptRun: (payload) =>
+    request("/transcript-runs", {
+      method: "POST",
+      body: JSON.stringify({ ...wsParam(), ...payload }),
+    }),
+
+  transcriptSegments: (params = {}) =>
+    isDemoModeEnabled()
+      ? Promise.resolve({ items: demoItems("transcript_segments"), simulation_only: true })
+      : request(`/transcript-segments?${new URLSearchParams({ ...wsParam(), ...params })}`),
+
+  generateSnippets: (sourceContentId, payload) =>
+    isDemoModeEnabled()
+      ? Promise.resolve({
+          items: generateDemoSnippets(sourceContentId),
+          simulation_only: true,
+          message: "Demo snippet candidates created. No post published.",
+        })
+      : request(`/source-content/${encodeURIComponent(sourceContentId)}/generate-snippets`, {
+          method: "POST",
+          body: JSON.stringify({ ...wsParam(), ...payload }),
+        }),
+
+  // -------------------------------------------------------------------------
+  // Social Creative Engine v4
+  // -------------------------------------------------------------------------
+  updateSourceContentStatus: (id, payload) =>
+    request(`/source-content/${encodeURIComponent(id)}/status`, {
+      method: "PATCH",
+      body: JSON.stringify(payload),
+    }),
+
+  mediaIntakeRecords: (params = {}) =>
+    isDemoModeEnabled()
+      ? Promise.resolve({ items: demoItems("media_intake_records"), simulation_only: true })
+      : request(`/media-intake-records?${new URLSearchParams({ ...wsParam(), ...params })}`),
+  createMediaIntakeRecord: (payload) =>
+    request("/media-intake-records", {
+      method: "POST",
+      body: JSON.stringify({ ...wsParam(), ...payload }),
+    }),
+
+  createAudioExtractionRunV4: (payload) =>
+    request("/audio-extraction-runs/v4", {
+      method: "POST",
+      body: JSON.stringify({ ...wsParam(), ...payload }),
+    }),
+
+  createTranscriptRunV4: (payload) =>
+    request("/transcript-runs/v4", {
+      method: "POST",
+      body: JSON.stringify({ ...wsParam(), ...payload }),
+    }),
+
+  generateSnippetsV4: (sourceContentId, payload) =>
+    isDemoModeEnabled()
+      ? Promise.resolve({
+          items: generateDemoSnippets(sourceContentId),
+          simulation_only: true,
+          message: "Demo snippet candidates created (v4). No post published.",
+        })
+      : request(
+          `/source-content/${encodeURIComponent(sourceContentId)}/generate-snippets/v4`,
+          {
+            method: "POST",
+            body: JSON.stringify({ ...wsParam(), ...payload }),
+          },
+        ),
+
+  // --- Social Creative Engine v4.5 ---
+  promptGenerations: (params = {}) =>
+    isDemoModeEnabled()
+      ? Promise.resolve({ items: demoItems("prompt_generations"), simulation_only: true })
+      : request(`/prompt-generations?${new URLSearchParams({ ...wsParam(), ...params })}`),
+
+  createPromptGeneration: (payload) =>
+    request("/prompt-generations", {
+      method: "POST",
+      body: JSON.stringify({ ...wsParam(), ...payload }),
+    }),
+
+  reviewPromptGeneration: (id, payload) =>
+    isDemoModeEnabled()
+      ? Promise.resolve({
+          item: reviewDemoPromptGeneration(id, payload.decision, payload.note),
+          message: "Demo review saved.",
+        })
+      : request(`/prompt-generations/${encodeURIComponent(id)}/review`, {
+          method: "POST",
+          body: JSON.stringify(payload),
+        }),
 };
 
 export { API_BASE_URL };

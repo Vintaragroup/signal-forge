@@ -883,6 +883,474 @@ function CreativeAssetRow({ asset, onRefresh }) {
 }
 
 // ---------------------------------------------------------------------------
+// v3: Ingest Pipeline Section
+// ---------------------------------------------------------------------------
+
+function IngestPipelineSection({
+  sourceContent,
+  audioExtractionRuns,
+  transcriptRuns,
+  transcriptSegments,
+  contentSnippets,
+  mediaIntakeRecords,
+  wsParam,
+  onRefresh,
+  showNotice,
+  demoMode,
+}) {
+  const [busy, setBusy] = useState({});
+
+  async function handleApproveContent(contentItem) {
+    setBusy((b) => ({ ...b, [contentItem._id]: "approve" }));
+    try {
+      await api.updateSourceContentStatus(contentItem._id, { status: "approved" });
+      showNotice(`"${contentItem.title || contentItem._id}" approved for extraction.`);
+      await onRefresh();
+    } catch {
+      showNotice("Approval failed.");
+    } finally {
+      setBusy((b) => ({ ...b, [contentItem._id]: null }));
+    }
+  }
+
+  async function handleRunTranscript(contentItem) {
+    setBusy((b) => ({ ...b, [contentItem._id]: "transcript" }));
+    try {
+      await api.createTranscriptRun({
+        source_content_id: contentItem._id,
+        ...wsParam(),
+      });
+      showNotice("Transcript run created. Review results below.");
+      await onRefresh();
+    } catch {
+      showNotice("Transcript run failed.");
+    } finally {
+      setBusy((b) => ({ ...b, [contentItem._id]: null }));
+    }
+  }
+
+  async function handleGenerateSnippets(contentItem) {
+    setBusy((b) => ({ ...b, [contentItem._id]: "snippets" }));
+    try {
+      const latestRun = [...transcriptRuns]
+        .filter((r) => r.source_content_id === contentItem._id)
+        .sort((a, b) => new Date(b.created_at) - new Date(a.created_at))[0];
+      const result = await api.generateSnippets(contentItem._id, {
+        transcript_run_id: latestRun?._id || null,
+        ...wsParam(),
+      });
+      const count = result.items?.length ?? 0;
+      showNotice(`${count} snippet candidate${count !== 1 ? "s" : ""} added to Snippets for review.`);
+      await onRefresh();
+    } catch {
+      showNotice("Snippet generation failed.");
+    } finally {
+      setBusy((b) => ({ ...b, [contentItem._id]: null }));
+    }
+  }
+
+  function statusBadge(status) {
+    const colors = {
+      approved: "bg-green-100 text-green-700",
+      rejected: "bg-red-100 text-red-700",
+      needs_review: "bg-amber-100 text-amber-700",
+    };
+    return (
+      <span className={`inline-block rounded px-1.5 py-0.5 text-xs font-medium ${colors[status] ?? "bg-slate-100 text-slate-600"}`}>
+        {status ?? "unknown"}
+      </span>
+    );
+  }
+
+  return (
+    <section className="space-y-6">
+      <div className="rounded-md border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+        <span className="font-semibold">Safety notice:</span> No audio is downloaded. No content is published or scheduled.
+        {demoMode && <span className="ml-2 font-semibold text-indigo-700">[Demo Mode — all actions are simulated]</span>}
+      </div>
+
+      {sourceContent.length === 0 ? (
+        <p className="text-sm text-slate-500">No source content found. Add a source URL in the Source Content tab first.</p>
+      ) : (
+        <div className="space-y-3">
+          {sourceContent.map((c) => {
+            const isApproved = c.status === "approved";
+            const runs = transcriptRuns.filter((r) => r.source_content_id === c._id);
+            const latestRun = [...runs].sort((a, b) => new Date(b.created_at) - new Date(a.created_at))[0];
+            const segs = transcriptSegments.filter((s) => s.source_content_id === c._id && s.transcript_run_id === latestRun?._id);
+            const snippetCount = contentSnippets.filter((s) => s.source_content_id === c._id && s.generation_source === "auto").length;
+            const audioRun = audioExtractionRuns.find((r) => r.source_content_id === c._id);
+            const intakeRecord = (mediaIntakeRecords || []).find((m) => m.source_content_id === c._id);
+            const isApproving = busy[c._id] === "approve";
+            const isRunningTranscript = busy[c._id] === "transcript";
+            const isRunningSnippets = busy[c._id] === "snippets";
+            return (
+              <div key={c._id} className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm space-y-2">
+                <div className="flex items-start justify-between gap-4">
+                  <div className="min-w-0 space-y-1">
+                    <p className="text-sm font-semibold text-slate-800 truncate">{c.title || c.source_url || c._id}</p>
+                    {c.source_url && (
+                      <p className="text-xs text-slate-400 truncate">{c.source_url}</p>
+                    )}
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs text-slate-500">Status:</span>
+                      {statusBadge(c.status)}
+                      {!isApproved && (
+                        <button
+                          onClick={() => handleApproveContent(c)}
+                          disabled={isApproving}
+                          className="rounded bg-green-600 px-2 py-0.5 text-xs font-medium text-white hover:bg-green-700 disabled:opacity-50"
+                        >
+                          {isApproving ? "Approving…" : "Approve"}
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                  <div className="flex gap-2 shrink-0">
+                    <button
+                      onClick={() => handleRunTranscript(c)}
+                      disabled={isRunningTranscript || isRunningSnippets}
+                      className="rounded bg-indigo-600 px-3 py-1 text-xs font-medium text-white hover:bg-indigo-700 disabled:opacity-50"
+                    >
+                      {isRunningTranscript ? "Running…" : "Run Transcript"}
+                    </button>
+                    <button
+                      onClick={() => handleGenerateSnippets(c)}
+                      disabled={!latestRun || isRunningTranscript || isRunningSnippets}
+                      title={!latestRun ? "Run a transcript first" : "Generate snippet candidates from transcript"}
+                      className="rounded bg-emerald-600 px-3 py-1 text-xs font-medium text-white hover:bg-emerald-700 disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      {isRunningSnippets ? "Generating…" : "Generate Snippets"}
+                    </button>
+                  </div>
+                </div>
+                {/* v4: media intake record row */}
+                {intakeRecord && (
+                  <div className="rounded bg-slate-50 border border-slate-100 px-3 py-2 text-xs text-slate-600 space-y-0.5">
+                    <p className="font-medium text-slate-700">Media intake</p>
+                    <p>
+                      <span className="font-medium">Method:</span> {intakeRecord.intake_method}{" "}
+                      <span className="font-medium ml-2">Status:</span>{" "}
+                      <span className={intakeRecord.status === "registered" ? "text-green-600" : "text-amber-600"}>
+                        {intakeRecord.status}
+                      </span>
+                    </p>
+                    {intakeRecord.source_url && (
+                      <p className="truncate text-slate-400">{intakeRecord.source_url}</p>
+                    )}
+                    {intakeRecord.media_path && (
+                      <p className="truncate text-slate-400">{intakeRecord.media_path}</p>
+                    )}
+                    {intakeRecord.skip_reason && (
+                      <p className="text-amber-600">Note: {intakeRecord.skip_reason}</p>
+                    )}
+                  </div>
+                )}
+                <div className="flex flex-wrap gap-4 text-xs text-slate-500">
+                  <span>
+                    <span className="font-medium text-slate-600">Audio extraction:</span>{" "}
+                    {audioRun ? (
+                      <span className={audioRun.status === "skipped" ? "text-amber-600" : "text-green-600"}>
+                        {audioRun.status}
+                        {audioRun.skip_reason ? ` (${audioRun.skip_reason})` : ""}
+                      </span>
+                    ) : (
+                      <span className="text-slate-400">not run</span>
+                    )}
+                  </span>
+                  <span>
+                    <span className="font-medium text-slate-600">Transcript runs:</span>{" "}
+                    <span className={runs.length > 0 ? "text-green-600" : "text-slate-400"}>{runs.length}</span>
+                  </span>
+                  {latestRun && (
+                    <span>
+                      <span className="font-medium text-slate-600">Segments:</span>{" "}
+                      <span className="text-green-600">{segs.length}</span>
+                    </span>
+                  )}
+                  <span>
+                    <span className="font-medium text-slate-600">Auto-snippets:</span>{" "}
+                    <span className={snippetCount > 0 ? "text-emerald-600" : "text-slate-400"}>{snippetCount}</span>
+                  </span>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </section>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// v4.5: Prompt Library Section
+// ---------------------------------------------------------------------------
+
+const PROMPT_TYPE_LABELS = {
+  faceless_motivational: "Faceless Motivational",
+  cinematic_broll: "Cinematic B-Roll",
+  abstract_motion: "Abstract Motion",
+  business_explainer: "Business Explainer",
+  quote_card_motion: "Quote Card Motion",
+  podcast_clip_visual: "Podcast Clip Visual",
+  educational_breakdown: "Educational Breakdown",
+  luxury_brand_story: "Luxury Brand Story",
+  product_service_ad: "Product / Service Ad",
+};
+
+const ENGINE_LABELS = {
+  comfyui: "ComfyUI",
+  seedance: "Seedance",
+  higgsfield: "Higgsfield",
+  runway: "Runway",
+  manual: "Manual",
+};
+
+const PROMPT_STATUS_COLORS = {
+  draft: "bg-slate-100 text-slate-700",
+  approved: "bg-green-100 text-green-800",
+  rejected: "bg-red-100 text-red-800",
+  needs_revision: "bg-amber-100 text-amber-800",
+};
+
+function PromptLibrarySection({
+  promptGenerations,
+  contentSnippets,
+  clientProfiles,
+  wsParam,
+  onRefresh,
+  showNotice,
+  demoMode,
+}) {
+  const [reviewingId, setReviewingId] = useState(null);
+  const [reviewNote, setReviewNote] = useState("");
+  const [filterStatus, setFilterStatus] = useState("");
+  const [filterType, setFilterType] = useState("");
+
+  const filtered = (promptGenerations || []).filter((pg) => {
+    if (filterStatus && pg.status !== filterStatus) return false;
+    if (filterType && pg.prompt_type !== filterType) return false;
+    return true;
+  });
+
+  async function handleReview(id, decision) {
+    try {
+      await api.reviewPromptGeneration(id, { decision, note: reviewNote });
+      showNotice(`Prompt ${decision}d.`);
+      setReviewingId(null);
+      setReviewNote("");
+      onRefresh();
+    } catch {
+      showNotice("Review failed. Please try again.");
+    }
+  }
+
+  async function handleGenerate(snippet) {
+    try {
+      await api.createPromptGeneration({
+        ...wsParam(),
+        snippet_id: snippet._id,
+        client_id: snippet.client_id || "",
+        prompt_type: "faceless_motivational",
+        generation_engine_target: "comfyui",
+      });
+      showNotice("Prompt generated and saved as draft.");
+      onRefresh();
+    } catch {
+      showNotice("Generation failed. Snippet must be approved.");
+    }
+  }
+
+  const approvedSnippets = (contentSnippets || []).filter((s) => s.status === "approved");
+
+  return (
+    <section className="space-y-6">
+      <div className="flex flex-wrap items-center gap-3">
+        <h2 className="text-base font-semibold text-slate-950">Prompt Library</h2>
+        <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs text-slate-600">
+          {filtered.length} prompt{filtered.length !== 1 ? "s" : ""}
+        </span>
+        {demoMode && (
+          <span className="rounded-full bg-amber-100 px-2 py-0.5 text-xs text-amber-700">
+            Demo Mode
+          </span>
+        )}
+        <div className="ml-auto flex flex-wrap gap-2">
+          <select
+            value={filterStatus}
+            onChange={(e) => setFilterStatus(e.target.value)}
+            className="rounded border border-slate-200 px-2 py-1 text-xs"
+          >
+            <option value="">All Statuses</option>
+            <option value="draft">Draft</option>
+            <option value="approved">Approved</option>
+            <option value="rejected">Rejected</option>
+            <option value="needs_revision">Needs Revision</option>
+          </select>
+          <select
+            value={filterType}
+            onChange={(e) => setFilterType(e.target.value)}
+            className="rounded border border-slate-200 px-2 py-1 text-xs"
+          >
+            <option value="">All Types</option>
+            {Object.entries(PROMPT_TYPE_LABELS).map(([k, v]) => (
+              <option key={k} value={k}>{v}</option>
+            ))}
+          </select>
+        </div>
+      </div>
+
+      {/* Generate prompt from approved snippet */}
+      {approvedSnippets.length > 0 && (
+        <div className="rounded-lg border border-blue-200 bg-blue-50 p-4">
+          <p className="mb-2 text-sm font-medium text-blue-900">
+            Generate prompt from approved snippet
+          </p>
+          <div className="flex flex-wrap gap-2">
+            {approvedSnippets.slice(0, 5).map((s) => (
+              <button
+                key={s._id}
+                type="button"
+                onClick={() => handleGenerate(s)}
+                className="rounded border border-blue-300 bg-white px-3 py-1 text-xs text-blue-700 hover:bg-blue-100"
+              >
+                {s.transcript_text ? s.transcript_text.slice(0, 40) + "…" : s._id}
+              </button>
+            ))}
+          </div>
+          <p className="mt-1 text-xs text-blue-600">
+            Generates a faceless_motivational prompt (ComfyUI target). No external calls made.
+          </p>
+        </div>
+      )}
+
+      {filtered.length === 0 && (
+        <p className="text-sm text-slate-400">
+          No prompt generations found. Approve a snippet to generate a visual prompt.
+        </p>
+      )}
+
+      <div className="space-y-4">
+        {filtered.map((pg) => {
+          const snippet = (contentSnippets || []).find((s) => s._id === pg.snippet_id);
+          const isReviewing = reviewingId === pg._id;
+          const statusColor = PROMPT_STATUS_COLORS[pg.status] || "bg-slate-100 text-slate-700";
+
+          return (
+            <div key={pg._id} className="rounded-lg border border-slate-200 bg-white p-4 space-y-3">
+              <div className="flex flex-wrap items-center gap-2">
+                <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${statusColor}`}>
+                  {pg.status}
+                </span>
+                <span className="rounded-full bg-indigo-100 px-2 py-0.5 text-xs text-indigo-700">
+                  {PROMPT_TYPE_LABELS[pg.prompt_type] || pg.prompt_type}
+                </span>
+                <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs text-slate-600">
+                  {ENGINE_LABELS[pg.generation_engine_target] || pg.generation_engine_target}
+                </span>
+                {pg.is_demo && (
+                  <span className="rounded-full bg-amber-100 px-2 py-0.5 text-xs text-amber-700">
+                    Demo
+                  </span>
+                )}
+              </div>
+
+              {snippet && (
+                <p className="text-xs text-slate-500">
+                  <span className="font-medium text-slate-700">Snippet: </span>
+                  {(snippet.transcript_text || "").slice(0, 120)}
+                  {snippet.transcript_text && snippet.transcript_text.length > 120 ? "…" : ""}
+                </p>
+              )}
+
+              <div className="rounded bg-slate-50 p-3 space-y-1">
+                <p className="text-xs font-medium text-slate-700">Positive Prompt</p>
+                <p className="text-xs text-slate-600">{pg.positive_prompt}</p>
+              </div>
+
+              {pg.scene_beats && pg.scene_beats.length > 0 && (
+                <div>
+                  <p className="mb-1 text-xs font-medium text-slate-700">Scene Beats</p>
+                  <ol className="list-decimal pl-4 space-y-0.5">
+                    {pg.scene_beats.map((beat, i) => (
+                      <li key={i} className="text-xs text-slate-600">{beat}</li>
+                    ))}
+                  </ol>
+                </div>
+              )}
+
+              {pg.caption_overlay_suggestion && (
+                <p className="text-xs text-slate-500">
+                  <span className="font-medium text-slate-700">Caption: </span>
+                  {pg.caption_overlay_suggestion}
+                </p>
+              )}
+
+              <p className="text-xs text-amber-700 bg-amber-50 rounded px-2 py-1">
+                {pg.safety_notes}
+              </p>
+
+              {/* Review controls */}
+              {pg.status === "draft" || pg.status === "needs_revision" ? (
+                isReviewing ? (
+                  <div className="space-y-2">
+                    <textarea
+                      className="w-full rounded border border-slate-200 p-2 text-xs"
+                      rows={2}
+                      placeholder="Review note (optional)"
+                      value={reviewNote}
+                      onChange={(e) => setReviewNote(e.target.value)}
+                    />
+                    <div className="flex gap-2">
+                      <button
+                        type="button"
+                        onClick={() => handleReview(pg._id, "approve")}
+                        className="rounded bg-green-600 px-3 py-1 text-xs text-white hover:bg-green-700"
+                      >
+                        Approve
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleReview(pg._id, "reject")}
+                        className="rounded bg-red-600 px-3 py-1 text-xs text-white hover:bg-red-700"
+                      >
+                        Reject
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleReview(pg._id, "revise")}
+                        className="rounded bg-amber-500 px-3 py-1 text-xs text-white hover:bg-amber-600"
+                      >
+                        Needs Revision
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => { setReviewingId(null); setReviewNote(""); }}
+                        className="ml-auto rounded border border-slate-200 px-3 py-1 text-xs text-slate-600"
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => setReviewingId(pg._id)}
+                    className="rounded border border-slate-300 px-3 py-1 text-xs text-slate-700 hover:bg-slate-50"
+                  >
+                    Review
+                  </button>
+                )
+              ) : null}
+            </div>
+          );
+        })}
+      </div>
+    </section>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Main page
 // ---------------------------------------------------------------------------
 
@@ -904,10 +1372,21 @@ export default function CreativeStudioPage({ activeWorkspace, refreshTrigger = 0
   const [contentSnippets, setContentSnippets] = useState([]);
   const [creativeAssets, setCreativeAssets] = useState([]);
 
+  // v3 state
+  const [audioExtractionRuns, setAudioExtractionRuns] = useState([]);
+  const [transcriptRuns, setTranscriptRuns] = useState([]);
+  const [transcriptSegments, setTranscriptSegments] = useState([]);
+
+  // v4 state
+  const [mediaIntakeRecords, setMediaIntakeRecords] = useState([]);
+
+  // v4.5 state
+  const [promptGenerations, setPromptGenerations] = useState([]);
+
   async function load() {
     setLoading(true);
     try {
-      const [briefData, draftData, profilesData, channelsData, contentData, snippetsData, assetsData] = await Promise.all([
+      const [briefData, draftData, profilesData, channelsData, contentData, snippetsData, assetsData, audioRunsData, transcriptRunsData, segmentsData, intakeData, promptGenData] = await Promise.all([
         api.contentBriefs({ ...wsParam() }),
         api.contentDrafts({ ...wsParam() }),
         api.clientProfiles({ ...wsParam() }),
@@ -915,6 +1394,11 @@ export default function CreativeStudioPage({ activeWorkspace, refreshTrigger = 0
         api.sourceContent({ ...wsParam() }),
         api.contentSnippets({ ...wsParam() }),
         api.creativeAssets({ ...wsParam() }),
+        api.audioExtractionRuns({ ...wsParam() }),
+        api.transcriptRuns({ ...wsParam() }),
+        api.transcriptSegments({ ...wsParam() }),
+        api.mediaIntakeRecords({ ...wsParam() }),
+        api.promptGenerations({ ...wsParam() }),
       ]);
       setBriefs(briefData.items || []);
       setDrafts(draftData.items || []);
@@ -923,6 +1407,11 @@ export default function CreativeStudioPage({ activeWorkspace, refreshTrigger = 0
       setSourceContent(contentData.items || []);
       setContentSnippets(snippetsData.items || []);
       setCreativeAssets(assetsData.items || []);
+      setAudioExtractionRuns(audioRunsData.items || []);
+      setTranscriptRuns(transcriptRunsData.items || []);
+      setTranscriptSegments(segmentsData.items || []);
+      setMediaIntakeRecords(intakeData.items || []);
+      setPromptGenerations(promptGenData.items || []);
     } catch {
       // fail silently
     } finally {
@@ -1064,6 +1553,8 @@ export default function CreativeStudioPage({ activeWorkspace, refreshTrigger = 0
           { id: "snippets", label: `Snippets (${contentSnippets.length})` },
           { id: "assets", label: `Assets (${creativeAssets.length})` },
           { id: "approval-queue", label: `Approval Queue (${[...contentSnippets, ...creativeAssets].filter((i) => i.status === "needs_review").length})` },
+          { id: "ingest", label: `Ingest Pipeline (${transcriptRuns.length})` },
+          { id: "prompts", label: `Prompt Library (${promptGenerations.length})` },
         ].map(({ id, label }) => (
           <button
             key={id}
@@ -1455,6 +1946,35 @@ export default function CreativeStudioPage({ activeWorkspace, refreshTrigger = 0
             );
           })()}
         </section>
+      )}
+
+      {/* v3: INGEST PIPELINE section */}
+      {activeSection === "ingest" && (
+        <IngestPipelineSection
+          sourceContent={sourceContent}
+          audioExtractionRuns={audioExtractionRuns}
+          transcriptRuns={transcriptRuns}
+          transcriptSegments={transcriptSegments}
+          contentSnippets={contentSnippets}
+          mediaIntakeRecords={mediaIntakeRecords}
+          wsParam={wsParam}
+          onRefresh={load}
+          showNotice={showNotice}
+          demoMode={demoMode}
+        />
+      )}
+
+      {/* v4.5: PROMPT LIBRARY section */}
+      {activeSection === "prompts" && (
+        <PromptLibrarySection
+          promptGenerations={promptGenerations}
+          contentSnippets={contentSnippets}
+          clientProfiles={clientProfiles}
+          wsParam={wsParam}
+          onRefresh={load}
+          showNotice={showNotice}
+          demoMode={demoMode}
+        />
       )}
     </div>
   );

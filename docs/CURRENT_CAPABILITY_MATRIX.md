@@ -77,3 +77,23 @@ SignalForge v1 does not send messages, publish content, create calendar events, 
 ### v2 Safety Boundary
 
 All Social Creative Engine v2 records carry `simulation_only: true` and `outbound_actions_taken: 0`. Likeness, voice, and avatar permissions are explicitly `false` by default and cannot be set to `true` via the API without operator intent. No asset, snippet, or creative record is published, scheduled, or sent automatically. ComfyUI integration is disabled by default; when enabled, it communicates only with a local ComfyUI instance (`host.docker.internal:8188` by default) and writes all results as internal records only.
+
+---
+
+## Social Creative Engine v4.5 — Prompt Generator Library
+
+| Capability | Dashboard-supported | Simulated | Manual | Real/local | Notes |
+|---|---|---|---|---|---|
+| Prompt generation from approved snippet | Yes | Yes | Yes | No | Only approved snippets may trigger generation. Draft-status output. |
+| 9 visual prompt types | Yes | Yes | Yes | No | faceless_motivational, cinematic_broll, abstract_motion, business_explainer, quote_card_motion, podcast_clip_visual, educational_breakdown, luxury_brand_story, product_service_ad |
+| Engine target selection | Yes | Yes | Yes | No | comfyui, seedance, higgsfield, runway, manual. No engine is auto-invoked. |
+| Likeness/avatar gate | Yes | N/A | N/A | N/A | use_likeness=True requires explicit avatar_permissions or likeness_permissions on client profile. |
+| Prompt review workflow | Yes | Yes | Yes | No | approve / reject / revise. Approved status unlocks prompt for operator use. |
+| Workspace isolation | Yes | N/A | N/A | N/A | Prompt generations are scoped to workspace_slug. Demo workspace excluded from real queries. |
+| Default faceless guarantee | Yes | N/A | N/A | N/A | Negative prompt always blocks faces, likenesses, and identifiable people. Voice cloning never requested. |
+| Source traceability | Yes | N/A | N/A | N/A | source_url, snippet_transcript, snippet_usage_status preserved on every record. |
+| Prompt Library tab | Yes | Yes | N/A | N/A | Dedicated tab in Creative Studio dashboard. Generate, filter, and review prompts inline. |
+
+### v4.5 Safety Boundary
+
+All prompt_generations records carry `simulation_only: true` and `outbound_actions_taken: 0`. Default negative prompt blocks all identifiable faces, likenesses, and avatars. Voice cloning instructions are never generated. No ComfyUI, Seedance, Higgsfield, or Runway calls are made by SignalForge; the operator must execute any asset generation externally after review. `use_likeness=True` requires explicit client profile permissions. All prompts enter as `status: draft` and must be reviewed before use.
