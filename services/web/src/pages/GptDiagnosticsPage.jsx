@@ -81,6 +81,22 @@ export default function GptDiagnosticsPage() {
           </div>
 
           <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+            <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <h3 className="text-lg font-semibold text-slate-950">Model Routing</h3>
+                <p className="mt-1 text-sm text-slate-600">Routes GPT calls to the right model based on task complexity and cost.</p>
+              </div>
+              <StatusBadge value={diagnostics.model_routing_enabled ? "routing enabled" : "routing disabled"} />
+            </div>
+            <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+              <Stat label="Draft model" value={diagnostics.draft_model || "not set"} />
+              <Stat label="Agent model" value={diagnostics.agent_model || "not set"} />
+              <Stat label="Review model" value={diagnostics.review_model || "not set"} />
+              <Stat label="Fallback model" value={diagnostics.fallback_model || "not set"} />
+            </div>
+          </section>
+
+          <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
             <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
               <div>
                 <h3 className="text-lg font-semibold text-slate-950">Last GPT Activity</h3>
@@ -119,7 +135,7 @@ export default function GptDiagnosticsPage() {
             <div className="overflow-hidden rounded-lg border border-slate-200">
               <table className="min-w-full divide-y divide-slate-200 text-sm">
                 <thead className="bg-slate-50 text-left text-xs font-semibold uppercase text-slate-500">
-                  <tr><th className="px-4 py-3">When</th><th className="px-4 py-3">Step</th><th className="px-4 py-3">Agent</th><th className="px-4 py-3">Confidence</th><th className="px-4 py-3">Result</th></tr>
+                  <tr><th className="px-4 py-3">When</th><th className="px-4 py-3">Step</th><th className="px-4 py-3">Agent</th><th className="px-4 py-3">Model</th><th className="px-4 py-3">Complexity</th><th className="px-4 py-3">Confidence</th><th className="px-4 py-3">Result</th></tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100 bg-white">
                   {recentSteps.map((step, index) => (
@@ -127,11 +143,13 @@ export default function GptDiagnosticsPage() {
                       <td className="px-4 py-3 text-slate-500">{formatDate(step.timestamp)}</td>
                       <td className="px-4 py-3 font-medium text-slate-900">{step.step_name}</td>
                       <td className="px-4 py-3 text-slate-600">{step.agent_name || "-"}</td>
+                      <td className="px-4 py-3 text-slate-600">{step.selected_model || "-"}</td>
+                      <td className="px-4 py-3 text-slate-600">{step.complexity || "-"}</td>
                       <td className="px-4 py-3 text-slate-600">{step.confidence ?? "-"}</td>
                       <td className="px-4 py-3 text-slate-600">{step.error || step.reasoning_summary || "No summary recorded"}</td>
                     </tr>
                   ))}
-                  {!recentSteps.length ? <tr><td colSpan="5" className="px-4 py-5 text-slate-500">No GPT steps recorded.</td></tr> : null}
+                  {!recentSteps.length ? <tr><td colSpan="7" className="px-4 py-5 text-slate-500">No GPT steps recorded.</td></tr> : null}
                 </tbody>
               </table>
             </div>

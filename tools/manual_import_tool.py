@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import re
 from io import StringIO
 from pathlib import Path
 from typing import Any
@@ -9,6 +10,8 @@ from bson import ObjectId
 
 from tools.base_tool import BaseTool, clean_text, slugify, utc_now
 
+
+_EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]{2,}$")
 
 EXPECTED_FIELDS = (
     "company",
@@ -31,7 +34,21 @@ class ManualCandidateImportTool(BaseTool):
     tool_name = "manual_upload"
     mode = "manual_csv_read_only"
 
-    def parse_csv_text(self, csv_text: str, module: str, source_label: str) -> list[dict[str, Any]]:
+    def _collect_row_errors(self, row: dict[str, Any], row_number: int) -> list[dict[str, Any]]:
+        """Return a list of per-row validation error dicts (non-fatal)."""
+        errors: list[dict[str, Any]] = []
+        email = clean_text(row.get("email"))
+        if email and not _EMAIL_RE.match(email):
+            errors.append({"row": row_number, "field": "email", "error": f"Invalid email format: {email}"})
+        return errors
+
+    def parse_csv_text(self, csv_text: str, module: str, source_label: str) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+        """Parse CSV text and return (candidates, row_errors).
+
+        Raises CandidateImportError for fatal structural problems (empty file,
+        missing required header columns).  Per-row issues are collected in
+        row_errors instead of aborting the batch.
+        """
         if not clean_text(csv_text):
             raise CandidateImportError("CSV file is empty.")
 
@@ -45,18 +62,37 @@ class ManualCandidateImportTool(BaseTool):
             raise CandidateImportError(f"CSV is missing required fields: {', '.join(missing)}")
 
         candidates: list[dict[str, Any]] = []
+        row_errors: list[dict[str, Any]] = []
+        seen_company_keys: dict[str, int] = {}  # track within-import duplicates
         imported_at = utc_now()
+
         for row_number, row in enumerate(reader, start=2):
             normalized_row = {clean_text(key).lower(): clean_text(value) for key, value in row.items()}
             if not any(normalized_row.get(field, "") for field in EXPECTED_FIELDS):
+                row_errors.append({"row": row_number, "field": None, "error": "Row has no data in expected fields — skipped"})
                 continue
+
+            row_errors.extend(self._collect_row_errors(normalized_row, row_number))
+
+            # Detect within-import duplicates by company name
+            company = clean_text(normalized_row.get("company")).lower()
+            if company:
+                if company in seen_company_keys:
+                    row_errors.append({
+                        "row": row_number,
+                        "field": "company",
+                        "error": f"Duplicate within import: company '{normalized_row.get('company')}' already appears at row {seen_company_keys[company]}",
+                    })
+                else:
+                    seen_company_keys[company] = row_number
+
             candidate = self.normalize_row(normalized_row, module, source_label, imported_at, row_number)
             if candidate:
                 candidates.append(candidate)
 
         if not candidates:
             raise CandidateImportError("CSV has no importable candidate rows.")
-        return candidates
+        return candidates, row_errors
 
     def normalize_row(self, row: dict[str, Any], module: str, source_label: str, imported_at, row_number: int) -> dict[str, Any] | None:
         company = clean_text(row.get("company"))
@@ -116,7 +152,7 @@ class ManualCandidateImportTool(BaseTool):
         return csv_path.read_text(encoding="utf-8-sig")
 
     def run_text(self, csv_text: str, module: str, source_label: str, db=None, file_name: str = "uploaded.csv") -> dict[str, Any]:
-        candidates = self.parse_csv_text(csv_text, module, source_label)
+        candidates, row_errors = self.parse_csv_text(csv_text, module, source_label)
         input_payload = {
             "module": module,
             "source_label": source_label,
@@ -130,6 +166,8 @@ class ManualCandidateImportTool(BaseTool):
             "duplicate_count": duplicate_count,
             "source_label": source_label,
             "outbound_actions_taken": 0,
+            "row_errors": row_errors,
+            "error_count": len(row_errors),
         }
         tool_run_id = self.record_tool_run(db, input_payload, output_summary)
         candidate_ids = self.insert_candidates(db, candidates, tool_run_id)
@@ -149,6 +187,7 @@ class ManualCandidateImportTool(BaseTool):
                 "input": input_payload,
                 "candidate_count": len(candidate_ids),
                 "duplicate_count": duplicate_count,
+                "error_count": len(row_errors),
                 "candidate_ids": candidate_ids,
                 "simulation_only": True,
                 "outbound_actions_taken": 0,
@@ -160,6 +199,8 @@ class ManualCandidateImportTool(BaseTool):
             "artifact_id": artifact_id,
             "candidate_count": len(candidate_ids),
             "duplicate_count": duplicate_count,
+            "error_count": len(row_errors),
+            "row_errors": row_errors,
             "source_label": source_label,
             "simulation_only": True,
             "outbound_actions_taken": 0,

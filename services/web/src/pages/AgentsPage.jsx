@@ -63,10 +63,17 @@ function Timeline({ steps }) {
                 <StatusBadge value="gpt step" />
                 <StatusBadge value={step.output?.used_gpt ? "used gpt" : "gpt not used"} />
                 <StatusBadge value={`confidence ${formatConfidence(step.output?.confidence)}`} />
+                {step.output?.complexity ? <StatusBadge value={`complexity ${step.output.complexity}`} /> : null}
               </div>
               <div className="mt-3 grid gap-2 text-sm text-purple-950 md:grid-cols-2">
                 <div><span className="font-medium">Step:</span> {step.step_name}</div>
                 <div><span className="font-medium">Output length:</span> {step.output?.output_length ?? "-"}</div>
+                {step.output?.selected_model ? (
+                  <div><span className="font-medium">Model:</span> {step.output.selected_model}</div>
+                ) : null}
+                {step.output?.routing_reason ? (
+                  <div><span className="font-medium">Routing:</span> {step.output.routing_reason}</div>
+                ) : null}
                 <div className="md:col-span-2"><span className="font-medium">Reasoning:</span> {step.output?.reasoning_summary || step.output?.error || "No reasoning summary recorded."}</div>
               </div>
             </div>

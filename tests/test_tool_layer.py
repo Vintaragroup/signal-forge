@@ -371,3 +371,149 @@ def test_browser_scroll_reports_disabled_without_playwright(monkeypatch):
     assert result["candidate_ids"] == []
     assert "Playwright" in result["error"]
     assert db.tool_runs.documents[0]["status"] == "failed"
+
+
+# ---------------------------------------------------------------------------
+# Research Import Management v1 — 8 new tests
+# ---------------------------------------------------------------------------
+
+
+def test_import_row_errors_stored_in_tool_run(monkeypatch):
+    """Invalid email rows are collected as row_errors and stored on the tool_run."""
+    db = FakeDatabase()
+    patch_database(monkeypatch, db)
+    client = TestClient(app)
+
+    csv_text = (
+        "company,website,phone,email,city,state,service_category,notes,source_url\n"
+        "Good Co,https://good.test,(512) 555-0100,good@good.test,Austin,TX,roofing,Good company.,https://good.test\n"
+        "Bad Email Co,https://bad.test,(512) 555-0101,not-an-email,Austin,TX,roofing,Bad email row.,https://bad.test\n"
+    )
+    response = client.post(
+        "/tools/import-candidates",
+        json={"module": "contractor_growth", "source_label": "test_label", "csv_text": csv_text},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["error_count"] == 1
+    assert payload["candidate_count"] == 2  # invalid email row still becomes a candidate
+    run = db.tool_runs.documents[0]
+    assert "row_errors" in run["output_summary"]
+    assert len(run["output_summary"]["row_errors"]) == 1
+    assert run["output_summary"]["row_errors"][0]["field"] == "email"
+
+
+def test_import_history_endpoint_lists_manual_uploads(monkeypatch):
+    """GET /tools/import-history returns only manual_upload tool_runs."""
+    db = FakeDatabase()
+    db.tool_runs.insert_one({"tool_name": "manual_upload", "input": {"module": "contractor_growth", "source_label": "src_a"}, "status": "completed", "output_summary": {"candidate_count": 3, "duplicate_count": 0, "error_count": 0, "row_count": 3}})
+    db.tool_runs.insert_one({"tool_name": "web_search", "input": {"query": "roofing"}, "status": "completed", "output_summary": {}})
+    patch_database(monkeypatch, db)
+    client = TestClient(app)
+
+    response = client.get("/tools/import-history")
+    assert response.status_code == 200
+    items = response.json()["items"]
+    assert len(items) == 1
+    assert items[0]["source_label"] == "src_a"
+    assert items[0]["candidate_count"] == 3
+
+
+def test_import_history_detail_returns_candidates_for_run(monkeypatch):
+    """GET /tools/import-history/{id}/candidates returns candidates for that tool_run."""
+    db = FakeDatabase()
+    run_doc = {"tool_name": "manual_upload", "input": {"module": "contractor_growth", "source_label": "src_a"}, "status": "completed", "output_summary": {}}
+    result = db.tool_runs.insert_one(run_doc)
+    run_id = str(result.inserted_id)
+
+    db.scraped_candidates.insert_one({"company": "Test Corp", "tool_run_id": run_id, "status": "needs_review", "is_duplicate": False})
+    db.scraped_candidates.insert_one({"company": "Other Corp", "tool_run_id": "different_run", "status": "needs_review", "is_duplicate": False})
+    patch_database(monkeypatch, db)
+    client = TestClient(app)
+
+    response = client.get(f"/tools/import-history/{run_id}/candidates")
+    assert response.status_code == 200
+    items = response.json()["items"]
+    assert len(items) == 1
+    assert items[0]["company"] == "Test Corp"
+
+
+def test_import_history_errors_endpoint_returns_row_errors(monkeypatch):
+    """GET /tools/import-history/{id}/errors returns row_errors from output_summary."""
+    db = FakeDatabase()
+    row_errors = [{"row": 2, "field": "email", "error": "Invalid email format", "value": "bad@"}]
+    run_doc = {"tool_name": "manual_upload", "input": {}, "status": "completed", "output_summary": {"row_errors": row_errors}}
+    result = db.tool_runs.insert_one(run_doc)
+    run_id = str(result.inserted_id)
+    patch_database(monkeypatch, db)
+    client = TestClient(app)
+
+    response = client.get(f"/tools/import-history/{run_id}/errors")
+    assert response.status_code == 200
+    items = response.json()["items"]
+    assert len(items) == 1
+    assert items[0]["field"] == "email"
+
+
+def test_bulk_action_approve(monkeypatch):
+    """POST /scraped-candidates/bulk-action approve updates all specified candidates."""
+    db = FakeDatabase()
+    ids = []
+    for i in range(3):
+        r = db.scraped_candidates.insert_one({"company": f"Co {i}", "status": "needs_review", "is_duplicate": False, "outbound_actions_taken": 0})
+        ids.append(str(r.inserted_id))
+    patch_database(monkeypatch, db)
+    client = TestClient(app)
+
+    response = client.post("/scraped-candidates/bulk-action", json={"action": "approve", "candidate_ids": ids, "note": "bulk test"})
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ok_count"] == 3
+    assert all(c["status"] == "approved" for c in db.scraped_candidates.documents)
+
+
+def test_bulk_action_reject(monkeypatch):
+    """POST /scraped-candidates/bulk-action reject updates all specified candidates."""
+    db = FakeDatabase()
+    ids = []
+    for i in range(2):
+        r = db.scraped_candidates.insert_one({"company": f"Co {i}", "status": "needs_review", "is_duplicate": False, "outbound_actions_taken": 0})
+        ids.append(str(r.inserted_id))
+    patch_database(monkeypatch, db)
+    client = TestClient(app)
+
+    response = client.post("/scraped-candidates/bulk-action", json={"action": "reject", "candidate_ids": ids, "note": ""})
+    assert response.status_code == 200
+    assert all(c["status"] == "rejected" for c in db.scraped_candidates.documents)
+
+
+def test_bulk_action_convert_blocked_without_approval(monkeypatch):
+    """Bulk convert_to_contact is blocked when candidates are not approved."""
+    db = FakeDatabase()
+    r = db.scraped_candidates.insert_one({"company": "Unapproved Co", "status": "needs_review", "is_duplicate": False, "outbound_actions_taken": 0})
+    candidate_id = str(r.inserted_id)
+    patch_database(monkeypatch, db)
+    client = TestClient(app)
+
+    response = client.post("/scraped-candidates/bulk-action", json={"action": "convert_to_contact", "candidate_ids": [candidate_id], "note": ""})
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["fail_count"] == 1
+    assert db.contacts.documents == []
+    assert db.scraped_candidates.documents[0]["status"] == "needs_review"
+
+
+def test_scraped_candidates_filter_by_source_label(monkeypatch):
+    """GET /scraped-candidates?source_label= filters results by source_label."""
+    db = FakeDatabase()
+    db.scraped_candidates.insert_one({"company": "A", "source_label": "label_x", "status": "needs_review", "is_duplicate": False})
+    db.scraped_candidates.insert_one({"company": "B", "source_label": "label_y", "status": "needs_review", "is_duplicate": False})
+    patch_database(monkeypatch, db)
+    client = TestClient(app)
+
+    response = client.get("/scraped-candidates?source_label=label_x")
+    assert response.status_code == 200
+    items = response.json()["items"]
+    assert len(items) == 1
+    assert items[0]["company"] == "A"

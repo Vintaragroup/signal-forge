@@ -76,6 +76,54 @@ Review the resulting records in the dashboard Research / Tools page. Tool output
 
 Tool Layer v1 is read-only: no form submission, login, posting, messaging, captcha bypass, protected/private scraping, external CRM update, or outbound action. Agent tool usage creates research artifacts and approval requests only.
 
+## 1C. Research Import Management Workflow
+
+After importing a CSV of candidates, use the **Import History** section of the Research / Tools page to audit and act on the batch.
+
+**Review Import History**
+
+The Import History table lists every manual CSV import with:
+- Source label and module
+- Row count, candidate count, duplicate count, error count
+- Status and timestamp
+
+Click any row to expand the import detail view.
+
+**Review Import Detail**
+
+The expanded detail view shows:
+- All candidates from that import with quality score, completeness score, duplicate flag, approval status, and conversion status.
+- A row errors panel listing any invalid email addresses, malformed fields, or within-import duplicate companies collected during parsing.
+
+**Apply Advanced Filters**
+
+Use the Advanced Filters panel above the candidate table to narrow results by:
+- Source label (exact match)
+- Module
+- Quality score range (min/max)
+- Converted / not converted
+
+Click **Apply Filters** to refresh the table.
+
+**Bulk-Approve Candidates**
+
+1. Select one or more candidate rows using the checkboxes.
+2. The bulk action bar appears at the top of the table.
+3. Choose **Approve Selected** and confirm.
+4. Only approved candidates may later be converted.
+
+**Bulk-Reject Candidates**
+
+Select candidates and choose **Reject Selected** from the bulk action bar.
+
+**Bulk-Convert Candidates**
+
+Select already-approved candidates and choose **Convert Selected to Contact** from the bulk action bar. A confirmation dialog appears before any conversion is executed. Candidates that are not yet approved will fail conversion and be reported in the result summary.
+
+**Review Row Errors**
+
+Open the Import History detail view for any import and scroll to the Row Errors panel. Each error shows the row number, field name, error description, and the raw value that failed validation. Use this to identify rows that need correction in the source CSV before re-importing.
+
 ## 2. Run The Lead Pipeline
 
 ```bash

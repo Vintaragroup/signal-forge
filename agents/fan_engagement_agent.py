@@ -188,6 +188,9 @@ class FanEngagementAgent(BaseAgent):
                 "scraped_platforms": False,
                 "scheduled": False,
                 "error": result.get("error"),
+                "selected_model": result.get("selected_model"),
+                "routing_reason": result.get("routing_reason"),
+                "complexity": result.get("complexity"),
             },
         )
 

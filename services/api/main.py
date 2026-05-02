@@ -100,6 +100,12 @@ class CandidateImportRequest(BaseModel):
     csv_text: str = ""
 
 
+class BulkCandidateActionRequest(BaseModel):
+    action: Literal["approve", "reject", "convert_to_contact", "convert_to_lead"]
+    candidate_ids: list[str]
+    note: str = ""
+
+
 def utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -213,6 +219,11 @@ def gpt_runtime_status() -> dict:
         "model": clean_text(os.getenv("OPENAI_MODEL")) or DEFAULT_OPENAI_MODEL,
         "has_api_key": bool(clean_text(os.getenv("OPENAI_API_KEY"))),
         "safety_mode": GPT_SAFETY_MODE,
+        "model_routing_enabled": env_enabled(os.getenv("OPENAI_MODEL_ROUTING_ENABLED", "false")),
+        "agent_model": clean_text(os.getenv("OPENAI_AGENT_MODEL")) or DEFAULT_OPENAI_MODEL,
+        "draft_model": clean_text(os.getenv("OPENAI_DRAFT_MODEL")) or DEFAULT_OPENAI_MODEL,
+        "review_model": clean_text(os.getenv("OPENAI_REVIEW_MODEL")) or DEFAULT_OPENAI_MODEL,
+        "fallback_model": clean_text(os.getenv("OPENAI_FALLBACK_MODEL")) or DEFAULT_OPENAI_MODEL,
     }
 
 
@@ -239,6 +250,9 @@ def safe_gpt_step_summary(step: dict) -> dict:
         "reasoning_summary": clean_text(output.get("reasoning_summary")),
         "output_length": output.get("output_length"),
         "error": clean_text(output.get("error")),
+        "selected_model": clean_text(output.get("selected_model")),
+        "routing_reason": clean_text(output.get("routing_reason")),
+        "complexity": clean_text(output.get("complexity")),
     }
 
 
@@ -268,6 +282,11 @@ def gpt_diagnostics_status(db=None) -> dict:
         "has_api_key": runtime["has_api_key"],
         "api_key_source": "env" if runtime["has_api_key"] else "missing",
         "client_available": gpt_client_available(),
+        "model_routing_enabled": runtime["model_routing_enabled"],
+        "agent_model": runtime["agent_model"],
+        "draft_model": runtime["draft_model"],
+        "review_model": runtime["review_model"],
+        "fallback_model": runtime["fallback_model"],
         "last_gpt_error_summary": None,
         "last_gpt_error_at": None,
         "last_successful_gpt_call_at": None,
@@ -743,6 +762,13 @@ def find_scraped_candidate(db, candidate_id: str) -> dict | None:
     if ObjectId.is_valid(candidate_id):
         query = {"$or": [{"_id": ObjectId(candidate_id)}, {"_id": candidate_id}]}
     return db.scraped_candidates.find_one(query)
+
+
+def find_tool_run(db, run_id: str) -> dict | None:
+    query: dict[str, Any] = {"_id": run_id}
+    if ObjectId.is_valid(run_id):
+        query = {"$or": [{"_id": ObjectId(run_id)}, {"_id": run_id}]}
+    return db.tool_runs.find_one(query)
 
 
 def candidate_display_name(candidate: dict) -> str:
@@ -1401,7 +1427,18 @@ async def import_candidates_tool(request: Request) -> dict:
 
 
 @app.get("/scraped-candidates")
-def scraped_candidates(status: str = "", agent_run_id: str = "", include_duplicates: bool = False, limit: int = Query(100, ge=1, le=500)) -> dict:
+def scraped_candidates(
+    status: str = "",
+    agent_run_id: str = "",
+    tool_run_id: str = "",
+    include_duplicates: bool = False,
+    source_label: str = "",
+    module: str = "",
+    min_quality: int | None = None,
+    max_quality: int | None = None,
+    converted: bool | None = None,
+    limit: int = Query(100, ge=1, le=500),
+) -> dict:
     client = get_client()
     try:
         db = get_database(client)
@@ -1410,9 +1447,23 @@ def scraped_candidates(status: str = "", agent_run_id: str = "", include_duplica
             query["status"] = status
         if agent_run_id:
             query["linked_agent_run_id"] = agent_run_id
+        if tool_run_id:
+            query["tool_run_id"] = tool_run_id
+        if source_label:
+            query["source_label"] = source_label
+        if module:
+            query["module"] = module
         items = list(db.scraped_candidates.find(query))
         if not include_duplicates:
             items = [item for item in items if not item.get("is_duplicate")]
+        if min_quality is not None:
+            items = [item for item in items if int(item.get("quality_score") or 0) >= min_quality]
+        if max_quality is not None:
+            items = [item for item in items if int(item.get("quality_score") or 0) <= max_quality]
+        if converted is True:
+            items = [item for item in items if str(item.get("status", "")).startswith("converted_to_")]
+        elif converted is False:
+            items = [item for item in items if not str(item.get("status", "")).startswith("converted_to_")]
         items.sort(key=lambda item: (int(item.get("quality_score") or 0), float(item.get("confidence") or 0), item.get("created_at") or utc_now()), reverse=True)
         items = items[:limit]
         return {"items": serialize(items), "count": len(items), "simulation_only": True}
@@ -1468,6 +1519,149 @@ def decide_scraped_candidate(candidate_id: str, payload: ScrapedCandidateDecisio
             "message": "Candidate decision recorded. No outbound actions were taken.",
             "simulation_only": True,
         }
+    finally:
+        client.close()
+
+
+@app.post("/scraped-candidates/bulk-action")
+def bulk_candidate_action(payload: BulkCandidateActionRequest) -> dict:
+    if not payload.candidate_ids:
+        raise HTTPException(status_code=400, detail="candidate_ids must not be empty.")
+
+    client = get_client()
+    decided_at = utc_now()
+    results = []
+    try:
+        db = get_database(client)
+        for candidate_id in payload.candidate_ids:
+            candidate = find_scraped_candidate(db, candidate_id)
+            if not candidate:
+                results.append({"id": candidate_id, "ok": False, "reason": "not_found"})
+                continue
+
+            decision = payload.action
+            if decision.startswith("convert_to_") and candidate.get("status") != "approved":
+                results.append({"id": candidate_id, "ok": False, "reason": "must_be_approved_before_conversion"})
+                continue
+
+            new_status = (
+                "approved" if decision == "approve"
+                else "rejected" if decision == "reject"
+                else f"converted_to_{decision.removeprefix('convert_to_')}"
+            )
+            update_fields: dict[str, Any] = {
+                "status": new_status,
+                "last_decision": decision,
+                "decision_note": clean_text(payload.note),
+                "decided_at": decided_at,
+                "updated_at": decided_at,
+                "outbound_actions_taken": 0,
+            }
+            created_record = None
+            if decision == "convert_to_contact":
+                created_record = create_contact_from_candidate(db, candidate, decided_at)
+                update_fields.update({"created_record_type": "contact", "created_record_id": str(created_record.get("_id"))})
+            elif decision == "convert_to_lead":
+                created_record = create_lead_from_candidate(db, candidate, decided_at)
+                update_fields.update({"created_record_type": "lead", "created_record_id": str(created_record.get("_id"))})
+
+            event = {"decision": decision, "note": clean_text(payload.note), "decided_at": decided_at, "outbound_actions_taken": 0, "bulk": True}
+            db.scraped_candidates.update_one({"_id": candidate.get("_id")}, {"$set": update_fields, "$push": {"decision_events": event}})
+
+            approval_request_id = clean_text(candidate.get("approval_request_id"))
+            if approval_request_id:
+                approval_update = {
+                    "status": "approved" if decision in {"approve", "convert_to_contact", "convert_to_lead"} else "rejected",
+                    "decision": decision,
+                    "decision_note": clean_text(payload.note),
+                    "resolved_at": decided_at,
+                }
+                approval_query: dict[str, Any] = {"_id": approval_request_id}
+                if ObjectId.is_valid(approval_request_id):
+                    approval_query = {"$or": [{"_id": ObjectId(approval_request_id)}, {"_id": approval_request_id}]}
+                db.approval_requests.update_one(approval_query, {"$set": approval_update})
+
+            results.append({
+                "id": candidate_id,
+                "ok": True,
+                "new_status": new_status,
+                "created_record_type": update_fields.get("created_record_type"),
+                "created_record_id": update_fields.get("created_record_id"),
+            })
+
+        ok_count = sum(1 for r in results if r.get("ok"))
+        fail_count = len(results) - ok_count
+        return {
+            "results": serialize(results),
+            "ok_count": ok_count,
+            "fail_count": fail_count,
+            "message": f"Bulk action '{payload.action}' applied. {ok_count} succeeded, {fail_count} failed. No outbound actions taken.",
+            "simulation_only": True,
+        }
+    finally:
+        client.close()
+
+
+@app.get("/tools/import-history")
+def import_history(
+    module: str = "",
+    source_label: str = "",
+    limit: int = Query(50, ge=1, le=200),
+) -> dict:
+    client = get_client()
+    try:
+        db = get_database(client)
+        items = list(db.tool_runs.find({"tool_name": "manual_upload"}).sort([("created_at", -1)]))
+        if module:
+            items = [item for item in items if (item.get("input") or {}).get("module") == module]
+        if source_label:
+            items = [item for item in items if (item.get("input") or {}).get("source_label") == source_label]
+        items = items[:limit]
+        for item in items:
+            output = item.get("output_summary") or {}
+            item["candidate_count"] = output.get("candidate_count", 0)
+            item["duplicate_count"] = output.get("duplicate_count", 0)
+            item["error_count"] = len(output.get("row_errors") or [])
+            item["row_count"] = (item.get("input") or {}).get("row_count", 0)
+            item["source_label"] = (item.get("input") or {}).get("source_label", "")
+            item["module"] = (item.get("input") or {}).get("module", "")
+        return {"items": serialize(items), "count": len(items)}
+    finally:
+        client.close()
+
+
+@app.get("/tools/import-history/{tool_run_id}/candidates")
+def import_history_candidates(
+    tool_run_id: str,
+    include_duplicates: bool = False,
+    limit: int = Query(200, ge=1, le=1000),
+) -> dict:
+    client = get_client()
+    try:
+        db = get_database(client)
+        run = find_tool_run(db, tool_run_id)
+        if not run or clean_text(run.get("tool_name")) != "manual_upload":
+            raise HTTPException(status_code=404, detail="Import run not found.")
+        run_id_str = str(run.get("_id"))
+        items = list(db.scraped_candidates.find({"tool_run_id": run_id_str}))
+        if not include_duplicates:
+            items = [item for item in items if not item.get("is_duplicate")]
+        items = items[:limit]
+        return {"items": serialize(items), "count": len(items), "tool_run_id": run_id_str}
+    finally:
+        client.close()
+
+
+@app.get("/tools/import-history/{tool_run_id}/errors")
+def import_history_errors(tool_run_id: str) -> dict:
+    client = get_client()
+    try:
+        db = get_database(client)
+        run = find_tool_run(db, tool_run_id)
+        if not run or clean_text(run.get("tool_name")) != "manual_upload":
+            raise HTTPException(status_code=404, detail="Import run not found.")
+        row_errors = (run.get("output_summary") or {}).get("row_errors") or []
+        return {"items": row_errors, "count": len(row_errors), "tool_run_id": str(run.get("_id"))}
     finally:
         client.close()
 

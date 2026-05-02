@@ -171,6 +171,9 @@ class OutreachAgent(BaseAgent):
                 "reasoning_summary": result.get("reasoning_summary", ""),
                 "output_length": len(result.get("output") or ""),
                 "error": result.get("error"),
+                "selected_model": result.get("selected_model"),
+                "routing_reason": result.get("routing_reason"),
+                "complexity": result.get("complexity"),
             },
         )
 

@@ -76,6 +76,15 @@ export const api = {
       method: "POST",
       body: JSON.stringify(payload),
     }),
+  bulkCandidateAction: (payload) =>
+    request("/scraped-candidates/bulk-action", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  importHistory: (params = {}) => request(`/tools/import-history?${new URLSearchParams(params)}`),
+  importHistoryDetail: (runId, params = {}) =>
+    request(`/tools/import-history/${encodeURIComponent(runId)}/candidates?${new URLSearchParams(params)}`),
+  importHistoryErrors: (runId) => request(`/tools/import-history/${encodeURIComponent(runId)}/errors`),
   agentTasks: (params = {}) => request(`/agent-tasks?${new URLSearchParams(params)}`),
   createAgentTask: (payload) =>
     request("/agent-tasks", {

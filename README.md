@@ -132,6 +132,22 @@ The dashboard Research / Tools page shows tool history, inputs, source URLs, ext
 
 Outreach and content agents can optionally run the tool layer from the Agent Console. Tool-enabled agent runs create research artifacts and approval requests only. They do not convert candidates, send messages, submit forms, post content, bypass captcha, scrape protected/private areas, or take any outbound action. `SERPAPI_KEY` is reserved for future support; v1 remains deterministic unless explicitly extended later.
 
+## Research Import Management v1
+
+The Research / Tools dashboard now provides full import audit and management capabilities for manual CSV imports:
+
+**Import History** — every CSV import is listed with source label, module, imported row count, candidate count, duplicate count, error count, timestamp, and status. Click any import row to expand its detail view.
+
+**Import Detail View** — per-import view of all imported candidates with quality scores, completeness scores, duplicate status, approval status, and conversion status. Row-level errors (invalid email, malformed fields, within-import duplicates) are shown in a separate error panel.
+
+**Candidate Bulk Actions** — operators can approve, reject, or convert multiple candidates at once from the candidate table. Bulk convert requires candidates to already be approved; a confirmation dialog is shown before any bulk conversion. Candidate selection is per-page; the action bar appears automatically when one or more candidates are selected.
+
+**Advanced Filters** — the candidate table supports filtering by source label, module, quality score range, and conversion status. Use the Advanced Filters panel above the table to apply compound filters.
+
+**Import Error Display** — row-level errors collected during CSV parsing (invalid email format, blank rows, within-import duplicate companies) are stored on the tool_run record and displayed in the Import History detail view. Invalid email rows are flagged but still enter the review pipeline so operators can correct or reject them manually.
+
+API endpoints added: `GET /tools/import-history`, `GET /tools/import-history/{id}/candidates`, `GET /tools/import-history/{id}/errors`, `POST /scraped-candidates/bulk-action`.
+
 ## Agent Task Queue v1
 
 Agents are now run from the dashboard via Agent Tasks. The dashboard Agent Tasks page lets operators create, queue, run, and cancel agent tasks without using CLI dry-runs directly. Agents now run in a live panel with visible step execution and outputs. Tasks are stored in MongoDB in the `agent_tasks` collection and link to the resulting Agent Console run when executed.

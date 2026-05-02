@@ -217,6 +217,9 @@ class FollowupAgent(BaseAgent):
                 "created_approval_request_id": approval_id,
                 "recommendation_created": bool(artifact_id),
                 "error": result.get("error"),
+                "selected_model": result.get("selected_model"),
+                "routing_reason": result.get("routing_reason"),
+                "complexity": result.get("complexity"),
             },
         )
 

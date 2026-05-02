@@ -1,7 +1,7 @@
 from agents.gpt_client import generate_agent_response
 
 
-EXPECTED_KEYS = {"enabled", "used_gpt", "output", "confidence", "reasoning_summary", "error"}
+EXPECTED_KEYS = {"enabled", "used_gpt", "output", "confidence", "reasoning_summary", "error", "selected_model", "routing_reason", "complexity"}
 
 
 def test_gpt_client_returns_disabled_state(monkeypatch):
