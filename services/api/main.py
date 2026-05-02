@@ -522,6 +522,65 @@ def message_timeline(message: dict, linked_deal: dict | None = None) -> list[dic
     return sorted(timeline, key=lambda item: str(item.get("timestamp") or ""))
 
 
+# ---------------------------------------------------------------------------
+# Workspace data quality helpers
+# ---------------------------------------------------------------------------
+
+_MOCK_SOURCES = {
+    "mock",
+    "demo",
+    "synthetic",
+    "contractor_test_campaign",
+    "contractor_test_campaign_v1",
+    "gpt_runtime_test_campaign_v1",
+    "tool_layer_review",
+}
+
+_MOCK_PATTERN = re.compile(
+    r"\bmock\b|\bdemo\b|\bsynthetic\b|\btest\b|\bsample\b"
+    r"|contractor_test_campaign|module-v\d|module\d+-test"
+    r"|gpt_runtime_test|manual_contractor_test_cli|tool_layer_review",
+    re.IGNORECASE,
+)
+
+_MOCK_SCAN_FIELDS = ("source", "source_label", "run_id", "name", "notes", "company", "company_name")
+
+
+def _is_mock_record(doc: dict) -> bool:
+    if doc.get("is_demo") or doc.get("is_test"):
+        return True
+    for field in _MOCK_SCAN_FIELDS:
+        value = doc.get(field)
+        if isinstance(value, str) and _MOCK_PATTERN.search(value):
+            return True
+    return False
+
+
+def _is_legacy_record(doc: dict) -> bool:
+    ws = doc.get("workspace_slug")
+    return not ws or not isinstance(ws, str) or ws.strip() == ""
+
+
+def apply_real_mode_filters(
+    records: list[dict],
+    *,
+    workspace_slug: str = "",
+    include_legacy: bool = False,
+    include_test: bool = False,
+) -> list[dict]:
+    """In Real Mode (workspace_slug provided), exclude legacy and mock records unless opted in."""
+    if not workspace_slug:
+        # No workspace filter active — show everything as before
+        return records
+    result = records
+    if not include_legacy:
+        result = [r for r in result if not _is_legacy_record(r)]
+    if not include_test:
+        result = [r for r in result if not _is_mock_record(r)]
+        result = [r for r in result if r.get("workspace_slug") not in ("demo", "synthetic")]
+    return result
+
+
 def enrich_messages(records: list[dict], db) -> list[dict]:
     contacts = list(db.contacts.find({}))
     leads = list(db.leads.find({}))
@@ -1154,6 +1213,8 @@ def contacts(
     segment: str = "",
     status: str = "",
     workspace_slug: str = Query(""),
+    include_legacy: bool = Query(False),
+    include_test: bool = Query(False),
     limit: int = Query(100, ge=1, le=500),
 ) -> dict:
     client = get_client()
@@ -1181,6 +1242,7 @@ def contacts(
                 {"notes": {"$regex": re.escape(q), "$options": "i"}},
             ]
         records = list(db.contacts.find(query).sort([("updated_at", -1), ("imported_at", -1)]).limit(limit))
+        records = apply_real_mode_filters(records, workspace_slug=workspace_slug, include_legacy=include_legacy, include_test=include_test)
         return {"items": serialize(records)}
     finally:
         client.close()
@@ -1195,6 +1257,8 @@ def leads(
     outreach_status: str = "",
     status: str = "",
     workspace_slug: str = Query(""),
+    include_legacy: bool = Query(False),
+    include_test: bool = Query(False),
     limit: int = Query(100, ge=1, le=500),
 ) -> dict:
     client = get_client()
@@ -1235,6 +1299,7 @@ def leads(
             record["module"] = module_for_lead(record)
             record["score"] = score_for(record)
             record["status"] = status_value(record)
+        records = apply_real_mode_filters(records, workspace_slug=workspace_slug, include_legacy=include_legacy, include_test=include_test)
         return {"items": serialize(records)}
     finally:
         client.close()
@@ -1250,6 +1315,8 @@ def messages(
     send_status: str = "",
     response_status: str = "",
     workspace_slug: str = Query(""),
+    include_legacy: bool = Query(False),
+    include_test: bool = Query(False),
     limit: int = Query(100, ge=1, le=500),
 ) -> dict:
     client = get_client()
@@ -1280,6 +1347,7 @@ def messages(
                 {"subject_line": {"$regex": re.escape(q), "$options": "i"}},
             ]
         records = list(db.message_drafts.find(query).sort([("updated_at", -1), ("created_at", -1)]).limit(limit))
+        records = apply_real_mode_filters(records, workspace_slug=workspace_slug, include_legacy=include_legacy, include_test=include_test)
         records = enrich_messages(records, db)
         return {"items": serialize(records)}
     finally:
@@ -1336,6 +1404,8 @@ def approval_requests(
     agent_name: str = "",
     module: str = "",
     workspace_slug: str = Query(""),
+    include_legacy: bool = Query(False),
+    include_test: bool = Query(False),
     limit: int = Query(100, ge=1, le=500),
 ) -> dict:
     client = get_client()
@@ -1353,6 +1423,7 @@ def approval_requests(
         if module:
             query["module"] = module
         records = [record for record in db.approval_requests.find(query).sort([("created_at", -1)]) if approval_matches_view(record, view)][:limit]
+        records = apply_real_mode_filters(records, workspace_slug=workspace_slug, include_legacy=include_legacy, include_test=include_test)
         records = enrich_approval_requests(records, db)
         return {"items": serialize(records), "simulation_only": True}
     finally:
@@ -1360,7 +1431,7 @@ def approval_requests(
 
 
 @app.get("/tool-runs")
-def tool_runs(limit: int = Query(100, ge=1, le=500), status: str = "", agent_run_id: str = "", workspace_slug: str = Query("")) -> dict:
+def tool_runs(limit: int = Query(100, ge=1, le=500), status: str = "", agent_run_id: str = "", workspace_slug: str = Query(""), include_legacy: bool = Query(False), include_test: bool = Query(False)) -> dict:
     client = get_client()
     try:
         db = get_database(client)
@@ -1372,6 +1443,7 @@ def tool_runs(limit: int = Query(100, ge=1, le=500), status: str = "", agent_run
         if agent_run_id:
             query["linked_agent_run_id"] = agent_run_id
         items = list(db.tool_runs.find(query).sort([("created_at", -1)]).limit(limit))
+        items = apply_real_mode_filters(items, workspace_slug=workspace_slug, include_legacy=include_legacy, include_test=include_test)
         return {"items": serialize(items), "count": len(items), "simulation_only": True}
     finally:
         client.close()
@@ -1474,6 +1546,8 @@ def scraped_candidates(
     max_quality: int | None = None,
     converted: bool | None = None,
     workspace_slug: str = Query(""),
+    include_legacy: bool = Query(False),
+    include_test: bool = Query(False),
     limit: int = Query(100, ge=1, le=500),
 ) -> dict:
     client = get_client()
@@ -1505,6 +1579,7 @@ def scraped_candidates(
             items = [item for item in items if not str(item.get("status", "")).startswith("converted_to_")]
         items.sort(key=lambda item: (int(item.get("quality_score") or 0), float(item.get("confidence") or 0), item.get("created_at") or utc_now()), reverse=True)
         items = items[:limit]
+        items = apply_real_mode_filters(items, workspace_slug=workspace_slug, include_legacy=include_legacy, include_test=include_test)
         return {"items": serialize(items), "count": len(items), "simulation_only": True}
     finally:
         client.close()
@@ -1711,6 +1786,8 @@ def agent_tasks(
     agent_name: str = "",
     module: str = "",
     workspace_slug: str = Query(""),
+    include_legacy: bool = Query(False),
+    include_test: bool = Query(False),
     limit: int = Query(100, ge=1, le=500),
 ) -> dict:
     client = get_client()
@@ -1720,6 +1797,7 @@ def agent_tasks(
         if workspace_slug:
             base_query["workspace_slug"] = workspace_slug
         records = sort_agent_tasks(list(db.agent_tasks.find(base_query)))[:limit]
+        records = apply_real_mode_filters(records, workspace_slug=workspace_slug, include_legacy=include_legacy, include_test=include_test)
         return {"items": serialize(records), "simulation_only": True}
     finally:
         client.close()
@@ -2016,6 +2094,8 @@ def agent_runs(
     module: str = "",
     status: str = "",
     workspace_slug: str = Query(""),
+    include_legacy: bool = Query(False),
+    include_test: bool = Query(False),
     limit: int = Query(50, ge=1, le=200),
 ) -> dict:
     client = get_client()
@@ -2031,6 +2111,7 @@ def agent_runs(
         if status:
             query["status"] = status
         runs = list(db.agent_runs.find(query).sort([("started_at", -1)]).limit(limit))
+        runs = apply_real_mode_filters(runs, workspace_slug=workspace_slug, include_legacy=include_legacy, include_test=include_test)
         return {"items": serialize(runs)}
     finally:
         client.close()
@@ -2117,6 +2198,8 @@ def deals(
     module: str = "",
     outcome: str = "",
     workspace_slug: str = Query(""),
+    include_legacy: bool = Query(False),
+    include_test: bool = Query(False),
     limit: int = Query(200, ge=1, le=500),
 ) -> dict:
     client = get_client()
@@ -2130,6 +2213,7 @@ def deals(
         if outcome:
             query["$or"] = [{"outcome": outcome}, {"deal_status": outcome}]
         records = list(db.deals.find(query).sort([("updated_at", -1), ("deal_value", -1)]).limit(limit))
+        records = apply_real_mode_filters(records, workspace_slug=workspace_slug, include_legacy=include_legacy, include_test=include_test)
         return {"items": serialize(records)}
     finally:
         client.close()

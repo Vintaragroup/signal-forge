@@ -172,7 +172,7 @@ export default function App() {
             onCancel={() => setPendingMode(null)}
           />
           <div className="mx-auto max-w-[1500px] px-5 py-5 lg:px-8">
-            <Page onWorkspacesChange={loadWorkspaces} />
+            <Page onWorkspacesChange={loadWorkspaces} activeWorkspace={activeWorkspace} />
           </div>
         </main>
       </div>

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { Search } from "lucide-react";
-import { api } from "../api.js";
+import { api, getAppWorkspace } from "../api.js";
 import DataTable from "../components/DataTable.jsx";
 import DemoPageBanner from "../components/DemoPageBanner.jsx";
 import DetailDrawer from "../components/DetailDrawer.jsx";
@@ -48,7 +48,7 @@ function SelectFilter({ label, value, onChange, options }) {
   );
 }
 
-export default function PipelinePage() {
+export default function PipelinePage({ activeWorkspace }) {
   const [contacts, setContacts] = useState([]);
   const [leads, setLeads] = useState([]);
   const [messages, setMessages] = useState([]);
@@ -56,8 +56,10 @@ export default function PipelinePage() {
   const [query, setQuery] = useState("");
   const [filters, setFilters] = useState(hashFilters);
   const [selected, setSelected] = useState(null);
+  const [loading, setLoading] = useState(true);
 
   async function load() {
+    setLoading(true);
     const [contactData, leadData, messageData, dealData] = await Promise.all([
       api.contacts({ limit: "250" }),
       api.leads({ limit: "250" }),
@@ -68,10 +70,14 @@ export default function PipelinePage() {
     setLeads(leadData.items || []);
     setMessages(messageData.items || []);
     setDeals(dealData.items || []);
+    setLoading(false);
   }
 
   useEffect(() => {
     load();
+  }, [activeWorkspace]);
+
+  useEffect(() => {
     const syncFilters = () => setFilters(hashFilters());
     window.addEventListener("hashchange", syncFilters);
     return () => window.removeEventListener("hashchange", syncFilters);
@@ -227,7 +233,11 @@ export default function PipelinePage() {
         columns={columns}
         rows={rows}
         onRowClick={setSelected}
-        emptyLabel="No CRM records match these filters. Clear filters, import contacts, or run the lead pipeline to add records."
+        emptyLabel={
+          !loading && rows.length === 0 && getAppWorkspace() !== "all"
+            ? "This workspace is clean. Import candidates or contacts to begin."
+            : "No CRM records match these filters. Clear filters, import contacts, or run the lead pipeline to add records."
+        }
       />
       <DetailDrawer item={selected} messages={messages} deals={deals} onClose={() => setSelected(null)} />
     </div>
