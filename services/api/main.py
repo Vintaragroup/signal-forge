@@ -66,6 +66,7 @@ class AgentRunRequest(BaseModel):
     dry_run: bool = True
     limit: int = 10
     use_tools: bool = False
+    workspace_slug: str = ""
 
 
 class AgentTaskCreateRequest(BaseModel):
@@ -74,6 +75,7 @@ class AgentTaskCreateRequest(BaseModel):
     task_type: Literal["run_outreach", "run_followup", "generate_content", "engage_fans"] | None = None
     priority: Literal["low", "normal", "high"] = "normal"
     input_config: dict[str, Any] = Field(default_factory=dict)
+    workspace_slug: str = ""
 
 
 class ApprovalDecisionRequest(BaseModel):
@@ -98,12 +100,24 @@ class CandidateImportRequest(BaseModel):
     source_label: str = "manual_upload"
     csv_path: str = ""
     csv_text: str = ""
+    workspace_slug: str = ""
 
 
 class BulkCandidateActionRequest(BaseModel):
     action: Literal["approve", "reject", "convert_to_contact", "convert_to_lead"]
     candidate_ids: list[str]
     note: str = ""
+
+
+class WorkspaceCreateRequest(BaseModel):
+    name: str
+    type: Literal["internal", "client", "demo", "test"] = "client"
+    module: str = ""
+    notes: str = ""
+
+
+class WorkspaceStatusRequest(BaseModel):
+    status: Literal["active", "paused", "archived"]
 
 
 def utc_now() -> datetime:
@@ -740,7 +754,7 @@ def convert_approval_to_draft(db, request: dict, note: str, decided_at: datetime
     return "artifact_draft", create_artifact_draft_from_approval(db, request, note, decided_at)
 
 
-def instantiate_agent(agent_cls, *, module: str, dry_run: bool, mongo_uri: str, vault_path: Path, limit: int, use_tools: bool = False):
+def instantiate_agent(agent_cls, *, module: str, dry_run: bool, mongo_uri: str, vault_path: Path, limit: int, use_tools: bool = False, workspace_slug: str = ""):
     kwargs = {
         "module": module,
         "dry_run": dry_run,
@@ -752,6 +766,8 @@ def instantiate_agent(agent_cls, *, module: str, dry_run: bool, mongo_uri: str, 
         parameters = inspect.signature(agent_cls).parameters
         if "use_tools" in parameters:
             kwargs["use_tools"] = use_tools
+        if "workspace_slug" in parameters:
+            kwargs["workspace_slug"] = workspace_slug
     except (TypeError, ValueError):
         pass
     return agent_cls(**kwargs)
@@ -801,6 +817,8 @@ def create_contact_from_candidate(db, candidate: dict, decided_at: datetime) -> 
         "created_at": decided_at,
         "updated_at": decided_at,
     }
+    if candidate.get("workspace_slug"):
+        contact["workspace_slug"] = candidate["workspace_slug"]
     result = db.contacts.insert_one(contact)
     contact["_id"] = result.inserted_id
     return contact
@@ -830,6 +848,8 @@ def create_lead_from_candidate(db, candidate: dict, decided_at: datetime) -> dic
         "created_at": decided_at,
         "updated_at": decided_at,
     }
+    if candidate.get("workspace_slug"):
+        lead["workspace_slug"] = candidate["workspace_slug"]
     result = db.leads.insert_one(lead)
     lead["_id"] = result.inserted_id
     return lead
@@ -1133,12 +1153,15 @@ def contacts(
     source: str = "",
     segment: str = "",
     status: str = "",
+    workspace_slug: str = Query(""),
     limit: int = Query(100, ge=1, le=500),
 ) -> dict:
     client = get_client()
     try:
         db = get_database(client)
         query: dict[str, Any] = {}
+        if workspace_slug:
+            query["workspace_slug"] = workspace_slug
         if module:
             query["module"] = module
         if source:
@@ -1171,12 +1194,15 @@ def leads(
     review_status: str = "",
     outreach_status: str = "",
     status: str = "",
+    workspace_slug: str = Query(""),
     limit: int = Query(100, ge=1, le=500),
 ) -> dict:
     client = get_client()
     try:
         db = get_database(client)
         query: dict[str, Any] = {}
+        if workspace_slug:
+            query["workspace_slug"] = workspace_slug
         if module:
             if module == "contractor_growth":
                 query["$or"] = [
@@ -1223,12 +1249,15 @@ def messages(
     review_status: str = "",
     send_status: str = "",
     response_status: str = "",
+    workspace_slug: str = Query(""),
     limit: int = Query(100, ge=1, le=500),
 ) -> dict:
     client = get_client()
     try:
         db = get_database(client)
         query: dict[str, Any] = {}
+        if workspace_slug:
+            query["workspace_slug"] = workspace_slug
         if module:
             query["module"] = module
         if source:
@@ -1306,12 +1335,15 @@ def approval_requests(
     request_type: str = "",
     agent_name: str = "",
     module: str = "",
+    workspace_slug: str = Query(""),
     limit: int = Query(100, ge=1, le=500),
 ) -> dict:
     client = get_client()
     try:
         db = get_database(client)
         query: dict[str, Any] = {}
+        if workspace_slug:
+            query["workspace_slug"] = workspace_slug
         if status:
             query["status"] = status
         if request_type:
@@ -1328,11 +1360,13 @@ def approval_requests(
 
 
 @app.get("/tool-runs")
-def tool_runs(limit: int = Query(100, ge=1, le=500), status: str = "", agent_run_id: str = "") -> dict:
+def tool_runs(limit: int = Query(100, ge=1, le=500), status: str = "", agent_run_id: str = "", workspace_slug: str = Query("")) -> dict:
     client = get_client()
     try:
         db = get_database(client)
         query: dict[str, Any] = {}
+        if workspace_slug:
+            query["workspace_slug"] = workspace_slug
         if status:
             query["status"] = status
         if agent_run_id:
@@ -1378,38 +1412,40 @@ def resolve_import_csv_path(csv_path: str) -> Path:
     return resolved
 
 
-async def read_candidate_import_request(request: Request) -> tuple[str, str, str, str]:
+async def read_candidate_import_request(request: Request) -> tuple[str, str, str, str, str]:
     content_type = request.headers.get("content-type", "")
     if "multipart/form-data" in content_type or "application/x-www-form-urlencoded" in content_type:
         form = await request.form()
         module = clean_text(form.get("module")) or "contractor_growth"
         source_label = clean_text(form.get("source_label")) or "manual_upload"
+        workspace_slug = clean_text(form.get("workspace_slug")) or ""
         uploaded = form.get("file")
         csv_path = clean_text(form.get("csv_path"))
         if uploaded and hasattr(uploaded, "read"):
             content = await uploaded.read()
             file_name = clean_text(getattr(uploaded, "filename", "uploaded.csv")) or "uploaded.csv"
-            return module, source_label, content.decode("utf-8-sig"), file_name
+            return module, source_label, content.decode("utf-8-sig"), file_name, workspace_slug
         if csv_path:
             path = resolve_import_csv_path(csv_path)
-            return module, source_label, path.read_text(encoding="utf-8-sig"), str(path)
+            return module, source_label, path.read_text(encoding="utf-8-sig"), str(path), workspace_slug
         raise HTTPException(status_code=400, detail="Provide a CSV file or csv_path.")
 
     try:
         payload = CandidateImportRequest(**(await request.json()))
     except Exception as error:
         raise HTTPException(status_code=400, detail="Invalid import request payload.") from error
+    workspace_slug = clean_text(getattr(payload, "workspace_slug", "")) or ""
     if payload.csv_text:
-        return payload.module, payload.source_label, payload.csv_text, "inline_csv"
+        return payload.module, payload.source_label, payload.csv_text, "inline_csv", workspace_slug
     path = resolve_import_csv_path(payload.csv_path)
-    return payload.module, payload.source_label, path.read_text(encoding="utf-8-sig"), str(path)
+    return payload.module, payload.source_label, path.read_text(encoding="utf-8-sig"), str(path), workspace_slug
 
 
 @app.post("/tools/import-candidates")
 async def import_candidates_tool(request: Request) -> dict:
     from tools.manual_import_tool import CandidateImportError, ManualCandidateImportTool
 
-    module, source_label, csv_text, file_name = await read_candidate_import_request(request)
+    module, source_label, csv_text, file_name, workspace_slug = await read_candidate_import_request(request)
     if module not in VALID_MODULES:
         raise HTTPException(status_code=400, detail="Unsupported module.")
     if not source_label:
@@ -1418,7 +1454,7 @@ async def import_candidates_tool(request: Request) -> dict:
     client = get_client()
     try:
         db = get_database(client)
-        result = ManualCandidateImportTool().run_text(csv_text, module, source_label, db=db, file_name=file_name)
+        result = ManualCandidateImportTool().run_text(csv_text, module, source_label, db=db, file_name=file_name, workspace_slug=workspace_slug)
         return serialize({**result, "message": "CSV import completed. No contacts, leads, or outbound actions were created automatically."})
     except CandidateImportError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
@@ -1437,12 +1473,15 @@ def scraped_candidates(
     min_quality: int | None = None,
     max_quality: int | None = None,
     converted: bool | None = None,
+    workspace_slug: str = Query(""),
     limit: int = Query(100, ge=1, le=500),
 ) -> dict:
     client = get_client()
     try:
         db = get_database(client)
         query: dict[str, Any] = {}
+        if workspace_slug:
+            query["workspace_slug"] = workspace_slug
         if status:
             query["status"] = status
         if agent_run_id:
@@ -1671,12 +1710,16 @@ def agent_tasks(
     status: str = "",
     agent_name: str = "",
     module: str = "",
+    workspace_slug: str = Query(""),
     limit: int = Query(100, ge=1, le=500),
 ) -> dict:
     client = get_client()
     try:
         db = get_database(client)
-        records = sort_agent_tasks(list(db.agent_tasks.find(agent_task_query(status, agent_name, module))))[:limit]
+        base_query = agent_task_query(status, agent_name, module)
+        if workspace_slug:
+            base_query["workspace_slug"] = workspace_slug
+        records = sort_agent_tasks(list(db.agent_tasks.find(base_query)))[:limit]
         return {"items": serialize(records), "simulation_only": True}
     finally:
         client.close()
@@ -1705,6 +1748,7 @@ def create_agent_task(payload: AgentTaskCreateRequest) -> dict:
         "linked_run_id": None,
         "outbound_actions_taken": 0,
         "simulation_only": True,
+        **({"workspace_slug": payload.workspace_slug} if payload.workspace_slug else {}),
     }
     client = get_client()
     try:
@@ -1749,6 +1793,7 @@ def run_agent_task(task_id: str) -> dict:
                 vault_path=vault_path(),
                 limit=max(1, min(limit, 50)),
                 use_tools=bool((task.get("input_config") or {}).get("use_tools")),
+                workspace_slug=clean_text(task.get("workspace_slug") or ""),
             )
             result = agent.run()
             run = db.agent_runs.find_one({"run_id": result.get("run_id")})
@@ -1939,6 +1984,7 @@ def run_agent(payload: AgentRunRequest) -> dict:
             vault_path=vault_path(),
             limit=max(1, min(payload.limit, 50)),
             use_tools=payload.use_tools,
+            workspace_slug=payload.workspace_slug,
         )
         result = agent.run()
         client = get_client()
@@ -1969,12 +2015,15 @@ def agent_runs(
     agent_name: str = "",
     module: str = "",
     status: str = "",
+    workspace_slug: str = Query(""),
     limit: int = Query(50, ge=1, le=200),
 ) -> dict:
     client = get_client()
     try:
         db = get_database(client)
         query: dict[str, Any] = {}
+        if workspace_slug:
+            query["workspace_slug"] = workspace_slug
         if agent_name:
             query["agent_name"] = agent_name
         if module:
@@ -2067,12 +2116,15 @@ def agent_run_detail(run_id: str) -> dict:
 def deals(
     module: str = "",
     outcome: str = "",
+    workspace_slug: str = Query(""),
     limit: int = Query(200, ge=1, le=500),
 ) -> dict:
     client = get_client()
     try:
         db = get_database(client)
         query: dict[str, Any] = {}
+        if workspace_slug:
+            query["workspace_slug"] = workspace_slug
         if module:
             query["module"] = module
         if outcome:
@@ -2092,3 +2144,95 @@ def reports() -> dict:
             report_file(reports_dir / "revenue_performance_report.md", "Revenue Performance Report"),
         ]
     }
+
+
+@app.get("/workspaces")
+def list_workspaces(status: str = "") -> dict:
+    client = get_client()
+    try:
+        db = get_database(client)
+        query: dict[str, Any] = {}
+        if status:
+            query["status"] = status
+        items = list(db.workspaces.find(query).sort([("created_at", 1)]))
+        if not items:
+            now = utc_now()
+            default: dict[str, Any] = {
+                "slug": "default",
+                "name": "Default Workspace",
+                "type": "internal",
+                "module": "",
+                "notes": "Auto-created default workspace.",
+                "status": "active",
+                "created_at": now,
+                "updated_at": now,
+            }
+            db.workspaces.insert_one(default)
+            items = [db.workspaces.find_one({"slug": "default"})]
+        return {"items": serialize(items)}
+    finally:
+        client.close()
+
+
+@app.post("/workspaces")
+def create_workspace(payload: WorkspaceCreateRequest) -> dict:
+    name = payload.name.strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="Workspace name is required.")
+    slug = slugify(name)
+    if not slug:
+        raise HTTPException(status_code=400, detail="Workspace name produced an empty slug.")
+    client = get_client()
+    now = utc_now()
+    try:
+        db = get_database(client)
+        existing = db.workspaces.find_one({"slug": slug})
+        if existing:
+            raise HTTPException(status_code=409, detail=f"A workspace with slug '{slug}' already exists.")
+        workspace: dict[str, Any] = {
+            "slug": slug,
+            "name": name,
+            "type": payload.type,
+            "module": payload.module.strip() if payload.module else "",
+            "notes": payload.notes.strip() if payload.notes else "",
+            "status": "active",
+            "created_at": now,
+            "updated_at": now,
+        }
+        result = db.workspaces.insert_one(workspace)
+        created = db.workspaces.find_one({"_id": result.inserted_id})
+        return {"item": serialize(created), "message": "Workspace created."}
+    finally:
+        client.close()
+
+
+@app.get("/workspaces/{slug}")
+def get_workspace(slug: str) -> dict:
+    client = get_client()
+    try:
+        db = get_database(client)
+        workspace = db.workspaces.find_one({"slug": slug})
+        if not workspace:
+            raise HTTPException(status_code=404, detail="Workspace not found.")
+        return {"item": serialize(workspace)}
+    finally:
+        client.close()
+
+
+@app.patch("/workspaces/{slug}/status")
+def update_workspace_status(slug: str, payload: WorkspaceStatusRequest) -> dict:
+    client = get_client()
+    now = utc_now()
+    try:
+        db = get_database(client)
+        workspace = db.workspaces.find_one({"slug": slug})
+        if not workspace:
+            raise HTTPException(status_code=404, detail="Workspace not found.")
+        db.workspaces.update_one(
+            {"slug": slug},
+            {"$set": {"status": payload.status, "updated_at": now}},
+        )
+        updated = db.workspaces.find_one({"slug": slug})
+        return {"item": serialize(updated), "message": f"Workspace status updated to '{payload.status}'."}
+    finally:
+        client.close()

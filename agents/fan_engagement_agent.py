@@ -304,6 +304,7 @@ scheduled: false
             "created_at": datetime.now(timezone.utc),
             "resolved_at": None,
             "simulation_only": True,
+            **({"workspace_slug": self.workspace_slug} if self.workspace_slug else {}),
         }
         insert_result = self.db.approval_requests.insert_one(request_doc)
         return str(insert_result.inserted_id)

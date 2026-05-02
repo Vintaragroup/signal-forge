@@ -1,6 +1,27 @@
 import { useState } from "react";
-import { Clapperboard, Database } from "lucide-react";
+import { Briefcase, Clapperboard, Database } from "lucide-react";
 import StatusBadge from "./StatusBadge.jsx";
+
+function WorkspaceSelector({ workspaces, activeWorkspace, onWorkspaceChange }) {
+  return (
+    <div className="flex items-center gap-1.5">
+      <Briefcase className="h-3.5 w-3.5 text-slate-400" />
+      <select
+        value={activeWorkspace}
+        onChange={(e) => onWorkspaceChange(e.target.value)}
+        className="h-8 rounded-md border border-slate-200 bg-white px-2 text-xs font-medium text-slate-700 shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-300"
+        aria-label="Active workspace"
+      >
+        <option value="all">All Workspaces</option>
+        {workspaces.map((ws) => (
+          <option key={ws.slug} value={ws.slug}>
+            {ws.name}
+          </option>
+        ))}
+      </select>
+    </div>
+  );
+}
 
 function ModeTooltip({ demoMode, visible }) {
   if (!visible) return null;
@@ -23,7 +44,7 @@ function ModeTooltip({ demoMode, visible }) {
   );
 }
 
-export default function Header({ title, health, gptRuntime, lastRefresh, action, demoMode, onToggleDemo }) {
+export default function Header({ title, health, gptRuntime, lastRefresh, action, demoMode, onToggleDemo, workspaces = [], activeWorkspace = "all", onWorkspaceChange }) {
   const [tooltipVisible, setTooltipVisible] = useState(false);
 
   const mongoReady = health?.mongo?.ready;
@@ -45,6 +66,15 @@ export default function Header({ title, health, gptRuntime, lastRefresh, action,
             <StatusBadge value={gptLabel} />
             {gptRuntime?.enabled ? <StatusBadge value={gptModel} /> : null}
           </div>
+
+          {/* Workspace selector */}
+          {!demoMode && onWorkspaceChange && (
+            <WorkspaceSelector
+              workspaces={workspaces}
+              activeWorkspace={activeWorkspace}
+              onWorkspaceChange={onWorkspaceChange}
+            />
+          )}
 
           {/* Mode Switcher with tooltip */}
           <div

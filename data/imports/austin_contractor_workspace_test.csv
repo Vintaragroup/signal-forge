@@ -1,0 +1,4 @@
+name,company,email,phone,website,city,state,service_category,source_url,notes
+Jake Torres,Austin Roofing Co,jake@austinroofing.example.com,512-555-1001,https://austinroofing.example.com,Austin,TX,roofing,https://austinroofing.example.com,Storm damage repair and quote follow-up specialist.
+Maria Reyes,Hill Country HVAC,maria@hillcountryhvac.example.com,512-555-1002,https://hillcountryhvac.example.com,Austin,TX,hvac,https://hillcountryhvac.example.com,Residential HVAC install and service leads.
+Devon Walsh,Walsh Electric,devon@walshelectric.example.com,512-555-1003,https://walshelectric.example.com,Austin,TX,electrical,https://walshelectric.example.com,Commercial and residential electrical contractor.

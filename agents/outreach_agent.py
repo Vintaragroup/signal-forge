@@ -213,6 +213,7 @@ class OutreachAgent(BaseAgent):
             "gpt_reasoning_summary": result.get("reasoning_summary", ""),
             "created_at": now,
             "updated_at": now,
+            **({"workspace_slug": self.workspace_slug} if self.workspace_slug else {}),
         }
         self.db.message_drafts.insert_one(draft)
         self.message_drafts.append(draft)
@@ -249,6 +250,7 @@ class OutreachAgent(BaseAgent):
             "created_at": now,
             "resolved_at": None,
             "simulation_only": True,
+            **({"workspace_slug": self.workspace_slug} if self.workspace_slug else {}),
         }
         insert_result = self.db.approval_requests.insert_one(request_doc)
         return str(insert_result.inserted_id)

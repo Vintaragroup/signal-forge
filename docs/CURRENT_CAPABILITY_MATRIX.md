@@ -52,6 +52,7 @@ Legend:
 | Post/content generation runtime | No | Partly | Yes | Yes | Partly | Partly | Placeholder service checks vault/Mongo; real content generation is not implemented. |
 | Backup/export guidance | No | Yes | No | Yes | Yes | No | Documented in `docs/V1_BACKUP_AND_EXPORT.md`; no Makefile wrapper yet. |
 | Automated tests | No | Yes | No | No | Yes | No | Basic pytest suite covers constants, scoring, review status rules, and report aggregation. |
+| Client Workspace v1 | Yes | No | No | No | Yes | No | Dashboard Workspaces page: create named workspaces (client, internal, demo, test), assign a module, add notes, pause/archive. Workspace selector in header filters all data pages (contacts, leads, messages, deals, approvals, candidates, agent tasks, agent runs, tool runs) to a single workspace. All list endpoints accept `workspace_slug` query param. New records can be tagged with a `workspace_slug` at import/creation time. Existing records without a slug are visible when "All Workspaces" is selected. Selecting a specific workspace shows only records tagged to that slug. |
 
 ## Safety Boundary
 

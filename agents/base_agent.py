@@ -52,6 +52,7 @@ class BaseAgent:
         vault_path: str | Path | None = None,
         limit: int = 10,
         use_tools: bool | None = None,
+        workspace_slug: str = "",
     ) -> None:
         if module not in SUPPORTED_MODULES:
             supported = ", ".join(sorted(SUPPORTED_MODULES))
@@ -64,6 +65,7 @@ class BaseAgent:
         self.vault_path = Path(vault_path or os.getenv("VAULT_PATH", str(DEFAULT_VAULT_PATH)))
         self.limit = limit
         self.use_tools = bool(use_tools) if use_tools is not None else os.getenv("SIGNALFORGE_AGENT_TOOLS_ENABLED", "").lower() == "true"
+        self.workspace_slug = workspace_slug
         self.started_at = datetime.now(timezone.utc)
         self.contacts: list[dict[str, Any]] = []
         self.message_drafts: list[dict[str, Any]] = []
@@ -216,6 +218,7 @@ class BaseAgent:
             "related_deals": [],
             "warnings": ["Simulation-only run. No outbound action taken."],
             "errors": [],
+            **({"workspace_slug": self.workspace_slug} if self.workspace_slug else {}),
         }
         db.agent_runs.insert_one(run_doc)
         return run_id
@@ -331,6 +334,7 @@ class BaseAgent:
                     "created_at": now,
                     "resolved_at": None,
                     "simulation_only": True,
+                    **({"workspace_slug": self.workspace_slug} if self.workspace_slug else {}),
                 }
             )
         for draft in self.message_drafts:
@@ -355,6 +359,7 @@ class BaseAgent:
                     "created_at": now,
                     "resolved_at": None,
                     "simulation_only": True,
+                    **({"workspace_slug": self.workspace_slug} if self.workspace_slug else {}),
                 }
             )
         if not requests:

@@ -42,7 +42,7 @@ class ManualCandidateImportTool(BaseTool):
             errors.append({"row": row_number, "field": "email", "error": f"Invalid email format: {email}"})
         return errors
 
-    def parse_csv_text(self, csv_text: str, module: str, source_label: str) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    def parse_csv_text(self, csv_text: str, module: str, source_label: str, workspace_slug: str = "") -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
         """Parse CSV text and return (candidates, row_errors).
 
         Raises CandidateImportError for fatal structural problems (empty file,
@@ -86,7 +86,7 @@ class ManualCandidateImportTool(BaseTool):
                 else:
                     seen_company_keys[company] = row_number
 
-            candidate = self.normalize_row(normalized_row, module, source_label, imported_at, row_number)
+            candidate = self.normalize_row(normalized_row, module, source_label, imported_at, row_number, workspace_slug)
             if candidate:
                 candidates.append(candidate)
 
@@ -94,7 +94,7 @@ class ManualCandidateImportTool(BaseTool):
             raise CandidateImportError("CSV has no importable candidate rows.")
         return candidates, row_errors
 
-    def normalize_row(self, row: dict[str, Any], module: str, source_label: str, imported_at, row_number: int) -> dict[str, Any] | None:
+    def normalize_row(self, row: dict[str, Any], module: str, source_label: str, imported_at, row_number: int, workspace_slug: str = "") -> dict[str, Any] | None:
         company = clean_text(row.get("company"))
         website = clean_text(row.get("website"))
         source_url = clean_text(row.get("source_url")) or website
@@ -142,6 +142,7 @@ class ManualCandidateImportTool(BaseTool):
             "imported_at": imported_at,
             "timestamp": imported_at,
             "csv_row_number": row_number,
+            **({"workspace_slug": workspace_slug} if workspace_slug else {}),
         }
 
     def load_csv_path(self, csv_path: Path) -> str:
@@ -151,8 +152,8 @@ class ManualCandidateImportTool(BaseTool):
             raise CandidateImportError("Import path must point to a .csv file.")
         return csv_path.read_text(encoding="utf-8-sig")
 
-    def run_text(self, csv_text: str, module: str, source_label: str, db=None, file_name: str = "uploaded.csv") -> dict[str, Any]:
-        candidates, row_errors = self.parse_csv_text(csv_text, module, source_label)
+    def run_text(self, csv_text: str, module: str, source_label: str, db=None, file_name: str = "uploaded.csv", workspace_slug: str = "") -> dict[str, Any]:
+        candidates, row_errors = self.parse_csv_text(csv_text, module, source_label, workspace_slug)
         input_payload = {
             "module": module,
             "source_label": source_label,

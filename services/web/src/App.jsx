@@ -3,6 +3,7 @@ import {
   Activity,
   BarChart3,
   Bot,
+  Briefcase,
   Building2,
   Clapperboard,
   FileText,
@@ -31,7 +32,8 @@ import ResearchToolsPage from "./pages/ResearchToolsPage.jsx";
 import GptDiagnosticsPage from "./pages/GptDiagnosticsPage.jsx";
 import DealsPage from "./pages/DealsPage.jsx";
 import ReportsPage from "./pages/ReportsPage.jsx";
-import { api } from "./api.js";
+import WorkspacesPage from "./pages/WorkspacesPage.jsx";
+import { api, setAppWorkspace } from "./api.js";
 
 const NAV_ITEMS = [
   { id: "demo", label: "Demo Mode", icon: Clapperboard },
@@ -46,6 +48,7 @@ const NAV_ITEMS = [
   { id: "gpt-diagnostics", label: "GPT Diagnostics", icon: Activity },
   { id: "deals", label: "Deals", icon: Building2 },
   { id: "reports", label: "Reports", icon: FileText },
+  { id: "workspaces", label: "Workspaces", icon: Briefcase },
 ];
 
 export default function App() {
@@ -56,6 +59,8 @@ export default function App() {
   const [demoMode, setDemoMode] = useState(api.demoEnabled());
   const [pendingMode, setPendingMode] = useState(null); // "demo" | "real" | null
   const [lastRefresh, setLastRefresh] = useState(new Date());
+  const [workspaces, setWorkspaces] = useState([]);
+  const [activeWorkspace, setActiveWorkspace] = useState("all");
 
   async function refreshHealth() {
     const [nextHealth, nextGptRuntime] = await Promise.all([
@@ -67,8 +72,18 @@ export default function App() {
     setLastRefresh(new Date());
   }
 
+  async function loadWorkspaces() {
+    api.workspaces().then((data) => setWorkspaces(data.items || [])).catch(() => {});
+  }
+
+  function handleWorkspaceChange(slug) {
+    setActiveWorkspace(slug);
+    setAppWorkspace(slug);
+  }
+
   useEffect(() => {
     refreshHealth();
+    loadWorkspaces();
     const syncHash = () => setActivePage(initialPage());
     window.addEventListener("hashchange", syncHash);
     return () => window.removeEventListener("hashchange", syncHash);
@@ -111,6 +126,7 @@ export default function App() {
     if (activePage === "gpt-diagnostics") return GptDiagnosticsPage;
     if (activePage === "deals") return DealsPage;
     if (activePage === "reports") return ReportsPage;
+    if (activePage === "workspaces") return WorkspacesPage;
     return OverviewPage;
   }, [activePage]);
 
@@ -135,6 +151,9 @@ export default function App() {
             lastRefresh={lastRefresh}
             demoMode={demoMode}
             onToggleDemo={toggleDemoMode}
+            workspaces={workspaces}
+            activeWorkspace={activeWorkspace}
+            onWorkspaceChange={handleWorkspaceChange}
             action={
               <button
                 type="button"
@@ -153,7 +172,7 @@ export default function App() {
             onCancel={() => setPendingMode(null)}
           />
           <div className="mx-auto max-w-[1500px] px-5 py-5 lg:px-8">
-            <Page />
+            <Page onWorkspacesChange={loadWorkspaces} />
           </div>
         </main>
       </div>

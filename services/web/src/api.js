@@ -14,6 +14,21 @@ import {
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "http://localhost:8000";
 
+// Module-level active workspace. "all" means no workspace filter is applied.
+let _appWorkspace = "all";
+
+export function setAppWorkspace(slug) {
+  _appWorkspace = slug;
+}
+
+export function getAppWorkspace() {
+  return _appWorkspace;
+}
+
+function wsParam() {
+  return _appWorkspace !== "all" ? { workspace_slug: _appWorkspace } : {};
+}
+
 async function request(path, options = {}) {
   const isFormData = options.body instanceof FormData;
   const response = await fetch(`${API_BASE_URL}${path}`, {
@@ -45,9 +60,9 @@ export const api = {
   simulateDemoResponse: async (id) => simulateDemoResponse(id),
   showDemoDealOutcome: async () => showDemoDealOutcome(),
   overview: () => (isDemoModeEnabled() ? Promise.resolve(demoOverview()) : request("/stats/overview")),
-  contacts: (params = {}) => (isDemoModeEnabled() ? Promise.resolve({ items: demoItems("contacts") }) : request(`/contacts?${new URLSearchParams(params)}`)),
-  leads: (params = {}) => (isDemoModeEnabled() ? Promise.resolve({ items: demoItems("leads") }) : request(`/leads?${new URLSearchParams(params)}`)),
-  messages: (params = {}) => (isDemoModeEnabled() ? Promise.resolve({ items: demoItems("messages") }) : request(`/messages?${new URLSearchParams(params)}`)),
+  contacts: (params = {}) => (isDemoModeEnabled() ? Promise.resolve({ items: demoItems("contacts") }) : request(`/contacts?${new URLSearchParams({ ...wsParam(), ...params })}`)),
+  leads: (params = {}) => (isDemoModeEnabled() ? Promise.resolve({ items: demoItems("leads") }) : request(`/leads?${new URLSearchParams({ ...wsParam(), ...params })}`)),
+  messages: (params = {}) => (isDemoModeEnabled() ? Promise.resolve({ items: demoItems("messages") }) : request(`/messages?${new URLSearchParams({ ...wsParam(), ...params })}`)),
   reviewMessage: (id, payload) =>
     isDemoModeEnabled()
       ? Promise.resolve({ item: approveDemoMessage(id), message: "Demo approval saved. No message sent." })
@@ -55,13 +70,13 @@ export const api = {
           method: "POST",
           body: JSON.stringify(payload),
         }),
-  approvalRequests: (params = {}) => request(`/approval-requests?${new URLSearchParams(params)}`),
+  approvalRequests: (params = {}) => request(`/approval-requests?${new URLSearchParams({ ...wsParam(), ...params })}`),
   decideApprovalRequest: (id, payload) =>
     request(`/approval-requests/${encodeURIComponent(id)}/decision`, {
       method: "POST",
       body: JSON.stringify(payload),
     }),
-  toolRuns: (params = {}) => request(`/tool-runs?${new URLSearchParams(params)}`),
+  toolRuns: (params = {}) => request(`/tool-runs?${new URLSearchParams({ ...wsParam(), ...params })}`),
   runWebSearchTool: (payload) =>
     request("/tools/web-search", {
       method: "POST",
@@ -72,7 +87,7 @@ export const api = {
       method: "POST",
       body: formData,
     }),
-  scrapedCandidates: (params = {}) => request(`/scraped-candidates?${new URLSearchParams(params)}`),
+  scrapedCandidates: (params = {}) => request(`/scraped-candidates?${new URLSearchParams({ ...wsParam(), ...params })}`),
   decideScrapedCandidate: (id, payload) =>
     request(`/scraped-candidates/${encodeURIComponent(id)}/decision`, {
       method: "POST",
@@ -87,11 +102,11 @@ export const api = {
   importHistoryDetail: (runId, params = {}) =>
     request(`/tools/import-history/${encodeURIComponent(runId)}/candidates?${new URLSearchParams(params)}`),
   importHistoryErrors: (runId) => request(`/tools/import-history/${encodeURIComponent(runId)}/errors`),
-  agentTasks: (params = {}) => request(`/agent-tasks?${new URLSearchParams(params)}`),
+  agentTasks: (params = {}) => request(`/agent-tasks?${new URLSearchParams({ ...wsParam(), ...params })}`),
   createAgentTask: (payload) =>
     request("/agent-tasks", {
       method: "POST",
-      body: JSON.stringify(payload),
+      body: JSON.stringify({ ...wsParam(), ...payload }),
     }),
   runAgentTask: (id) =>
     request(`/agent-tasks/${encodeURIComponent(id)}/run`, {
@@ -105,12 +120,23 @@ export const api = {
   runAgent: (payload) =>
     request("/agents/run", {
       method: "POST",
+      body: JSON.stringify({ ...wsParam(), ...payload }),
+    }),
+  agentRuns: (params = {}) => request(`/agent-runs?${new URLSearchParams({ ...wsParam(), ...params })}`),
+  agentRunDetail: (id) => request(`/agent-runs/${encodeURIComponent(id)}`),
+  deals: (params = {}) => (isDemoModeEnabled() ? Promise.resolve({ items: demoItems("deals") }) : request(`/deals?${new URLSearchParams({ ...wsParam(), ...params })}`)),
+  reports: () => request("/reports"),
+  workspaces: () => (isDemoModeEnabled() ? Promise.resolve({ items: [] }) : request("/workspaces")),
+  createWorkspace: (payload) =>
+    request("/workspaces", {
+      method: "POST",
       body: JSON.stringify(payload),
     }),
-  agentRuns: (params = {}) => request(`/agent-runs?${new URLSearchParams(params)}`),
-  agentRunDetail: (id) => request(`/agent-runs/${encodeURIComponent(id)}`),
-  deals: (params = {}) => (isDemoModeEnabled() ? Promise.resolve({ items: demoItems("deals") }) : request(`/deals?${new URLSearchParams(params)}`)),
-  reports: () => request("/reports"),
+  updateWorkspaceStatus: (slug, status) =>
+    request(`/workspaces/${encodeURIComponent(slug)}/status`, {
+      method: "PATCH",
+      body: JSON.stringify({ status }),
+    }),
 };
 
 export { API_BASE_URL };
