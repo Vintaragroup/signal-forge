@@ -17,6 +17,8 @@ import {
 } from "lucide-react";
 import Sidebar from "./components/Sidebar.jsx";
 import Header from "./components/Header.jsx";
+import ModeBanner from "./components/ModeBanner.jsx";
+import ModeConfirmModal from "./components/ModeConfirmModal.jsx";
 import OverviewPage from "./pages/OverviewPage.jsx";
 import DemoModePage from "./pages/DemoModePage.jsx";
 import WorkflowPage from "./pages/WorkflowPage.jsx";
@@ -52,6 +54,7 @@ export default function App() {
   const [health, setHealth] = useState(null);
   const [gptRuntime, setGptRuntime] = useState(null);
   const [demoMode, setDemoMode] = useState(api.demoEnabled());
+  const [pendingMode, setPendingMode] = useState(null); // "demo" | "real" | null
   const [lastRefresh, setLastRefresh] = useState(new Date());
 
   async function refreshHealth() {
@@ -77,15 +80,22 @@ export default function App() {
     return () => window.removeEventListener("signalforge-demo-change", syncDemo);
   }, []);
 
-  async function toggleDemoMode() {
-    if (api.demoEnabled()) {
-      await api.stopDemo();
-      setDemoMode(false);
-      window.location.hash = "overview";
-    } else {
+  function toggleDemoMode() {
+    // Show confirmation modal before switching modes
+    setPendingMode(api.demoEnabled() ? "real" : "demo");
+  }
+
+  async function confirmModeSwitch() {
+    const switching = pendingMode;
+    setPendingMode(null);
+    if (switching === "demo") {
       await api.startDemo();
       setDemoMode(true);
       window.location.hash = "demo";
+    } else {
+      await api.stopDemo();
+      setDemoMode(false);
+      window.location.hash = "overview";
     }
   }
 
@@ -136,7 +146,12 @@ export default function App() {
               </button>
             }
           />
-          {demoMode ? <div className="border-b border-blue-200 bg-blue-50 px-5 py-2 text-center text-sm font-semibold text-blue-900 lg:px-8">Demo Mode - No real messages will be sent</div> : null}
+          <ModeBanner demoMode={demoMode} />
+          <ModeConfirmModal
+            targetMode={pendingMode}
+            onConfirm={confirmModeSwitch}
+            onCancel={() => setPendingMode(null)}
+          />
           <div className="mx-auto max-w-[1500px] px-5 py-5 lg:px-8">
             <Page />
           </div>

@@ -35,5 +35,8 @@ check:
 test:
 	docker compose run --rm --no-deps api python -m pytest
 
+frontend-test:
+	cd services/web && npm test
+
 gpt-agent-test:
 	docker compose run --rm api python scripts/gpt_runtime_test_campaign.py

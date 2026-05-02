@@ -13,6 +13,7 @@ Legend:
 
 | Capability | Dashboard-supported | CLI-only | Simulated | Manual | Real/local | Not yet implemented | Current implementation |
 | --- | --- | --- | --- | --- | --- | --- | --- |
+| Mode Switcher v1 | Yes | No | No | No | Yes | No | Header mode button switches between Real Mode (blue) and Demo Mode (purple) with a confirmation dialog. ModeBanner shows below header. Demo Mode uses browser localStorage only — MongoDB never touched. Reset Demo Data restores seeded records. Overview checklists and Settings/Help section are mode-aware. |
 | Docker local stack | No | Yes | No | Yes | Yes | No | `make up`, `make dashboard`, `docker compose` start MongoDB, API, services, and web. |
 | FastAPI health/status | Yes | Yes | No | No | Yes | No | `GET /health` plus `curl http://localhost:8000/health`. |
 | React web dashboard | Yes | No | No | No | Yes | No | Demo Mode, Workflow, Overview, Pipeline / CRM, Messages, Approvals, Agent Tasks, Agent Console, Research / Tools, GPT Diagnostics, Deals, Reports. |

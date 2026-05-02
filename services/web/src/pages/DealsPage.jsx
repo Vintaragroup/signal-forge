@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { api } from "../api.js";
 import DealBoard from "../components/DealBoard.jsx";
+import DemoPageBanner from "../components/DemoPageBanner.jsx";
 import StatusBadge from "../components/StatusBadge.jsx";
 
 function initialOutcome() {
@@ -28,6 +29,7 @@ export default function DealsPage() {
 
   return (
     <div className="space-y-4">
+      <DemoPageBanner showReset onReset={() => api.deals({ limit: "500" }).then((data) => setDeals(data.items || []))} />
       <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
         <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
           <div>

@@ -14,6 +14,7 @@ import {
   X,
 } from "lucide-react";
 import { api } from "../api.js";
+import DemoPageBanner from "../components/DemoPageBanner.jsx";
 import LiveAgentRunPanel from "../components/LiveAgentRunPanel.jsx";
 import StatusBadge from "../components/StatusBadge.jsx";
 
@@ -233,6 +234,7 @@ export default function WorkflowPage() {
 
   return (
     <div className="space-y-5">
+      <DemoPageBanner onReset={loadWorkflow} />
       <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div>

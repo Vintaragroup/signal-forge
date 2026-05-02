@@ -92,6 +92,18 @@ Dashboard pages:
 
 Message review and approval queue actions in the dashboard update MongoDB and append local records only. They do not send messages, publish content, post comments, schedule work, or call external platforms. Agent actions are dry-run only.
 
+## Mode Switcher v1
+
+SignalForge operates in **Real Mode** (blue) or **Demo Mode** (purple). The current mode is always visible in the top-right header button and in the persistent banner below the header.
+
+**Switching modes:** Click the header mode button. A confirmation dialog appears before any switch takes effect. This prevents accidental mode changes.
+
+**Real Mode:** Reads and writes local MongoDB only. No automated outbound sends ever occur. All agent actions are dry-run or review-only.
+
+**Demo Mode:** Browser localStorage only. MongoDB is never touched. All records are synthetic and labeled DEMO. Used for client demos, onboarding, and walkthroughs. Click "Reset Demo Data" at any time to restore seeded records without affecting MongoDB.
+
+See [docs/MODES_AND_DEMO_GUIDE.md](docs/MODES_AND_DEMO_GUIDE.md) for the full guide.
+
 ## Demo Mode v1
 
 Demo Mode provides a clean browser-only walkthrough for first-time operators. Start it from the Overview page or the Demo Mode navigation item.

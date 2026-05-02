@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Check, Search, X, RotateCcw } from "lucide-react";
 import { api } from "../api.js";
 import DataTable from "../components/DataTable.jsx";
+import DemoPageBanner from "../components/DemoPageBanner.jsx";
 import StatusBadge from "../components/StatusBadge.jsx";
 
 const emptyFilters = {
@@ -362,6 +363,7 @@ export default function MessagesPage() {
 
   return (
     <div className="space-y-4">
+      <DemoPageBanner showReset onReset={load} />
       <div className="grid gap-3 md:grid-cols-4">
         <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
           <div className="text-xs font-semibold uppercase tracking-wide text-slate-400">Needs review</div>

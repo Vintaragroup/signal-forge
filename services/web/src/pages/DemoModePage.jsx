@@ -80,16 +80,23 @@ export default function DemoModePage() {
 
   return (
     <div className="space-y-5">
-      <section className="rounded-lg border border-blue-200 bg-blue-50 p-5 shadow-sm">
+      <section className="rounded-lg border-2 border-purple-300 bg-purple-50 p-5 shadow-sm">
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div>
-            <div className="text-xs font-semibold uppercase text-blue-700">Demo Mode v1</div>
-            <h2 className="mt-1 text-2xl font-semibold text-blue-950">Demo Mode - No real messages will be sent</h2>
-            <p className="mt-2 max-w-3xl text-sm leading-6 text-blue-900">This guided flow uses seeded synthetic contacts, leads, drafts, responses, and deals. Every record is labeled Demo Mode and stays in your browser.</p>
+            <div className="text-xs font-bold uppercase tracking-widest text-purple-700">Demo Mode v1</div>
+            <h2 className="mt-1 text-2xl font-semibold text-purple-950">Demo Mode — Synthetic data only</h2>
+            <p className="mt-2 max-w-3xl text-sm leading-6 text-purple-800">
+              This guided flow uses seeded synthetic contacts, leads, drafts, responses, and deals.
+              Every record is labeled <strong>DEMO</strong> and stored only in your browser. MongoDB is never written to from Demo Mode.
+            </p>
           </div>
-          <button type="button" onClick={resetDemo} className="inline-flex h-9 items-center gap-2 rounded-lg border border-blue-200 bg-white px-3 text-sm font-medium text-blue-800 transition hover:border-blue-300">
+          <button
+            type="button"
+            onClick={resetDemo}
+            className="inline-flex h-9 items-center gap-2 rounded-lg border border-purple-300 bg-white px-3 text-sm font-semibold text-purple-800 shadow-sm transition hover:bg-purple-50"
+          >
             <RefreshCw className="h-4 w-4" />
-            Reset Demo
+            Reset Demo Data
           </button>
         </div>
       </section>

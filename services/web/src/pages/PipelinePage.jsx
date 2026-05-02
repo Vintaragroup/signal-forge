@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Search } from "lucide-react";
 import { api } from "../api.js";
 import DataTable from "../components/DataTable.jsx";
+import DemoPageBanner from "../components/DemoPageBanner.jsx";
 import DetailDrawer from "../components/DetailDrawer.jsx";
 import StatusBadge from "../components/StatusBadge.jsx";
 
@@ -179,6 +180,7 @@ export default function PipelinePage() {
 
   return (
     <div className="space-y-4">
+      <DemoPageBanner showReset onReset={load} />
       <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
         <div className="mb-4">
           <h2 className="text-sm font-semibold text-slate-950">Campaign CRM</h2>

@@ -196,6 +196,15 @@ export function stopDemoMode() {
   window.dispatchEvent(new Event("signalforge-demo-change"));
 }
 
+export function resetDemoData() {
+  // Clears demo state and reloads seeded synthetic records. Does not touch MongoDB.
+  window.localStorage.removeItem(DEMO_STATE_KEY);
+  const fresh = clone(seedState);
+  window.localStorage.setItem(DEMO_STATE_KEY, JSON.stringify(fresh));
+  window.dispatchEvent(new Event("signalforge-demo-change"));
+  return fresh;
+}
+
 export function getDemoState() {
   return readState();
 }

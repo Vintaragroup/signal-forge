@@ -2,6 +2,23 @@
 
 This playbook describes the daily workflow for the current SignalForge Contractor Lead Engine.
 
+## 0. Choose Your Mode
+
+Before doing any work, confirm you are in the correct mode. The mode button is in the top-right header.
+
+| Mode | Use When | Data |
+|------|----------|------|
+| **Real Mode** (blue) | Running an actual test campaign | Local MongoDB |
+| **Demo Mode** (purple) | Showing clients / onboarding operators | Browser localStorage only |
+
+**To switch modes:** Click the header mode button — a confirmation dialog appears. MongoDB is never touched in Demo Mode.
+
+**To reset Demo data:** Click "Reset Demo Data" on any page with the purple banner or on the Demo Mode page. This restores seeded records without affecting MongoDB.
+
+See [docs/MODES_AND_DEMO_GUIDE.md](MODES_AND_DEMO_GUIDE.md) for full mode documentation.
+
+---
+
 ## 1. Start The Stack
 
 ```bash

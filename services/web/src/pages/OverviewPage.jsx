@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { ArrowRight, Bot, Building2, Clapperboard, DollarSign, Handshake, Mail, MessageSquare, Target, Users } from "lucide-react";
+import { ArrowRight, Bot, Building2, CheckCircle2, Circle, Clapperboard, DollarSign, Handshake, HelpCircle, Mail, MessageSquare, Target, Users } from "lucide-react";
 import { api } from "../api.js";
 import StatCard from "../components/StatCard.jsx";
 import PipelineFunnel from "../components/PipelineFunnel.jsx";
@@ -48,21 +48,86 @@ export default function OverviewPage() {
     window.location.hash = "demo";
   }
 
+  const realChecklist = [
+    { label: "Import candidates", detail: "Use Research / Tools → Import CSV to bring in a prospect list.", done: Number(kpis.total_contacts) > 0 },
+    { label: "Review candidates", detail: "Open Research / Tools and approve or reject imported candidates.", done: false },
+    { label: "Convert to contacts / leads", detail: "Approve candidates to create local contacts and leads in MongoDB.", done: Number(kpis.total_leads) > 0 },
+    { label: "Run outreach agent", detail: "Use Agent Tasks or Workflow to generate review-only outreach drafts.", done: Number(kpis.message_drafts) > 0 },
+    { label: "Review drafts / approvals", detail: "Open Messages or Approvals and approve, revise, or reject each draft.", done: Number(kpis.sent_messages) > 0 },
+    { label: "Log manual sends / responses", detail: "After sending outside SignalForge, log the send and any replies.", done: Number(kpis.responses) > 0 },
+    { label: "Generate report", detail: "Open Reports to view a pipeline or revenue performance summary.", done: false },
+  ];
+
+  const demoChecklist = [
+    { label: "Start demo", detail: "Launch the Demo Mode walkthrough from the Demo Mode page.", done: true },
+    { label: "Run outreach", detail: "Step 2 in Demo Mode — generate synthetic review-only drafts.", done: Boolean(overview?.kpis?.message_drafts) },
+    { label: "Review draft", detail: "Step 3 — review and approve a demo draft. Nothing is sent.", done: Boolean(overview?.kpis?.sent_messages) },
+    { label: "Simulate response", detail: "Step 4 — log a synthetic prospect reply.", done: Boolean(overview?.kpis?.responses) },
+    { label: "Show deal outcome", detail: "Step 5 — close a demo deal to see the full pipeline end state.", done: Boolean(overview?.kpis?.deals) },
+  ];
+
   return (
     <div className="space-y-5">
-      <section className={demoMode ? "rounded-lg border border-blue-200 bg-blue-50 p-5 shadow-sm" : "rounded-lg border border-slate-200 bg-white p-5 shadow-sm"}>
-        <div className="flex flex-wrap items-start justify-between gap-4">
-          <div>
-            <div className="text-xs font-semibold uppercase text-slate-400">Guided demo</div>
-            <h2 className="mt-1 text-xl font-semibold text-slate-950">Demo Mode - No real messages will be sent</h2>
-            <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-600">Start a clean walkthrough with seeded synthetic contacts, leads, drafts, responses, and deals. Demo records stay separate from live MongoDB data in your browser.</p>
+      {/* Mode-specific checklist panel */}
+      {demoMode ? (
+        <section className="rounded-lg border-2 border-purple-300 bg-purple-50 p-5 shadow-sm">
+          <div className="flex flex-wrap items-start justify-between gap-4">
+            <div>
+              <div className="text-xs font-bold uppercase tracking-widest text-purple-700">Demo Mode</div>
+              <h2 className="mt-1 text-xl font-semibold text-purple-950">Demo Walkthrough</h2>
+              <p className="mt-1 text-sm text-purple-800">Follow these steps in Demo Mode. No real records are affected.</p>
+            </div>
+            <a href="#demo" className="inline-flex h-9 items-center gap-2 rounded-lg bg-purple-600 px-4 text-sm font-semibold text-white transition hover:bg-purple-700">
+              <Clapperboard className="h-4 w-4" />
+              Open Demo
+            </a>
           </div>
-          <button type="button" onClick={startDemo} className="inline-flex h-10 items-center gap-2 rounded-lg bg-blue-600 px-4 text-sm font-semibold text-white transition hover:bg-blue-700">
-            <Clapperboard className="h-4 w-4" />
-            Start Demo
-          </button>
-        </div>
-      </section>
+          <div className="mt-4 grid gap-2 md:grid-cols-2 xl:grid-cols-3">
+            {demoChecklist.map((item) => (
+              <div key={item.label} className="flex items-start gap-3 rounded-lg border border-purple-200 bg-white p-3">
+                {item.done ? (
+                  <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-purple-600" />
+                ) : (
+                  <Circle className="mt-0.5 h-4 w-4 shrink-0 text-purple-300" />
+                )}
+                <div>
+                  <div className="text-sm font-semibold text-slate-900">{item.label}</div>
+                  <p className="mt-0.5 text-xs text-slate-500">{item.detail}</p>
+                </div>
+              </div>
+            ))}
+          </div>
+        </section>
+      ) : (
+        <section className="rounded-lg border border-blue-200 bg-blue-50 p-5 shadow-sm">
+          <div className="flex flex-wrap items-start justify-between gap-4">
+            <div>
+              <div className="text-xs font-semibold uppercase tracking-wide text-blue-700">Real Mode</div>
+              <h2 className="mt-1 text-xl font-semibold text-slate-950">Ready for Real Test Campaign</h2>
+              <p className="mt-1 text-sm text-slate-600">Work through each step to run a complete operator cycle. No automated sending occurs.</p>
+            </div>
+            <a href="#workflow" className="inline-flex h-9 items-center gap-2 rounded-lg bg-blue-600 px-4 text-sm font-semibold text-white transition hover:bg-blue-700">
+              Open Workflow
+              <ArrowRight className="h-4 w-4" />
+            </a>
+          </div>
+          <div className="mt-4 grid gap-2 md:grid-cols-2 xl:grid-cols-4">
+            {realChecklist.map((item) => (
+              <div key={item.label} className="flex items-start gap-3 rounded-lg border border-blue-100 bg-white p-3">
+                {item.done ? (
+                  <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-blue-600" />
+                ) : (
+                  <Circle className="mt-0.5 h-4 w-4 shrink-0 text-slate-300" />
+                )}
+                <div>
+                  <div className="text-sm font-semibold text-slate-900">{item.label}</div>
+                  <p className="mt-0.5 text-xs text-slate-500">{item.detail}</p>
+                </div>
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
 
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
         {kpiConfig.map(([key, label, Icon, tone]) => (
@@ -195,6 +260,47 @@ export default function OverviewPage() {
           {!overview?.agent_activity?.length ? <div className="text-sm text-slate-500">No agent logs yet.</div> : null}
         </div>
       </div>
+
+      {/* Settings / Help — Mode explanation */}
+      <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+        <div className="mb-4 flex items-center gap-2">
+          <HelpCircle className="h-4 w-4 text-slate-400" />
+          <h2 className="text-sm font-semibold text-slate-950">Mode Reference</h2>
+        </div>
+        <div className="grid gap-4 md:grid-cols-2">
+          <div className={`rounded-lg p-4 ${demoMode ? "border-2 border-purple-300 bg-purple-50" : "border border-slate-200 bg-slate-50"}`}>
+            <div className="mb-2 flex items-center gap-2">
+              <Clapperboard className="h-4 w-4 text-purple-600" />
+              <span className="text-sm font-bold text-purple-800">Demo Mode</span>
+              {demoMode ? <StatusBadge value="active" /> : null}
+            </div>
+            <ul className="space-y-1 text-xs text-slate-600">
+              <li>• Browser-only synthetic data — no MongoDB reads or writes.</li>
+              <li>• All records labeled <strong>DEMO</strong> and stored in localStorage only.</li>
+              <li>• Used to show clients or new operators how the system works.</li>
+              <li>• Reset Demo Data at any time to restore seeded records.</li>
+              <li>• Agents, GPT, and real imports do not run in Demo Mode.</li>
+            </ul>
+          </div>
+          <div className={`rounded-lg p-4 ${!demoMode ? "border-2 border-blue-200 bg-blue-50" : "border border-slate-200 bg-slate-50"}`}>
+            <div className="mb-2 flex items-center gap-2">
+              <Users className="h-4 w-4 text-blue-600" />
+              <span className="text-sm font-bold text-blue-800">Real Mode</span>
+              {!demoMode ? <StatusBadge value="active" /> : null}
+            </div>
+            <ul className="space-y-1 text-xs text-slate-600">
+              <li>• Reads from and writes to local MongoDB only.</li>
+              <li>• Intended for actual company test campaigns.</li>
+              <li>• No automated outbound sending ever occurs.</li>
+              <li>• All agent actions are dry-run or review-only.</li>
+              <li>• All message sends require a human operator step outside SignalForge.</li>
+            </ul>
+          </div>
+        </div>
+        <p className="mt-3 text-xs text-slate-500">
+          Switch modes using the <strong>Mode Switcher</strong> in the top-right header. A confirmation dialog will appear before any switch.
+        </p>
+      </section>
     </div>
   );
 }
