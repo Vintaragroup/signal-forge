@@ -196,6 +196,34 @@ External Sources
   -> api
 ```
 
+## Creative Studio v2 — Social Creative Engine
+
+Creative Studio v2 extends the content planning workflow with a full social creative pipeline: client profiles, source channel management, content ingestion, transcript-based snippet scoring, and creative asset review. No content is published or scheduled.
+
+**New collections (v2):**
+
+| Collection | Purpose |
+|---|---|
+| `client_profiles` | Brand permissions, compliance rules, allowed content types. Likeness/voice/avatar default off. |
+| `source_channels` | Channels approved for ingestion and content reuse. |
+| `source_content` | Discovered videos and posts. Must reach `approved` before snippets are extracted. |
+| `content_transcripts` | Full transcripts from source content. |
+| `content_snippets` | Scored transcript segments. Each requires operator review before asset generation. |
+| `creative_assets` | Generated images, reels, and captions. Require review before any external use. |
+| `creative_tool_runs` | Records of ComfyUI or manual tool invocations. |
+
+**Safety:** All v2 records are `simulation_only: true` and `outbound_actions_taken: 0`. Likeness, voice, and avatar permissions default to `false`. No asset is published or scheduled automatically.
+
+**ComfyUI integration (optional):** Set `COMFYUI_ENABLED=true` in `.env` to enable local image/video generation via ComfyUI. If disabled (default), tool runs are recorded with `status=skipped`. If enabled but unavailable, runs fail safely with a `creative_tool_run` error record.
+
+```bash
+COMFYUI_ENABLED=true
+COMFYUI_BASE_URL=http://host.docker.internal:8188
+COMFYUI_WORKFLOW_PATH=/path/to/workflow.json
+```
+
+**Dashboard:** The Creative Studio page now includes Clients, Source Channels, Source Content, Snippets, Assets, and Approval Queue tabs.
+
 ## Local Setup
 
 1. Copy the environment template:

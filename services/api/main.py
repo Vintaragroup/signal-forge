@@ -120,6 +120,46 @@ class WorkspaceStatusRequest(BaseModel):
     status: Literal["active", "paused", "archived"]
 
 
+# ---------------------------------------------------------------------------
+# Creative Studio models
+# ---------------------------------------------------------------------------
+
+class ContentBriefCreateRequest(BaseModel):
+    workspace_slug: str = ""
+    module: str = ""
+    campaign_name: str = ""
+    audience: str = ""
+    platform: str = ""
+    goal: str = ""
+    offer: str = ""
+    tone: str = ""
+    notes: str = ""
+    status: Literal["draft", "needs_review", "approved", "rejected"] = "draft"
+
+
+class ContentDraftCreateRequest(BaseModel):
+    workspace_slug: str = ""
+    module: str = ""
+    brief_id: str = ""
+    platform: str = ""
+    content_type: Literal["post", "caption", "carousel", "reel_script", "ad_copy"] = "post"
+    title: str = ""
+    body: str = ""
+    hashtags: list[str] = Field(default_factory=list)
+    call_to_action: str = ""
+    status: Literal["needs_review", "approved", "rejected"] = "needs_review"
+    generated_by_agent: str = ""
+    agent_run_id: str = ""
+    selected_model: str = ""
+    routing_reason: str = ""
+    complexity: str = ""
+
+
+class ContentDraftReviewRequest(BaseModel):
+    decision: Literal["approve", "reject", "revise"]
+    note: str = ""
+
+
 def utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -2318,5 +2358,891 @@ def update_workspace_status(slug: str, payload: WorkspaceStatusRequest) -> dict:
         )
         updated = db.workspaces.find_one({"slug": slug})
         return {"item": serialize(updated), "message": f"Workspace status updated to '{payload.status}'."}
+    finally:
+        client.close()
+
+
+# ---------------------------------------------------------------------------
+# Creative Studio: Content Briefs
+# ---------------------------------------------------------------------------
+
+
+def find_content_brief(db, brief_id: str) -> dict | None:
+    query: dict[str, Any] = {"_id": brief_id}
+    if ObjectId.is_valid(brief_id):
+        query = {"$or": [{"_id": ObjectId(brief_id)}, {"_id": brief_id}]}
+    return db.content_briefs.find_one(query)
+
+
+def find_content_draft(db, draft_id: str) -> dict | None:
+    query: dict[str, Any] = {"_id": draft_id}
+    if ObjectId.is_valid(draft_id):
+        query = {"$or": [{"_id": ObjectId(draft_id)}, {"_id": draft_id}]}
+    return db.content_drafts.find_one(query)
+
+
+def content_draft_status_for(decision: str) -> str:
+    if decision == "approve":
+        return "approved"
+    if decision == "reject":
+        return "rejected"
+    return "needs_review"
+
+
+@app.get("/content-briefs")
+def content_briefs(
+    workspace_slug: str = Query(""),
+    module: str = "",
+    platform: str = "",
+    status: str = "",
+    include_legacy: bool = Query(False),
+    include_test: bool = Query(False),
+    limit: int = Query(100, ge=1, le=500),
+) -> dict:
+    client = get_client()
+    try:
+        db = get_database(client)
+        query: dict[str, Any] = {}
+        if workspace_slug:
+            query["workspace_slug"] = workspace_slug
+        if module:
+            query["module"] = module
+        if platform:
+            query["platform"] = platform
+        if status:
+            query["status"] = status
+        records = list(db.content_briefs.find(query).sort([("created_at", -1)]).limit(limit))
+        records = apply_real_mode_filters(records, workspace_slug=workspace_slug, include_legacy=include_legacy, include_test=include_test)
+        return {"items": serialize(records)}
+    finally:
+        client.close()
+
+
+@app.post("/content-briefs")
+def create_content_brief(payload: ContentBriefCreateRequest) -> dict:
+    now = utc_now()
+    brief: dict[str, Any] = {
+        "workspace_slug": clean_text(payload.workspace_slug),
+        "module": clean_text(payload.module),
+        "campaign_name": clean_text(payload.campaign_name),
+        "audience": clean_text(payload.audience),
+        "platform": clean_text(payload.platform),
+        "goal": clean_text(payload.goal),
+        "offer": clean_text(payload.offer),
+        "tone": clean_text(payload.tone),
+        "notes": clean_text(payload.notes),
+        "status": payload.status,
+        "created_at": now,
+        "updated_at": now,
+    }
+    client = get_client()
+    try:
+        db = get_database(client)
+        result = db.content_briefs.insert_one(brief)
+        created = db.content_briefs.find_one({"_id": result.inserted_id})
+        return {"item": serialize(created), "message": "Content brief created."}
+    finally:
+        client.close()
+
+
+# ---------------------------------------------------------------------------
+# Creative Studio: Content Drafts
+# ---------------------------------------------------------------------------
+
+
+@app.get("/content-drafts")
+def content_drafts(
+    workspace_slug: str = Query(""),
+    module: str = "",
+    platform: str = "",
+    content_type: str = "",
+    status: str = "",
+    brief_id: str = "",
+    generated_by_agent: bool | None = None,
+    include_legacy: bool = Query(False),
+    include_test: bool = Query(False),
+    limit: int = Query(100, ge=1, le=500),
+) -> dict:
+    client = get_client()
+    try:
+        db = get_database(client)
+        query: dict[str, Any] = {}
+        if workspace_slug:
+            query["workspace_slug"] = workspace_slug
+        if module:
+            query["module"] = module
+        if platform:
+            query["platform"] = platform
+        if content_type:
+            query["content_type"] = content_type
+        if status:
+            query["status"] = status
+        if brief_id:
+            query["brief_id"] = brief_id
+        if generated_by_agent is True:
+            query["generated_by_agent"] = {"$nin": ["", None]}
+        elif generated_by_agent is False:
+            query["$or"] = [{"generated_by_agent": ""}, {"generated_by_agent": None}, {"generated_by_agent": {"$exists": False}}]
+        records = list(db.content_drafts.find(query).sort([("created_at", -1)]).limit(limit))
+        records = apply_real_mode_filters(records, workspace_slug=workspace_slug, include_legacy=include_legacy, include_test=include_test)
+        return {"items": serialize(records)}
+    finally:
+        client.close()
+
+
+@app.post("/content-drafts")
+def create_content_draft(payload: ContentDraftCreateRequest) -> dict:
+    now = utc_now()
+    draft: dict[str, Any] = {
+        "workspace_slug": clean_text(payload.workspace_slug),
+        "module": clean_text(payload.module),
+        "brief_id": clean_text(payload.brief_id),
+        "platform": clean_text(payload.platform),
+        "content_type": payload.content_type,
+        "title": clean_text(payload.title),
+        "body": clean_text(payload.body),
+        "hashtags": [clean_text(tag) for tag in payload.hashtags if clean_text(tag)],
+        "call_to_action": clean_text(payload.call_to_action),
+        "status": payload.status,
+        "generated_by_agent": clean_text(payload.generated_by_agent),
+        "agent_run_id": clean_text(payload.agent_run_id),
+        "selected_model": clean_text(payload.selected_model),
+        "routing_reason": clean_text(payload.routing_reason),
+        "complexity": clean_text(payload.complexity),
+        "review_events": [],
+        "outbound_actions_taken": 0,
+        "simulation_only": True,
+        "created_at": now,
+        "updated_at": now,
+    }
+    client = get_client()
+    try:
+        db = get_database(client)
+        result = db.content_drafts.insert_one(draft)
+        created = db.content_drafts.find_one({"_id": result.inserted_id})
+        return {"item": serialize(created), "message": "Content draft created. No post published or scheduled."}
+    finally:
+        client.close()
+
+
+@app.post("/content-drafts/{draft_id}/review")
+def review_content_draft(draft_id: str, payload: ContentDraftReviewRequest) -> dict:
+    client = get_client()
+    reviewed_at = utc_now()
+    try:
+        db = get_database(client)
+        draft = find_content_draft(db, draft_id)
+        if not draft:
+            raise HTTPException(status_code=404, detail="Content draft not found.")
+        new_status = content_draft_status_for(payload.decision)
+        event = {
+            "decision": payload.decision,
+            "status": new_status,
+            "note": clean_text(payload.note),
+            "reviewed_at": reviewed_at,
+            "source": "web_dashboard",
+        }
+        db.content_drafts.update_one(
+            {"_id": draft["_id"]},
+            {
+                "$set": {
+                    "status": new_status,
+                    "review_decision": payload.decision,
+                    "review_note": clean_text(payload.note),
+                    "reviewed_at": reviewed_at,
+                    "updated_at": reviewed_at,
+                    "outbound_actions_taken": 0,
+                },
+                "$push": {"review_events": event},
+            },
+        )
+        updated = db.content_drafts.find_one({"_id": draft["_id"]})
+        return {
+            "item": serialize(updated),
+            "message": "Draft review saved. No post published or scheduled.",
+            "simulation_only": True,
+        }
+    finally:
+        client.close()
+
+
+# ---------------------------------------------------------------------------
+# Social Creative Engine v2 — Pydantic models
+# ---------------------------------------------------------------------------
+
+class ClientProfileCreateRequest(BaseModel):
+    workspace_slug: str = ""
+    client_name: str
+    brand_name: str = ""
+    approved_source_channels: list[str] = Field(default_factory=list)
+    allowed_content_types: list[str] = Field(default_factory=list)
+    disallowed_topics: list[str] = Field(default_factory=list)
+    likeness_permissions: bool = False
+    voice_permissions: bool = False
+    avatar_permissions: bool = False
+    compliance_notes: str = ""
+    status: Literal["active", "archived"] = "active"
+
+
+class SourceChannelCreateRequest(BaseModel):
+    workspace_slug: str = ""
+    client_id: str = ""
+    platform: str = ""
+    channel_name: str = ""
+    channel_url: str = ""
+    approved_for_ingestion: bool = False
+    approved_for_reuse: bool = False
+    notes: str = ""
+
+
+class SourceContentCreateRequest(BaseModel):
+    workspace_slug: str = ""
+    client_id: str = ""
+    source_channel_id: str = ""
+    platform: str = ""
+    source_url: str = ""
+    title: str = ""
+    creator: str = ""
+    published_at: str = ""
+    duration_seconds: int = 0
+    performance_metadata: dict = Field(default_factory=dict)
+    discovery_score: float = 0.0
+    discovery_reason: str = ""
+    status: Literal["needs_review", "approved", "rejected"] = "needs_review"
+
+
+class ContentTranscriptCreateRequest(BaseModel):
+    workspace_slug: str = ""
+    source_content_id: str = ""
+    transcript_text: str = ""
+    status: Literal["pending", "complete", "failed"] = "pending"
+
+
+class ContentSnippetCreateRequest(BaseModel):
+    workspace_slug: str = ""
+    source_content_id: str = ""
+    transcript_id: str = ""
+    speaker: str = ""
+    start_time: float = 0.0
+    end_time: float = 0.0
+    transcript_text: str = ""
+    score: float = 0.0
+    score_reason: str = ""
+    theme: str = ""
+    hook_angle: str = ""
+    platform_fit: list[str] = Field(default_factory=list)
+    status: Literal["needs_review", "approved", "rejected"] = "needs_review"
+
+
+class ContentSnippetReviewRequest(BaseModel):
+    decision: Literal["approve", "reject", "revise"]
+    note: str = ""
+
+
+class CreativeAssetCreateRequest(BaseModel):
+    workspace_slug: str = ""
+    client_id: str = ""
+    source_content_id: str = ""
+    snippet_id: str = ""
+    asset_type: Literal["image", "video", "carousel", "reel", "other"] = "image"
+    title: str = ""
+    description: str = ""
+    file_path: str = ""
+    prompt_used: str = ""
+    tool_run_id: str = ""
+    status: Literal["needs_review", "approved", "rejected"] = "needs_review"
+
+
+class CreativeToolRunRequest(BaseModel):
+    workspace_slug: str = ""
+    client_id: str = ""
+    snippet_id: str = ""
+    source_content_id: str = ""
+    tool_name: Literal["comfyui", "manual"] = "comfyui"
+    workflow_path: str = ""
+    prompt_inputs: dict = Field(default_factory=dict)
+    notes: str = ""
+
+
+# ---------------------------------------------------------------------------
+# Social Creative Engine v2 — helper functions
+# ---------------------------------------------------------------------------
+
+def find_client_profile(db, profile_id: str) -> dict | None:
+    query: dict[str, Any] = {"_id": profile_id}
+    if ObjectId.is_valid(profile_id):
+        query = {"$or": [{"_id": ObjectId(profile_id)}, {"_id": profile_id}]}
+    return db.client_profiles.find_one(query)
+
+
+def find_source_channel(db, channel_id: str) -> dict | None:
+    query: dict[str, Any] = {"_id": channel_id}
+    if ObjectId.is_valid(channel_id):
+        query = {"$or": [{"_id": ObjectId(channel_id)}, {"_id": channel_id}]}
+    return db.source_channels.find_one(query)
+
+
+def find_source_content(db, content_id: str) -> dict | None:
+    query: dict[str, Any] = {"_id": content_id}
+    if ObjectId.is_valid(content_id):
+        query = {"$or": [{"_id": ObjectId(content_id)}, {"_id": content_id}]}
+    return db.source_content.find_one(query)
+
+
+def find_content_transcript(db, transcript_id: str) -> dict | None:
+    query: dict[str, Any] = {"_id": transcript_id}
+    if ObjectId.is_valid(transcript_id):
+        query = {"$or": [{"_id": ObjectId(transcript_id)}, {"_id": transcript_id}]}
+    return db.content_transcripts.find_one(query)
+
+
+def find_content_snippet(db, snippet_id: str) -> dict | None:
+    query: dict[str, Any] = {"_id": snippet_id}
+    if ObjectId.is_valid(snippet_id):
+        query = {"$or": [{"_id": ObjectId(snippet_id)}, {"_id": snippet_id}]}
+    return db.content_snippets.find_one(query)
+
+
+def find_creative_asset(db, asset_id: str) -> dict | None:
+    query: dict[str, Any] = {"_id": asset_id}
+    if ObjectId.is_valid(asset_id):
+        query = {"$or": [{"_id": ObjectId(asset_id)}, {"_id": asset_id}]}
+    return db.creative_assets.find_one(query)
+
+
+def find_creative_tool_run(db, run_id: str) -> dict | None:
+    query: dict[str, Any] = {"_id": run_id}
+    if ObjectId.is_valid(run_id):
+        query = {"$or": [{"_id": ObjectId(run_id)}, {"_id": run_id}]}
+    return db.creative_tool_runs.find_one(query)
+
+
+def snippet_status_for(decision: str) -> str:
+    if decision == "approve":
+        return "approved"
+    if decision == "reject":
+        return "rejected"
+    return "needs_review"
+
+
+# ---------------------------------------------------------------------------
+# Social Creative Engine v2 — Part 1: Client Profiles
+# ---------------------------------------------------------------------------
+
+@app.get("/client-profiles")
+def list_client_profiles(
+    workspace_slug: str = Query(""),
+    status: str = "",
+    include_legacy: bool = Query(False),
+    include_test: bool = Query(False),
+    limit: int = Query(100, ge=1, le=500),
+) -> dict:
+    client = get_client()
+    try:
+        db = get_database(client)
+        query: dict[str, Any] = {}
+        if workspace_slug:
+            query["workspace_slug"] = workspace_slug
+        if status:
+            query["status"] = status
+        records = list(db.client_profiles.find(query).sort([("created_at", -1)]).limit(limit))
+        records = apply_real_mode_filters(records, workspace_slug=workspace_slug, include_legacy=include_legacy, include_test=include_test)
+        return {"items": serialize(records)}
+    finally:
+        client.close()
+
+
+@app.post("/client-profiles")
+def create_client_profile(payload: ClientProfileCreateRequest) -> dict:
+    if not payload.client_name.strip():
+        raise HTTPException(status_code=400, detail="client_name is required.")
+    now = utc_now()
+    record: dict[str, Any] = {
+        "workspace_slug": clean_text(payload.workspace_slug),
+        "client_name": clean_text(payload.client_name),
+        "brand_name": clean_text(payload.brand_name),
+        "approved_source_channels": [clean_text(c) for c in payload.approved_source_channels if clean_text(c)],
+        "allowed_content_types": [clean_text(c) for c in payload.allowed_content_types if clean_text(c)],
+        "disallowed_topics": [clean_text(t) for t in payload.disallowed_topics if clean_text(t)],
+        "likeness_permissions": False,
+        "voice_permissions": False,
+        "avatar_permissions": False,
+        "compliance_notes": clean_text(payload.compliance_notes),
+        "status": payload.status,
+        "created_at": now,
+        "updated_at": now,
+    }
+    client = get_client()
+    try:
+        db = get_database(client)
+        result = db.client_profiles.insert_one(record)
+        created = db.client_profiles.find_one({"_id": result.inserted_id})
+        return {"item": serialize(created), "message": "Client profile created. No post published or scheduled."}
+    finally:
+        client.close()
+
+
+# ---------------------------------------------------------------------------
+# Social Creative Engine v2 — Part 2: Source Channels
+# ---------------------------------------------------------------------------
+
+@app.get("/source-channels")
+def list_source_channels(
+    workspace_slug: str = Query(""),
+    client_id: str = "",
+    platform: str = "",
+    approved_for_ingestion: bool | None = None,
+    include_legacy: bool = Query(False),
+    include_test: bool = Query(False),
+    limit: int = Query(100, ge=1, le=500),
+) -> dict:
+    client = get_client()
+    try:
+        db = get_database(client)
+        query: dict[str, Any] = {}
+        if workspace_slug:
+            query["workspace_slug"] = workspace_slug
+        if client_id:
+            query["client_id"] = client_id
+        if platform:
+            query["platform"] = platform
+        if approved_for_ingestion is not None:
+            query["approved_for_ingestion"] = approved_for_ingestion
+        records = list(db.source_channels.find(query).sort([("created_at", -1)]).limit(limit))
+        records = apply_real_mode_filters(records, workspace_slug=workspace_slug, include_legacy=include_legacy, include_test=include_test)
+        return {"items": serialize(records)}
+    finally:
+        client.close()
+
+
+@app.post("/source-channels")
+def create_source_channel(payload: SourceChannelCreateRequest) -> dict:
+    now = utc_now()
+    record: dict[str, Any] = {
+        "workspace_slug": clean_text(payload.workspace_slug),
+        "client_id": clean_text(payload.client_id),
+        "platform": clean_text(payload.platform),
+        "channel_name": clean_text(payload.channel_name),
+        "channel_url": clean_text(payload.channel_url),
+        "approved_for_ingestion": payload.approved_for_ingestion,
+        "approved_for_reuse": payload.approved_for_reuse,
+        "notes": clean_text(payload.notes),
+        "created_at": now,
+        "updated_at": now,
+    }
+    client = get_client()
+    try:
+        db = get_database(client)
+        result = db.source_channels.insert_one(record)
+        created = db.source_channels.find_one({"_id": result.inserted_id})
+        return {"item": serialize(created), "message": "Source channel created. No post published or scheduled."}
+    finally:
+        client.close()
+
+
+# ---------------------------------------------------------------------------
+# Social Creative Engine v2 — Part 3: Source Content
+# ---------------------------------------------------------------------------
+
+@app.get("/source-content")
+def list_source_content(
+    workspace_slug: str = Query(""),
+    client_id: str = "",
+    source_channel_id: str = "",
+    status: str = "",
+    platform: str = "",
+    include_legacy: bool = Query(False),
+    include_test: bool = Query(False),
+    limit: int = Query(100, ge=1, le=500),
+) -> dict:
+    client = get_client()
+    try:
+        db = get_database(client)
+        query: dict[str, Any] = {}
+        if workspace_slug:
+            query["workspace_slug"] = workspace_slug
+        if client_id:
+            query["client_id"] = client_id
+        if source_channel_id:
+            query["source_channel_id"] = source_channel_id
+        if status:
+            query["status"] = status
+        if platform:
+            query["platform"] = platform
+        records = list(db.source_content.find(query).sort([("created_at", -1)]).limit(limit))
+        records = apply_real_mode_filters(records, workspace_slug=workspace_slug, include_legacy=include_legacy, include_test=include_test)
+        return {"items": serialize(records)}
+    finally:
+        client.close()
+
+
+@app.post("/source-content")
+def create_source_content(payload: SourceContentCreateRequest) -> dict:
+    now = utc_now()
+    record: dict[str, Any] = {
+        "workspace_slug": clean_text(payload.workspace_slug),
+        "client_id": clean_text(payload.client_id),
+        "source_channel_id": clean_text(payload.source_channel_id),
+        "platform": clean_text(payload.platform),
+        "source_url": clean_text(payload.source_url),
+        "title": clean_text(payload.title),
+        "creator": clean_text(payload.creator),
+        "published_at": clean_text(payload.published_at),
+        "duration_seconds": payload.duration_seconds,
+        "performance_metadata": payload.performance_metadata or {},
+        "discovery_score": payload.discovery_score,
+        "discovery_reason": clean_text(payload.discovery_reason),
+        "status": payload.status,
+        "review_events": [],
+        "simulation_only": True,
+        "outbound_actions_taken": 0,
+        "created_at": now,
+        "updated_at": now,
+    }
+    client = get_client()
+    try:
+        db = get_database(client)
+        result = db.source_content.insert_one(record)
+        created = db.source_content.find_one({"_id": result.inserted_id})
+        return {"item": serialize(created), "message": "Source content created. No post published or scheduled."}
+    finally:
+        client.close()
+
+
+# ---------------------------------------------------------------------------
+# Social Creative Engine v2 — Part 4: Transcripts + Snippets
+# ---------------------------------------------------------------------------
+
+@app.get("/content-transcripts")
+def list_content_transcripts(
+    workspace_slug: str = Query(""),
+    source_content_id: str = "",
+    status: str = "",
+    include_legacy: bool = Query(False),
+    include_test: bool = Query(False),
+    limit: int = Query(100, ge=1, le=500),
+) -> dict:
+    client = get_client()
+    try:
+        db = get_database(client)
+        query: dict[str, Any] = {}
+        if workspace_slug:
+            query["workspace_slug"] = workspace_slug
+        if source_content_id:
+            query["source_content_id"] = source_content_id
+        if status:
+            query["status"] = status
+        records = list(db.content_transcripts.find(query).sort([("created_at", -1)]).limit(limit))
+        records = apply_real_mode_filters(records, workspace_slug=workspace_slug, include_legacy=include_legacy, include_test=include_test)
+        return {"items": serialize(records)}
+    finally:
+        client.close()
+
+
+@app.post("/content-transcripts")
+def create_content_transcript(payload: ContentTranscriptCreateRequest) -> dict:
+    now = utc_now()
+    record: dict[str, Any] = {
+        "workspace_slug": clean_text(payload.workspace_slug),
+        "source_content_id": clean_text(payload.source_content_id),
+        "transcript_text": clean_text(payload.transcript_text),
+        "status": payload.status,
+        "created_at": now,
+        "updated_at": now,
+    }
+    client = get_client()
+    try:
+        db = get_database(client)
+        result = db.content_transcripts.insert_one(record)
+        created = db.content_transcripts.find_one({"_id": result.inserted_id})
+        return {"item": serialize(created), "message": "Transcript created. No post published or scheduled."}
+    finally:
+        client.close()
+
+
+@app.get("/content-snippets")
+def list_content_snippets(
+    workspace_slug: str = Query(""),
+    source_content_id: str = "",
+    transcript_id: str = "",
+    status: str = "",
+    theme: str = "",
+    include_legacy: bool = Query(False),
+    include_test: bool = Query(False),
+    limit: int = Query(100, ge=1, le=500),
+) -> dict:
+    client = get_client()
+    try:
+        db = get_database(client)
+        query: dict[str, Any] = {}
+        if workspace_slug:
+            query["workspace_slug"] = workspace_slug
+        if source_content_id:
+            query["source_content_id"] = source_content_id
+        if transcript_id:
+            query["transcript_id"] = transcript_id
+        if status:
+            query["status"] = status
+        if theme:
+            query["theme"] = theme
+        records = list(db.content_snippets.find(query).sort([("score", -1), ("created_at", -1)]).limit(limit))
+        records = apply_real_mode_filters(records, workspace_slug=workspace_slug, include_legacy=include_legacy, include_test=include_test)
+        return {"items": serialize(records)}
+    finally:
+        client.close()
+
+
+@app.post("/content-snippets")
+def create_content_snippet(payload: ContentSnippetCreateRequest) -> dict:
+    now = utc_now()
+    record: dict[str, Any] = {
+        "workspace_slug": clean_text(payload.workspace_slug),
+        "source_content_id": clean_text(payload.source_content_id),
+        "transcript_id": clean_text(payload.transcript_id),
+        "speaker": clean_text(payload.speaker),
+        "start_time": payload.start_time,
+        "end_time": payload.end_time,
+        "transcript_text": clean_text(payload.transcript_text),
+        "score": payload.score,
+        "score_reason": clean_text(payload.score_reason),
+        "theme": clean_text(payload.theme),
+        "hook_angle": clean_text(payload.hook_angle),
+        "platform_fit": [clean_text(p) for p in payload.platform_fit if clean_text(p)],
+        "status": payload.status,
+        "review_events": [],
+        "simulation_only": True,
+        "outbound_actions_taken": 0,
+        "created_at": now,
+        "updated_at": now,
+    }
+    client = get_client()
+    try:
+        db = get_database(client)
+        result = db.content_snippets.insert_one(record)
+        created = db.content_snippets.find_one({"_id": result.inserted_id})
+        return {"item": serialize(created), "message": "Content snippet created. No post published or scheduled."}
+    finally:
+        client.close()
+
+
+@app.post("/content-snippets/{snippet_id}/review")
+def review_content_snippet(snippet_id: str, payload: ContentSnippetReviewRequest) -> dict:
+    client = get_client()
+    reviewed_at = utc_now()
+    try:
+        db = get_database(client)
+        snippet = find_content_snippet(db, snippet_id)
+        if not snippet:
+            raise HTTPException(status_code=404, detail="Content snippet not found.")
+        new_status = snippet_status_for(payload.decision)
+        event = {
+            "decision": payload.decision,
+            "status": new_status,
+            "note": clean_text(payload.note),
+            "reviewed_at": reviewed_at,
+            "source": "web_dashboard",
+        }
+        db.content_snippets.update_one(
+            {"_id": snippet["_id"]},
+            {
+                "$set": {
+                    "status": new_status,
+                    "review_decision": payload.decision,
+                    "review_note": clean_text(payload.note),
+                    "reviewed_at": reviewed_at,
+                    "updated_at": reviewed_at,
+                    "outbound_actions_taken": 0,
+                },
+                "$push": {"review_events": event},
+            },
+        )
+        updated = db.content_snippets.find_one({"_id": snippet["_id"]})
+        return {
+            "item": serialize(updated),
+            "message": "Snippet review saved. No post published or scheduled.",
+            "simulation_only": True,
+        }
+    finally:
+        client.close()
+
+
+# ---------------------------------------------------------------------------
+# Social Creative Engine v2 — Part 5: Creative Assets + Tool Runs
+# ---------------------------------------------------------------------------
+
+@app.get("/creative-assets")
+def list_creative_assets(
+    workspace_slug: str = Query(""),
+    client_id: str = "",
+    snippet_id: str = "",
+    status: str = "",
+    asset_type: str = "",
+    include_legacy: bool = Query(False),
+    include_test: bool = Query(False),
+    limit: int = Query(100, ge=1, le=500),
+) -> dict:
+    client = get_client()
+    try:
+        db = get_database(client)
+        query: dict[str, Any] = {}
+        if workspace_slug:
+            query["workspace_slug"] = workspace_slug
+        if client_id:
+            query["client_id"] = client_id
+        if snippet_id:
+            query["snippet_id"] = snippet_id
+        if status:
+            query["status"] = status
+        if asset_type:
+            query["asset_type"] = asset_type
+        records = list(db.creative_assets.find(query).sort([("created_at", -1)]).limit(limit))
+        records = apply_real_mode_filters(records, workspace_slug=workspace_slug, include_legacy=include_legacy, include_test=include_test)
+        return {"items": serialize(records)}
+    finally:
+        client.close()
+
+
+@app.post("/creative-assets")
+def create_creative_asset(payload: CreativeAssetCreateRequest) -> dict:
+    now = utc_now()
+    record: dict[str, Any] = {
+        "workspace_slug": clean_text(payload.workspace_slug),
+        "client_id": clean_text(payload.client_id),
+        "source_content_id": clean_text(payload.source_content_id),
+        "snippet_id": clean_text(payload.snippet_id),
+        "asset_type": payload.asset_type,
+        "title": clean_text(payload.title),
+        "description": clean_text(payload.description),
+        "file_path": clean_text(payload.file_path),
+        "prompt_used": clean_text(payload.prompt_used),
+        "tool_run_id": clean_text(payload.tool_run_id),
+        "status": payload.status,
+        "review_events": [],
+        "simulation_only": True,
+        "outbound_actions_taken": 0,
+        "created_at": now,
+        "updated_at": now,
+    }
+    client = get_client()
+    try:
+        db = get_database(client)
+        result = db.creative_assets.insert_one(record)
+        created = db.creative_assets.find_one({"_id": result.inserted_id})
+        return {"item": serialize(created), "message": "Creative asset created. No post published or scheduled."}
+    finally:
+        client.close()
+
+
+@app.get("/creative-tool-runs")
+def list_creative_tool_runs(
+    workspace_slug: str = Query(""),
+    client_id: str = "",
+    status: str = "",
+    tool_name: str = "",
+    include_legacy: bool = Query(False),
+    include_test: bool = Query(False),
+    limit: int = Query(100, ge=1, le=500),
+) -> dict:
+    client = get_client()
+    try:
+        db = get_database(client)
+        query: dict[str, Any] = {}
+        if workspace_slug:
+            query["workspace_slug"] = workspace_slug
+        if client_id:
+            query["client_id"] = client_id
+        if status:
+            query["status"] = status
+        if tool_name:
+            query["tool_name"] = tool_name
+        records = list(db.creative_tool_runs.find(query).sort([("created_at", -1)]).limit(limit))
+        records = apply_real_mode_filters(records, workspace_slug=workspace_slug, include_legacy=include_legacy, include_test=include_test)
+        return {"items": serialize(records), "simulation_only": True}
+    finally:
+        client.close()
+
+
+@app.post("/creative-tool-runs")
+def trigger_creative_tool_run(payload: CreativeToolRunRequest) -> dict:
+    now = utc_now()
+    comfyui_enabled = env_enabled(os.getenv("COMFYUI_ENABLED", "false"))
+
+    run_record: dict[str, Any] = {
+        "workspace_slug": clean_text(payload.workspace_slug),
+        "client_id": clean_text(payload.client_id),
+        "snippet_id": clean_text(payload.snippet_id),
+        "source_content_id": clean_text(payload.source_content_id),
+        "tool_name": payload.tool_name,
+        "workflow_path": clean_text(payload.workflow_path),
+        "prompt_inputs": payload.prompt_inputs or {},
+        "notes": clean_text(payload.notes),
+        "status": "pending",
+        "comfyui_enabled": comfyui_enabled,
+        "simulation_only": True,
+        "outbound_actions_taken": 0,
+        "created_at": now,
+        "updated_at": now,
+    }
+
+    client = get_client()
+    try:
+        db = get_database(client)
+        result = db.creative_tool_runs.insert_one(run_record)
+        run_id = result.inserted_id
+
+        if payload.tool_name == "comfyui":
+            if not comfyui_enabled:
+                db.creative_tool_runs.update_one(
+                    {"_id": run_id},
+                    {"$set": {"status": "skipped", "skip_reason": "comfyui_disabled", "updated_at": utc_now()}},
+                )
+                created = db.creative_tool_runs.find_one({"_id": run_id})
+                return {
+                    "item": serialize(created),
+                    "message": "ComfyUI is disabled. Tool run recorded but not executed. No post published or scheduled.",
+                    "simulation_only": True,
+                }
+
+            try:
+                from agents.comfyui_client import ComfyUIClient
+                comfyui = ComfyUIClient()
+                comfyui_result = comfyui.run_workflow(
+                    workflow_path=clean_text(payload.workflow_path),
+                    prompt_inputs=payload.prompt_inputs or {},
+                )
+                db.creative_tool_runs.update_one(
+                    {"_id": run_id},
+                    {"$set": {"status": "completed", "comfyui_result": comfyui_result, "updated_at": utc_now()}},
+                )
+            except Exception as exc:
+                db.creative_tool_runs.update_one(
+                    {"_id": run_id},
+                    {
+                        "$set": {
+                            "status": "failed",
+                            "error": f"{exc.__class__.__name__}: {exc}",
+                            "updated_at": utc_now(),
+                        }
+                    },
+                )
+                created = db.creative_tool_runs.find_one({"_id": run_id})
+                return {
+                    "item": serialize(created),
+                    "message": "ComfyUI tool run failed safely. No post published or scheduled.",
+                    "simulation_only": True,
+                    "error": f"{exc.__class__.__name__}: {exc}",
+                }
+        else:
+            db.creative_tool_runs.update_one(
+                {"_id": run_id},
+                {"$set": {"status": "completed", "updated_at": utc_now()}},
+            )
+
+        created = db.creative_tool_runs.find_one({"_id": run_id})
+        return {
+            "item": serialize(created),
+            "message": "Creative tool run recorded. No post published or scheduled.",
+            "simulation_only": True,
+        }
     finally:
         client.close()

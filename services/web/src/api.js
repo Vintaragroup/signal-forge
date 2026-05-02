@@ -1,10 +1,13 @@
 import {
+  approveDemoContentDraft,
   approveDemoMessage,
   demoItems,
   demoOverview,
   getDemoState,
   isDemoModeEnabled,
   resetDemoData,
+  reviewDemoCreativeAsset,
+  reviewDemoSnippet,
   runDemoOutreach,
   showDemoDealOutcome,
   simulateDemoResponse,
@@ -137,6 +140,106 @@ export const api = {
       method: "PATCH",
       body: JSON.stringify({ status }),
     }),
+  contentBriefs: (params = {}) =>
+    isDemoModeEnabled()
+      ? Promise.resolve({ items: demoItems("content_briefs") })
+      : request(`/content-briefs?${new URLSearchParams({ ...wsParam(), ...params })}`),
+  createContentBrief: (payload) =>
+    request("/content-briefs", {
+      method: "POST",
+      body: JSON.stringify({ ...wsParam(), ...payload }),
+    }),
+  contentDrafts: (params = {}) =>
+    isDemoModeEnabled()
+      ? Promise.resolve({ items: demoItems("content_drafts") })
+      : request(`/content-drafts?${new URLSearchParams({ ...wsParam(), ...params })}`),
+  createContentDraft: (payload) =>
+    request("/content-drafts", {
+      method: "POST",
+      body: JSON.stringify({ ...wsParam(), ...payload }),
+    }),
+  reviewContentDraft: (id, payload) =>
+    isDemoModeEnabled()
+      ? Promise.resolve({ item: approveDemoContentDraft(id), message: "Demo review saved. No post published." })
+      : request(`/content-drafts/${encodeURIComponent(id)}/review`, {
+          method: "POST",
+          body: JSON.stringify(payload),
+        }),
+
+  // -------------------------------------------------------------------------
+  // Social Creative Engine v2
+  // -------------------------------------------------------------------------
+  clientProfiles: (params = {}) =>
+    isDemoModeEnabled()
+      ? Promise.resolve({ items: demoItems("client_profiles") })
+      : request(`/client-profiles?${new URLSearchParams({ ...wsParam(), ...params })}`),
+  createClientProfile: (payload) =>
+    request("/client-profiles", {
+      method: "POST",
+      body: JSON.stringify({ ...wsParam(), ...payload }),
+    }),
+
+  sourceChannels: (params = {}) =>
+    isDemoModeEnabled()
+      ? Promise.resolve({ items: demoItems("source_channels") })
+      : request(`/source-channels?${new URLSearchParams({ ...wsParam(), ...params })}`),
+  createSourceChannel: (payload) =>
+    request("/source-channels", {
+      method: "POST",
+      body: JSON.stringify({ ...wsParam(), ...payload }),
+    }),
+
+  sourceContent: (params = {}) =>
+    isDemoModeEnabled()
+      ? Promise.resolve({ items: demoItems("source_content") })
+      : request(`/source-content?${new URLSearchParams({ ...wsParam(), ...params })}`),
+  createSourceContent: (payload) =>
+    request("/source-content", {
+      method: "POST",
+      body: JSON.stringify({ ...wsParam(), ...payload }),
+    }),
+
+  contentTranscripts: (params = {}) =>
+    isDemoModeEnabled()
+      ? Promise.resolve({ items: demoItems("content_transcripts") })
+      : request(`/content-transcripts?${new URLSearchParams({ ...wsParam(), ...params })}`),
+
+  contentSnippets: (params = {}) =>
+    isDemoModeEnabled()
+      ? Promise.resolve({ items: demoItems("content_snippets") })
+      : request(`/content-snippets?${new URLSearchParams({ ...wsParam(), ...params })}`),
+  reviewContentSnippet: (id, payload) =>
+    isDemoModeEnabled()
+      ? Promise.resolve({
+          item: reviewDemoSnippet(id, payload.decision, payload.note),
+          message: "Demo snippet review saved. No post published.",
+          simulation_only: true,
+        })
+      : request(`/content-snippets/${encodeURIComponent(id)}/review`, {
+          method: "POST",
+          body: JSON.stringify(payload),
+        }),
+
+  creativeAssets: (params = {}) =>
+    isDemoModeEnabled()
+      ? Promise.resolve({ items: demoItems("creative_assets") })
+      : request(`/creative-assets?${new URLSearchParams({ ...wsParam(), ...params })}`),
+  reviewCreativeAsset: (id, payload) =>
+    isDemoModeEnabled()
+      ? Promise.resolve({
+          item: reviewDemoCreativeAsset(id, payload.decision, payload.note),
+          message: "Demo asset review saved. No post published.",
+          simulation_only: true,
+        })
+      : request(`/creative-assets/${encodeURIComponent(id)}/review`, {
+          method: "POST",
+          body: JSON.stringify(payload),
+        }),
+
+  creativeToolRuns: (params = {}) =>
+    isDemoModeEnabled()
+      ? Promise.resolve({ items: [], simulation_only: true })
+      : request(`/creative-tool-runs?${new URLSearchParams({ ...wsParam(), ...params })}`),
 };
 
 export { API_BASE_URL };

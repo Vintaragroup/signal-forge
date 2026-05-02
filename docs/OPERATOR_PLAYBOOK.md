@@ -543,3 +543,46 @@ make down
 - Do not treat generated copy as approved without human review.
 - Treat every GPT output as a draft, recommendation, or approval request only.
 - Use notes and status updates to keep MongoDB and the vault aligned.
+
+
+## 22. Social Creative Engine v2
+
+The Creative Studio now includes a full social content pipeline. All steps are review-only. Nothing is published.
+
+### Client Profiles
+Create one profile per client to define brand permissions:
+- `likeness_permissions`, `voice_permissions`, `avatar_permissions` — all default `false`
+- `disallowed_topics` — topics the agent must avoid
+- `allowed_content_types` — e.g. `post`, `caption`, `reel_script`
+- `compliance_notes` — freeform compliance reminders
+
+### Source Channels
+Add channels (YouTube, Instagram, etc.) per client. Set `approved_for_ingestion` and `approved_for_reuse` explicitly. Unapproved channels are visible but blocked from processing.
+
+### Source Content
+Log discovered videos and posts. Each item is scored at ingestion with `discovery_score` and `discovery_reason`. Items start at `needs_review` — approve them before transcripts are extracted.
+
+### Content Transcripts & Snippets
+Once source content is approved, add transcripts and let the snippet scorer extract the best segments. Each snippet shows:
+- `score` and `score_reason`
+- `theme`, `hook_angle`, `platform_fit`
+- starts at `needs_review` — approve or reject before asset generation
+
+### Creative Assets
+Assets (images, reels, captions) are linked to approved snippets. Review each asset in the Assets tab or the Approval Queue.
+
+### ComfyUI (optional)
+To enable local generative image/video support:
+```bash
+# .env
+COMFYUI_ENABLED=true
+COMFYUI_BASE_URL=http://host.docker.internal:8188
+COMFYUI_WORKFLOW_PATH=/path/to/workflow.json
+```
+If disabled (default) or unavailable, `creative_tool_runs` record the skipped/failed state safely. No asset is ever published.
+
+### Operating Rules (v2)
+- Never approve a snippet from a channel that is `approved_for_reuse: false`
+- Never set `likeness_permissions: true` without written client authorization
+- Every creative asset requires explicit operator review before external use
+- `simulation_only: true` and `outbound_actions_taken: 0` on all records — always

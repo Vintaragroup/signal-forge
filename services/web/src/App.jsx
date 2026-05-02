@@ -11,6 +11,7 @@ import {
   Mail,
   ClipboardCheck,
   ListChecks,
+  PenLine,
   RefreshCw,
   SearchCheck,
   Users,
@@ -33,6 +34,7 @@ import GptDiagnosticsPage from "./pages/GptDiagnosticsPage.jsx";
 import DealsPage from "./pages/DealsPage.jsx";
 import ReportsPage from "./pages/ReportsPage.jsx";
 import WorkspacesPage from "./pages/WorkspacesPage.jsx";
+import CreativeStudioPage from "./pages/CreativeStudioPage.jsx";
 import { api, setAppWorkspace } from "./api.js";
 
 const NAV_ITEMS = [
@@ -47,6 +49,7 @@ const NAV_ITEMS = [
   { id: "research-tools", label: "Research / Tools", icon: SearchCheck },
   { id: "gpt-diagnostics", label: "GPT Diagnostics", icon: Activity },
   { id: "deals", label: "Deals", icon: Building2 },
+  { id: "creative-studio", label: "Creative Studio", icon: PenLine },
   { id: "reports", label: "Reports", icon: FileText },
   { id: "workspaces", label: "Workspaces", icon: Briefcase },
 ];
@@ -59,6 +62,7 @@ export default function App() {
   const [demoMode, setDemoMode] = useState(api.demoEnabled());
   const [pendingMode, setPendingMode] = useState(null); // "demo" | "real" | null
   const [lastRefresh, setLastRefresh] = useState(new Date());
+  const [refreshTrigger, setRefreshTrigger] = useState(0);
   const [workspaces, setWorkspaces] = useState([]);
   const [activeWorkspace, setActiveWorkspace] = useState("all");
 
@@ -70,6 +74,7 @@ export default function App() {
     setHealth(nextHealth);
     setGptRuntime(nextGptRuntime);
     setLastRefresh(new Date());
+    setRefreshTrigger((n) => n + 1);
   }
 
   async function loadWorkspaces() {
@@ -125,6 +130,7 @@ export default function App() {
     if (activePage === "research-tools") return ResearchToolsPage;
     if (activePage === "gpt-diagnostics") return GptDiagnosticsPage;
     if (activePage === "deals") return DealsPage;
+    if (activePage === "creative-studio") return CreativeStudioPage;
     if (activePage === "reports") return ReportsPage;
     if (activePage === "workspaces") return WorkspacesPage;
     return OverviewPage;
@@ -172,7 +178,7 @@ export default function App() {
             onCancel={() => setPendingMode(null)}
           />
           <div className="mx-auto max-w-[1500px] px-5 py-5 lg:px-8">
-            <Page onWorkspacesChange={loadWorkspaces} activeWorkspace={activeWorkspace} />
+            <Page onWorkspacesChange={loadWorkspaces} activeWorkspace={activeWorkspace} refreshTrigger={refreshTrigger} />
           </div>
         </main>
       </div>

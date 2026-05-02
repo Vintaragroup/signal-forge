@@ -5,6 +5,12 @@ from agents.base_agent import BaseAgent
 from agents.gpt_client import generate_agent_response
 
 
+def clean_text(value: Any) -> str:
+    if value is None:
+        return ""
+    return str(value).strip()
+
+
 GPT_CONFIDENCE_THRESHOLD = 0.6
 GPT_STEP_NAME = "gpt_content_plan_generation"
 
@@ -284,6 +290,164 @@ scheduled: false
             "generated_by_agent": self.agent_name,
             "agent_run_id": self.run_id,
             "agent_step_name": GPT_STEP_NAME,
+            "created_at": datetime.now(timezone.utc),
+            "resolved_at": None,
+            "simulation_only": True,
+            **({"workspace_slug": self.workspace_slug} if self.workspace_slug else {}),
+        }
+        insert_result = self.db.approval_requests.insert_one(request_doc)
+        return str(insert_result.inserted_id)
+
+    # ------------------------------------------------------------------
+    # Creative Studio: process approved content briefs
+    # ------------------------------------------------------------------
+
+    def fetch_approved_briefs(self) -> list[dict]:
+        """Return approved content briefs for the current module/workspace."""
+        if self.db is None:
+            return []
+        query: dict[str, Any] = {"status": "approved"}
+        if self.module:
+            query["module"] = self.module
+        if self.workspace_slug:
+            query["workspace_slug"] = self.workspace_slug
+        return list(self.db.content_briefs.find(query).sort([("created_at", -1)]).limit(self.limit))
+
+    def generate_content_drafts(self) -> list[dict]:
+        """For each approved brief, create a content_draft with needs_review status.
+
+        Uses the model router:
+        - planning step  → agent/review model (generate_agent_response)
+        - writing step   → draft model (generate_draft_response)
+
+        Returns list of created draft documents.
+        """
+        if self.db is None or not self.run_id:
+            return []
+
+        briefs = self.fetch_approved_briefs()
+        if not briefs:
+            return []
+
+        from agents.gpt_client import generate_agent_response, generate_draft_response  # noqa: PLC0415
+
+        created_drafts: list[dict] = []
+
+        for brief in briefs:
+            brief_id = str(brief.get("_id", ""))
+
+            # --- Step A: plan (review/agent model) ---
+            plan_context = {
+                "module": self.module,
+                "brief": {
+                    "campaign_name": brief.get("campaign_name"),
+                    "audience": brief.get("audience"),
+                    "platform": brief.get("platform"),
+                    "goal": brief.get("goal"),
+                    "offer": brief.get("offer"),
+                    "tone": brief.get("tone"),
+                    "notes": brief.get("notes"),
+                },
+                "safety": {
+                    "publish_posts": False,
+                    "schedule_posts": False,
+                    "requires_human_review": True,
+                },
+            }
+            plan_result = generate_agent_response(
+                agent_name="content_agent",
+                module=self.module,
+                task="plan_content_from_brief",
+                context=plan_context,
+            )
+            plan_enabled = plan_result.get("enabled")
+            plan_confidence = float(plan_result.get("confidence") or 0.0)
+
+            # --- Step B: write (draft model) ---
+            draft_result: dict[str, Any] = {"enabled": False}
+            if plan_enabled and plan_confidence >= GPT_CONFIDENCE_THRESHOLD:
+                draft_context = {**plan_context, "plan_output": plan_result.get("output") or ""}
+                draft_result = generate_draft_response(
+                    agent_name="content_agent",
+                    module=self.module,
+                    task="write_content_draft",
+                    context=draft_context,
+                )
+
+            # --- Determine body and status ---
+            use_draft = draft_result.get("enabled") and draft_result.get("used_gpt")
+            body = (draft_result.get("output") or plan_result.get("output") or "").strip()
+            selected_model = clean_text(draft_result.get("selected_model") or plan_result.get("selected_model"))
+            routing_reason = clean_text(draft_result.get("routing_reason") or plan_result.get("routing_reason"))
+            complexity = clean_text(draft_result.get("complexity") or plan_result.get("complexity"))
+
+            draft_status: str
+            approval_id: str | None = None
+            if body and (plan_confidence >= GPT_CONFIDENCE_THRESHOLD or use_draft):
+                draft_status = "needs_review"
+            else:
+                draft_status = "needs_review"
+                approval_id = self._create_brief_approval_request(brief, plan_result, plan_confidence)
+
+            now = datetime.now(timezone.utc)
+            draft_doc: dict[str, Any] = {
+                "workspace_slug": self.workspace_slug or brief.get("workspace_slug", ""),
+                "module": self.module,
+                "brief_id": brief_id,
+                "platform": brief.get("platform", ""),
+                "content_type": "post",
+                "title": brief.get("campaign_name") or f"Draft for {self.module}",
+                "body": body or "(No output generated — operator must write or revise.)",
+                "hashtags": [],
+                "call_to_action": brief.get("offer", ""),
+                "status": draft_status,
+                "generated_by_agent": self.agent_name,
+                "agent_run_id": self.run_id,
+                "selected_model": selected_model,
+                "routing_reason": routing_reason,
+                "complexity": complexity,
+                "gpt_confidence": plan_confidence,
+                "review_events": [],
+                "outbound_actions_taken": 0,
+                "simulation_only": True,
+                "created_at": now,
+                "updated_at": now,
+            }
+            insert_result = self.db.content_drafts.insert_one(draft_doc)
+            draft_doc["_id"] = insert_result.inserted_id
+            created_drafts.append(draft_doc)
+
+            # Update brief so it isn't re-processed on the next run
+            self.db.content_briefs.update_one(
+                {"_id": brief["_id"]},
+                {"$set": {"status": "needs_review", "last_draft_id": str(insert_result.inserted_id), "updated_at": now}},
+            )
+
+        return created_drafts
+
+    def _create_brief_approval_request(self, brief: dict, result: dict, confidence: float) -> str:
+        if self.db is None or not self.run_id:
+            return "not_recorded"
+        reason = result.get("reasoning_summary") or result.get("error") or "GPT did not produce confident output for this brief."
+        request_doc: dict[str, Any] = {
+            "run_id": self.run_id,
+            "agent_name": self.agent_name,
+            "module": self.module,
+            "request_type": "gpt_content_draft_review",
+            "status": "open",
+            "title": f"Review content draft for brief: {brief.get('campaign_name') or brief.get('_id')}",
+            "summary": f"GPT draft for brief '{brief.get('campaign_name')}' needs human review.",
+            "reason_for_review": reason,
+            "request_origin": "gpt",
+            "is_test": False,
+            "severity": "needs_review",
+            "user_facing_summary": f"Review the AI-generated draft for brief '{brief.get('campaign_name')}' before using it anywhere.",
+            "technical_reason": reason,
+            "target": str(brief.get("_id", "")),
+            "target_type": "content_brief",
+            "gpt_confidence": confidence,
+            "generated_by_agent": self.agent_name,
+            "agent_run_id": self.run_id,
             "created_at": datetime.now(timezone.utc),
             "resolved_at": None,
             "simulation_only": True,

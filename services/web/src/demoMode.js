@@ -138,6 +138,98 @@ const seedState = {
       is_demo: true,
     },
   ],
+  content_briefs: [
+    {
+      _id: "demo-brief-1",
+      workspace_slug: "demo",
+      module: "contractor_growth",
+      campaign_name: "Demo: Local Contractor Brand Awareness",
+      audience: "Small roofing and HVAC contractors in TX",
+      platform: "Instagram",
+      goal: "Generate 5 booked discovery calls",
+      offer: "Free growth audit session",
+      tone: "friendly, confident, educational",
+      notes: "Focus on summer season demand surge.",
+      status: "approved",
+      is_demo: true,
+      demo_label: "Demo Mode",
+      created_at: daysAgo(4),
+      updated_at: daysAgo(1),
+    },
+    {
+      _id: "demo-brief-2",
+      workspace_slug: "demo",
+      module: "contractor_growth",
+      campaign_name: "Demo: Referral Network Push",
+      audience: "Contractors with 2-5 employees",
+      platform: "LinkedIn",
+      goal: "Build referral network with 10 new partners",
+      offer: "Referral bonus for qualified introductions",
+      tone: "professional, direct",
+      notes: "Target decision makers only.",
+      status: "draft",
+      is_demo: true,
+      demo_label: "Demo Mode",
+      created_at: daysAgo(2),
+      updated_at: daysAgo(2),
+    },
+  ],
+  content_drafts: [
+    {
+      _id: "demo-draft-content-1",
+      workspace_slug: "demo",
+      module: "contractor_growth",
+      brief_id: "demo-brief-1",
+      platform: "Instagram",
+      content_type: "post",
+      title: "Summer Growth Tips for Contractors",
+      body: "[Demo] Summer is peak season — are you ready? Our clients see 3x more inquiries from May to August. Here are 3 quick wins to capture that demand…\n\n1. Update your Google profile photos\n2. Ask every happy customer for a Google review\n3. Post before/after job photos weekly\n\nNeed help scaling fast? Let's talk.",
+      hashtags: ["contractor", "smallbusiness", "growthstrategy", "roofing", "summerbusiness"],
+      call_to_action: "DM us \"AUDIT\" for a free growth session.",
+      status: "needs_review",
+      generated_by_agent: "content_agent",
+      agent_run_id: "demo-agent-run-1",
+      selected_model: "gpt-4o-mini",
+      routing_reason: "Draft task routed to draft model",
+      complexity: "low",
+      outbound_actions_taken: 0,
+      simulation_only: true,
+      review_events: [],
+      is_demo: true,
+      demo_label: "Demo Mode",
+      created_at: daysAgo(1),
+      updated_at: daysAgo(1),
+    },
+    {
+      _id: "demo-draft-content-2",
+      workspace_slug: "demo",
+      module: "contractor_growth",
+      brief_id: "demo-brief-1",
+      platform: "Instagram",
+      content_type: "caption",
+      title: "Before/After Showcase Caption",
+      body: "[Demo] From worn shingles to spotless curb appeal in just one day. Our client in Austin called it the best investment of the summer. Ready to show off your best work?",
+      hashtags: ["beforeandafter", "roofing", "austintx", "contractorlife"],
+      call_to_action: "Tag a contractor who does great work!",
+      status: "approved",
+      generated_by_agent: "content_agent",
+      agent_run_id: "demo-agent-run-1",
+      selected_model: "gpt-4o-mini",
+      routing_reason: "Draft task routed to draft model",
+      complexity: "low",
+      outbound_actions_taken: 0,
+      simulation_only: true,
+      review_events: [
+        { decision: "approve", note: "Demo approval", reviewed_at: daysAgo(0) },
+      ],
+      review_note: "Demo approval",
+      reviewed_at: daysAgo(0),
+      is_demo: true,
+      demo_label: "Demo Mode",
+      created_at: daysAgo(2),
+      updated_at: daysAgo(0),
+    },
+  ],
   deals: [
     {
       _id: "demo-deal-1",
@@ -154,6 +246,237 @@ const seedState = {
       created_at: daysAgo(1),
       updated_at: daysAgo(1),
       is_demo: true,
+    },
+  ],
+  // -------------------------------------------------------------------------
+  // Social Creative Engine v2 — seed data
+  // -------------------------------------------------------------------------
+  client_profiles: [
+    {
+      _id: "demo-client-1",
+      workspace_slug: "demo",
+      client_name: "Demo Apex Roofing",
+      brand_name: "Apex Roofing",
+      approved_source_channels: ["demo-channel-1"],
+      allowed_content_types: ["post", "caption", "reel_script"],
+      disallowed_topics: ["pricing disputes", "competitor bashing"],
+      likeness_permissions: false,
+      voice_permissions: false,
+      avatar_permissions: false,
+      compliance_notes: "Demo client. All records are synthetic. No real person represented.",
+      status: "active",
+      is_demo: true,
+      demo_label: "Demo Mode",
+      created_at: daysAgo(5),
+      updated_at: daysAgo(1),
+    },
+  ],
+  source_channels: [
+    {
+      _id: "demo-channel-1",
+      workspace_slug: "demo",
+      client_id: "demo-client-1",
+      platform: "youtube",
+      channel_name: "Apex Roofing Tips",
+      channel_url: "https://youtube.com/@apexroofingtips.demo.invalid",
+      approved_for_ingestion: true,
+      approved_for_reuse: true,
+      notes: "Demo channel. Used for synthetic content ingestion.",
+      is_demo: true,
+      demo_label: "Demo Mode",
+      created_at: daysAgo(4),
+      updated_at: daysAgo(1),
+    },
+    {
+      _id: "demo-channel-2",
+      workspace_slug: "demo",
+      client_id: "demo-client-1",
+      platform: "instagram",
+      channel_name: "Apex Roofing IG",
+      channel_url: "https://instagram.com/apexroofingtips.demo.invalid",
+      approved_for_ingestion: false,
+      approved_for_reuse: false,
+      notes: "Demo channel — not yet approved for ingestion.",
+      is_demo: true,
+      demo_label: "Demo Mode",
+      created_at: daysAgo(3),
+      updated_at: daysAgo(2),
+    },
+  ],
+  source_content: [
+    {
+      _id: "demo-source-content-1",
+      workspace_slug: "demo",
+      client_id: "demo-client-1",
+      source_channel_id: "demo-channel-1",
+      platform: "youtube",
+      source_url: "https://youtube.com/watch?v=demoabc123.invalid",
+      title: "How We Closed 10 Roofing Jobs in One Week",
+      creator: "Apex Roofing",
+      published_at: daysAgo(14),
+      duration_seconds: 482,
+      performance_metadata: { views: 8200, likes: 341, comments: 47 },
+      discovery_score: 0.88,
+      discovery_reason: "High engagement, strong local authority signal.",
+      status: "approved",
+      review_events: [],
+      simulation_only: true,
+      outbound_actions_taken: 0,
+      is_demo: true,
+      demo_label: "Demo Mode",
+      created_at: daysAgo(3),
+      updated_at: daysAgo(1),
+    },
+    {
+      _id: "demo-source-content-2",
+      workspace_slug: "demo",
+      client_id: "demo-client-1",
+      source_channel_id: "demo-channel-1",
+      platform: "youtube",
+      source_url: "https://youtube.com/watch?v=demodef456.invalid",
+      title: "The Biggest Mistake New Roofers Make",
+      creator: "Apex Roofing",
+      published_at: daysAgo(21),
+      duration_seconds: 310,
+      performance_metadata: { views: 3900, likes: 182, comments: 23 },
+      discovery_score: 0.71,
+      discovery_reason: "Good hook, moderate engagement.",
+      status: "needs_review",
+      review_events: [],
+      simulation_only: true,
+      outbound_actions_taken: 0,
+      is_demo: true,
+      demo_label: "Demo Mode",
+      created_at: daysAgo(2),
+      updated_at: daysAgo(2),
+    },
+  ],
+  content_transcripts: [
+    {
+      _id: "demo-transcript-1",
+      workspace_slug: "demo",
+      source_content_id: "demo-source-content-1",
+      transcript_text: "Hey everyone, I want to walk you through exactly how we closed 10 roofing jobs in one week — no tricks, no gimmicks. First thing we did was clean up our follow-up game. Every estimate got a next-day check-in text from a real person. Then we started asking every happy customer for a Google review right at job completion. By Thursday we had four new five-star reviews and our phone started ringing more. By the end of the week, ten jobs booked.",
+      status: "complete",
+      is_demo: true,
+      demo_label: "Demo Mode",
+      created_at: daysAgo(2),
+      updated_at: daysAgo(2),
+    },
+  ],
+  content_snippets: [
+    {
+      _id: "demo-snippet-1",
+      workspace_slug: "demo",
+      source_content_id: "demo-source-content-1",
+      transcript_id: "demo-transcript-1",
+      speaker: "Host",
+      start_time: 12.4,
+      end_time: 28.1,
+      transcript_text: "Every estimate got a next-day check-in text from a real person.",
+      score: 0.94,
+      score_reason: "Strong authority hook, actionable, fits short-form format.",
+      theme: "follow_up_system",
+      hook_angle: "Quick win operators can copy immediately",
+      platform_fit: ["instagram", "tiktok", "linkedin"],
+      status: "approved",
+      review_events: [{ decision: "approve", note: "Demo approved", reviewed_at: daysAgo(1) }],
+      simulation_only: true,
+      outbound_actions_taken: 0,
+      is_demo: true,
+      demo_label: "Demo Mode",
+      created_at: daysAgo(2),
+      updated_at: daysAgo(1),
+    },
+    {
+      _id: "demo-snippet-2",
+      workspace_slug: "demo",
+      source_content_id: "demo-source-content-1",
+      transcript_id: "demo-transcript-1",
+      speaker: "Host",
+      start_time: 44.7,
+      end_time: 57.3,
+      transcript_text: "By the end of the week, ten jobs booked.",
+      score: 0.81,
+      score_reason: "Punchy close, strong social proof signal.",
+      theme: "results",
+      hook_angle: "Social proof with specific numbers",
+      platform_fit: ["instagram", "youtube_shorts"],
+      status: "needs_review",
+      review_events: [],
+      simulation_only: true,
+      outbound_actions_taken: 0,
+      is_demo: true,
+      demo_label: "Demo Mode",
+      created_at: daysAgo(2),
+      updated_at: daysAgo(2),
+    },
+    {
+      _id: "demo-snippet-3",
+      workspace_slug: "demo",
+      source_content_id: "demo-source-content-1",
+      transcript_id: "demo-transcript-1",
+      speaker: "Host",
+      start_time: 60.0,
+      end_time: 71.5,
+      transcript_text: "We started asking every happy customer for a Google review right at job completion.",
+      score: 0.76,
+      score_reason: "Actionable tip, trust builder.",
+      theme: "reputation",
+      hook_angle: "Simple habit that compounds over time",
+      platform_fit: ["linkedin", "facebook"],
+      status: "needs_review",
+      review_events: [],
+      simulation_only: true,
+      outbound_actions_taken: 0,
+      is_demo: true,
+      demo_label: "Demo Mode",
+      created_at: daysAgo(2),
+      updated_at: daysAgo(2),
+    },
+  ],
+  creative_assets: [
+    {
+      _id: "demo-asset-1",
+      workspace_slug: "demo",
+      client_id: "demo-client-1",
+      source_content_id: "demo-source-content-1",
+      snippet_id: "demo-snippet-1",
+      asset_type: "image",
+      title: "Follow-Up Quote Card",
+      description: "Text overlay quote card from demo snippet 1.",
+      file_path: "",
+      prompt_used: "[Demo] Minimal roofing brand quote card on dark background.",
+      tool_run_id: "",
+      status: "needs_review",
+      review_events: [],
+      simulation_only: true,
+      outbound_actions_taken: 0,
+      is_demo: true,
+      demo_label: "Demo Mode",
+      created_at: daysAgo(1),
+      updated_at: daysAgo(1),
+    },
+    {
+      _id: "demo-asset-2",
+      workspace_slug: "demo",
+      client_id: "demo-client-1",
+      source_content_id: "demo-source-content-1",
+      snippet_id: "demo-snippet-2",
+      asset_type: "reel",
+      title: "10 Jobs Booked Reel",
+      description: "Short-form vertical video from demo source content.",
+      file_path: "",
+      prompt_used: "[Demo] Vertical reel with bold caption overlay.",
+      tool_run_id: "",
+      status: "needs_review",
+      review_events: [],
+      simulation_only: true,
+      outbound_actions_taken: 0,
+      is_demo: true,
+      demo_label: "Demo Mode",
+      created_at: daysAgo(1),
+      updated_at: daysAgo(1),
     },
   ],
 };
@@ -217,6 +540,27 @@ export function runDemoOutreach() {
   return writeState(state);
 }
 
+export function approveDemoContentDraft(draftId) {
+  const state = readState();
+  state.content_drafts = (state.content_drafts || []).map((draft) =>
+    draft._id === draftId
+      ? {
+          ...draft,
+          status: "approved",
+          review_note: "Demo review saved. No post published.",
+          reviewed_at: nowIso(),
+          updated_at: nowIso(),
+          review_events: [
+            ...(draft.review_events || []),
+            { decision: "approve", note: "Demo review", reviewed_at: nowIso() },
+          ],
+        }
+      : draft,
+  );
+  writeState(state);
+  return (state.content_drafts || []).find((d) => d._id === draftId) || {};
+}
+
 export function approveDemoMessage(messageId) {
   const state = readState();
   state.currentStep = Math.max(state.currentStep, 4);
@@ -234,6 +578,52 @@ export function approveDemoMessage(messageId) {
       : message,
   );
   return writeState(state);
+}
+
+export function reviewDemoSnippet(snippetId, decision, note = "") {
+  const state = readState();
+  const newStatus = decision === "approve" ? "approved" : decision === "reject" ? "rejected" : "needs_review";
+  state.content_snippets = (state.content_snippets || []).map((snippet) =>
+    snippet._id === snippetId
+      ? {
+          ...snippet,
+          status: newStatus,
+          review_decision: decision,
+          review_note: note || "Demo review saved. No post published.",
+          reviewed_at: nowIso(),
+          updated_at: nowIso(),
+          review_events: [
+            ...(snippet.review_events || []),
+            { decision, note: note || "Demo review", reviewed_at: nowIso() },
+          ],
+        }
+      : snippet,
+  );
+  writeState(state);
+  return (state.content_snippets || []).find((s) => s._id === snippetId) || {};
+}
+
+export function reviewDemoCreativeAsset(assetId, decision, note = "") {
+  const state = readState();
+  const newStatus = decision === "approve" ? "approved" : decision === "reject" ? "rejected" : "needs_review";
+  state.creative_assets = (state.creative_assets || []).map((asset) =>
+    asset._id === assetId
+      ? {
+          ...asset,
+          status: newStatus,
+          review_decision: decision,
+          review_note: note || "Demo review saved. No post published.",
+          reviewed_at: nowIso(),
+          updated_at: nowIso(),
+          review_events: [
+            ...(asset.review_events || []),
+            { decision, note: note || "Demo review", reviewed_at: nowIso() },
+          ],
+        }
+      : asset,
+  );
+  writeState(state);
+  return (state.creative_assets || []).find((a) => a._id === assetId) || {};
 }
 
 export function simulateDemoResponse(messageId) {

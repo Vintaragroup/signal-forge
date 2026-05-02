@@ -9,6 +9,10 @@ x-signalforge-env: &signalforge-env
   SERPAPI_KEY: ${SERPAPI_KEY:-}
   SIGNALFORGE_ENV: ${SIGNALFORGE_ENV:-local}
   VAULT_PATH: /vault
+  # Social Creative Engine v2 — ComfyUI integration (disabled by default)
+  COMFYUI_ENABLED: ${COMFYUI_ENABLED:-false}
+  COMFYUI_BASE_URL: ${COMFYUI_BASE_URL:-http://host.docker.internal:8188}
+  COMFYUI_WORKFLOW_PATH: ${COMFYUI_WORKFLOW_PATH:-}
 
 services:
   mongo:

@@ -57,3 +57,23 @@ Legend:
 ## Safety Boundary
 
 SignalForge v1 does not send messages, publish content, create calendar events, issue invoices, call CRM APIs, run GPT-powered agents by default, or use external enrichment/search APIs. The GPT runtime is implemented but gated unless `GPT_AGENT_ENABLED=true` and `OPENAI_API_KEY` are configured. Tool Layer v1 is read-only and review-first: it records sanitized `tool_runs`, `scraped_candidates`, artifacts, and approval requests; local contact/lead conversion requires prior approval. Manual source/candidate CSV imports are local only and do not create contacts, leads, messages, or outbound actions automatically. Research Import Management v1 adds import history, per-import candidate detail views, row-level error display, advanced candidate filters, and bulk approve/reject/convert actions — all local, all review-gated; bulk convert still requires prior approval per candidate and shows a confirmation dialog. GPT diagnostics never return API keys or raw prompts; the optional live diagnostics test makes only a minimal OpenAI `OK` request when explicitly invoked. The dashboard and CLI may update local MongoDB records, create review-only GPT artifacts/drafts/approval requests, write sanitized diagnostics steps, and append local vault logs only.
+
+---
+
+## Social Creative Engine v2 — Capability Additions
+
+| Capability | Dashboard-supported | Simulated | Manual | Real/local | Notes |
+|---|---|---|---|---|---|
+| Client profile management | Yes | No | No | Yes | Per-client brand permissions. Likeness/voice/avatar default `false`. |
+| Source channel registry | Yes | No | No | Yes | Per-client, per-platform. Ingestion/reuse gates enforced. |
+| Source content ingestion | Yes | No | No | Yes | Discovery score, status gating (`needs_review` → `approved`). |
+| Transcript management | Yes | No | No | Yes | Full text stored, status tracked. |
+| Snippet scoring & review | Yes | No | Yes | Yes | Score, theme, hook angle, platform fit. Operator review required. |
+| Creative asset review | Yes | No | Yes | Yes | All assets start at `needs_review`. No auto-approve path. |
+| ComfyUI image/video generation | Yes (opt-in) | No | Yes | Yes | `COMFYUI_ENABLED=true` required. Disabled by default. |
+| Creative tool run audit | Yes | No | No | Yes | All runs recorded. Skipped/failed states written safely. |
+| Approval queue (snippets + assets) | Yes | No | Yes | Yes | Unified Approval Queue tab in Creative Studio dashboard. |
+
+### v2 Safety Boundary
+
+All Social Creative Engine v2 records carry `simulation_only: true` and `outbound_actions_taken: 0`. Likeness, voice, and avatar permissions are explicitly `false` by default and cannot be set to `true` via the API without operator intent. No asset, snippet, or creative record is published, scheduled, or sent automatically. ComfyUI integration is disabled by default; when enabled, it communicates only with a local ComfyUI instance (`host.docker.internal:8188` by default) and writes all results as internal records only.

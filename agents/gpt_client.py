@@ -29,8 +29,13 @@ _MEDIUM_COMPLEXITY_KEYWORDS = frozenset([
     "follow_up_recommendation", "generate_followup", "generate_follow_up",
     "followup_recommendation", "follow-up recommendation",
     "content_planning", "generate_content_plan", "content plan",
+    "plan_content_from_brief", "plan_content",
     "fan_engagement_plan", "generate_fan_engagement_plan", "fan engagement",
     "follow_up", "follow-up", "followup",
+])
+
+_LOW_COMPLEXITY_DRAFT_KEYWORDS = frozenset([
+    "write_content_draft", "write_draft", "content_draft",
 ])
 
 _LOW_COMPLEXITY_KEYWORDS = frozenset([
@@ -225,5 +230,82 @@ def generate_agent_response(agent_name, module, task, context) -> dict:
             confidence=0.0,
             reasoning_summary="GPT request failed safely without changing agent behavior.",
             error_text=f"openai_request_error_{exc.__class__.__name__}",
+            routing=routing,
+        )
+
+
+def generate_draft_response(agent_name: str, module: str, task: str, context: Any) -> dict:
+    """Like generate_agent_response but routes to the draft model for writing tasks."""
+    enabled = _env_enabled(os.getenv("GPT_AGENT_ENABLED", "false"))
+    routing = select_model(str(agent_name), str(task), context)
+    # Override: writing tasks always go to draft model
+    draft_model = os.getenv("OPENAI_DRAFT_MODEL", "").strip() or DEFAULT_MODEL
+    routing = {**routing, "model": draft_model, "routing_reason": f"draft_model_override:{task}", "complexity": "low"}
+
+    if not enabled:
+        return _empty_response(
+            enabled=False,
+            used_gpt=False,
+            output="",
+            confidence=0.0,
+            reasoning_summary="GPT agent runtime is disabled by GPT_AGENT_ENABLED.",
+            error_text=None,
+            routing=routing,
+        )
+
+    api_key = os.getenv("OPENAI_API_KEY", "").strip()
+    if not api_key:
+        return _empty_response(
+            enabled=True,
+            used_gpt=False,
+            output="",
+            confidence=0.0,
+            reasoning_summary="GPT agent runtime is enabled, but no OpenAI API key is configured.",
+            error_text="missing_openai_api_key",
+            routing=routing,
+        )
+
+    payload = json.dumps(_build_payload(str(agent_name), str(module), str(task), context, model=draft_model)).encode("utf-8")
+    http_request = request.Request(
+        OPENAI_CHAT_COMPLETIONS_URL,
+        data=payload,
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        },
+        method="POST",
+    )
+
+    try:
+        with request.urlopen(http_request, timeout=30) as response:
+            response_payload = json.loads(response.read().decode("utf-8"))
+        output = _extract_output(response_payload)
+        return _empty_response(
+            enabled=True,
+            used_gpt=True,
+            output=output,
+            confidence=0.75 if output else 0.2,
+            reasoning_summary="GPT draft model wrote content for human review.",
+            error_text=None if output else "empty_gpt_response",
+            routing=routing,
+        )
+    except error.HTTPError as exc:
+        return _empty_response(
+            enabled=True,
+            used_gpt=False,
+            output="",
+            confidence=0.0,
+            reasoning_summary="GPT draft request failed.",
+            error_text=f"openai_http_error_{exc.code}",
+            routing=routing,
+        )
+    except Exception as exc:
+        return _empty_response(
+            enabled=True,
+            used_gpt=False,
+            output="",
+            confidence=0.0,
+            reasoning_summary="GPT draft request failed safely.",
+            error_text=f"openai_draft_error_{exc.__class__.__name__}",
             routing=routing,
         )
