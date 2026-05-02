@@ -860,3 +860,89 @@ curl -X POST "http://localhost:8000/assets/<render_id>/review" \
 - Rendered assets go to `needs_review` — they are never auto-approved
 - `video_assembler.py` makes zero external API calls; FFmpeg writes only to the local filesystem
 - The "Rendered Assets" tab in Creative Studio shows all renders with inline review controls
+
+---
+
+## Section 27: Social Creative Engine v5 — Runtime Infrastructure
+
+### Overview
+
+v5 Runtime Infrastructure adds an async render pipeline backed by Redis and a dedicated worker container. The API enqueues render jobs when Redis is available; the worker processes them independently. When Redis is unavailable, the API falls back to synchronous inline processing (preserving existing behaviour).
+
+### New Services
+
+| Service | Container | Start condition |
+|---|---|---|
+| `redis` | `signalforge-redis` | Default (always started) |
+| `worker` | `signalforge-worker` | Default (always started) |
+| `comfyui` | `signalforge-comfyui` | Profile `comfyui` only |
+
+### Status Lifecycle
+
+```
+queued     API created render record, job enqueued to Redis
+   ↓
+running    Worker has dequeued job and started processing
+   ↓
+generated  ComfyUI step complete (or mock), before video assembly
+   ↓
+needs_review  Assembly complete — awaiting operator review
+   or
+failed     Unhandled exception in worker — check logs
+```
+
+### Environment Variables
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `REDIS_URL` | `redis://redis:6379` | Redis connection URL |
+| `COMFYUI_ENABLED` | `false` | Enable real ComfyUI calls from worker |
+| `FFMPEG_ENABLED` | `false` | Enable real FFmpeg assembly in worker |
+| `FFMPEG_OUTPUT_DIR` | `/tmp/signalforge_renders` | Output path for rendered mp4 files |
+
+### Starting with ComfyUI profile
+
+```bash
+# Start full stack including ComfyUI stub
+docker compose --profile comfyui up -d
+
+# Start full stack (default — no ComfyUI)
+docker compose up -d
+```
+
+### Worker logs
+
+```bash
+docker compose logs -f worker
+```
+
+### Check queue depth
+
+```bash
+docker compose exec redis redis-cli llen signalforge:render_jobs
+```
+
+### Inspect failed jobs
+
+```bash
+docker compose exec redis redis-cli lrange signalforge:render_jobs_failed 0 -1
+```
+
+### Quick Reference: render status query
+
+```bash
+# List renders in running state
+curl "http://localhost:8000/assets?workspace_slug=default&status=running"
+
+# List failed renders
+curl "http://localhost:8000/assets?workspace_slug=default&status=failed"
+```
+
+### Operating Rules (v5 Runtime)
+
+- The worker is a long-running process; use `docker compose restart worker` to pick up code changes after `docker compose build api`
+- `COMFYUI_ENABLED=true` requires the ComfyUI service to be running AND reachable at `COMFYUI_BASE_URL`
+- `FFMPEG_ENABLED=true` requires FFmpeg binary to be present (pre-installed in the Docker image)
+- If Redis is down and a render request comes in, the API falls back to synchronous execution with `queued: false` in the response
+- The dead-letter queue (`signalforge:render_jobs_failed`) is for operator inspection only — no automatic retry
+- All records produced by the worker carry `simulation_only: true` and `outbound_actions_taken: 0`

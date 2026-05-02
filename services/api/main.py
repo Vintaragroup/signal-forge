@@ -4624,8 +4624,12 @@ def find_asset_render(db: Any, render_id: str) -> dict | None:
 @app.post("/assets/render")
 def render_asset(payload: AssetRenderRequest) -> dict:
     """
-    Trigger an asset render from an approved snippet + approved prompt_generation.
-    Validates both prerequisites before creating any records.
+    Enqueue an asset render from an approved snippet + approved prompt_generation.
+
+    Validates both prerequisites, creates a render record (status=queued), then:
+    - If Redis is reachable: enqueues the job and returns immediately (async path).
+    - If Redis unavailable: falls back to synchronous inline rendering (sync path).
+
     ComfyUI and FFmpeg are individually gated via environment variables.
     All results are simulation_only=True; no external content is published.
     """
@@ -4690,8 +4694,43 @@ def render_asset(payload: AssetRenderRequest) -> dict:
         }
         insert_result = db.asset_renders.insert_one(render_record)
         render_id = insert_result.inserted_id
+        render_id_str = str(render_id)
 
-        # --- ComfyUI step ---
+        # --- Try to enqueue for async worker processing ---
+        job_id: Any = None
+        try:
+            from job_queue import enqueue_render_job  # type: ignore
+            job_id = enqueue_render_job(
+                render_id_str,
+                {
+                    "workspace_slug": clean_text(payload.workspace_slug),
+                    "snippet_id": clean_text(payload.snippet_id),
+                    "prompt_generation_id": clean_text(payload.prompt_generation_id),
+                    "generation_engine": clean_text(payload.generation_engine),
+                    "source_audio_path": clean_text(payload.source_audio_path),
+                    "add_captions": payload.add_captions,
+                },
+            )
+        except Exception:
+            job_id = None
+
+        # --- If Redis is available the job is queued — return immediately ---
+        if job_id is not None:
+            created = db.asset_renders.find_one({"_id": render_id})
+            return {
+                "item": serialize(created),
+                "job_id": job_id,
+                "queued": True,
+                "message": "Render job queued. Worker will process asynchronously. No content published or scheduled.",
+                "simulation_only": True,
+                "outbound_actions_taken": 0,
+            }
+
+        # --- Synchronous fallback (Redis unavailable) ---
+        # Perform the full pipeline inline so callers without a worker still
+        # get a result.  Existing tests rely on this path.
+
+        # ComfyUI step
         comfyui_result: dict[str, Any] = {}
         generated_image_path = ""
         if comfyui_enabled:
@@ -4709,7 +4748,6 @@ def render_asset(payload: AssetRenderRequest) -> dict:
                     "outbound_actions_taken": 0,
                 }
         else:
-            render_id_str = str(render_id)
             comfyui_result = {
                 "skipped": True,
                 "skip_reason": "comfyui_disabled",
@@ -4724,7 +4762,7 @@ def render_asset(payload: AssetRenderRequest) -> dict:
             {"$set": {"status": "generated", "comfyui_result": comfyui_result, "updated_at": utc_now()}},
         )
 
-        # --- FFmpeg / video assembly step ---
+        # FFmpeg / video assembly step
         assembly_result: dict[str, Any] = {}
         final_file_path = ""
         duration_seconds = float(snippet.get("duration_seconds") or 30.0)
@@ -4745,12 +4783,11 @@ def render_asset(payload: AssetRenderRequest) -> dict:
                 caption_text=caption_text,
                 resolution="1080x1920",
                 generation_engine=clean_text(payload.generation_engine),
-                asset_render_id=str(render_id),
+                asset_render_id=render_id_str,
             )
             assembly_result = va_result.to_dict()
             final_file_path = va_result.file_path
         else:
-            render_id_str = str(render_id)
             assembly_result = {
                 "skipped": True,
                 "skip_reason": "video_assembler_unavailable",
@@ -4761,7 +4798,7 @@ def render_asset(payload: AssetRenderRequest) -> dict:
             }
             final_file_path = assembly_result["mock_file_path"]
 
-        # --- Transition to needs_review ---
+        # Transition to needs_review
         db.asset_renders.update_one(
             {"_id": render_id},
             {
@@ -4778,7 +4815,8 @@ def render_asset(payload: AssetRenderRequest) -> dict:
         created = db.asset_renders.find_one({"_id": render_id})
         return {
             "item": serialize(created),
-            "message": "Asset render complete. Awaiting operator review. No content published or scheduled.",
+            "queued": False,
+            "message": "Asset render complete (synchronous fallback). Awaiting operator review. No content published or scheduled.",
             "simulation_only": True,
             "outbound_actions_taken": 0,
         }

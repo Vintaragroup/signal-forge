@@ -409,6 +409,7 @@ def test_successful_mock_render_comfyui_disabled():
     with (
         patch("main.get_client", fake_get_client),
         patch("main.get_database", fake_get_database),
+        patch("job_queue._connect", return_value=None),
         patch.dict(os.environ, {"COMFYUI_ENABLED": "false", "FFMPEG_ENABLED": "false"}),
     ):
         c = TestClient(app)
@@ -433,6 +434,7 @@ def test_successful_mock_render_ffmpeg_disabled():
     with (
         patch("main.get_client", fake_get_client),
         patch("main.get_database", fake_get_database),
+        patch("job_queue._connect", return_value=None),
         patch.dict(os.environ, {"COMFYUI_ENABLED": "false", "FFMPEG_ENABLED": "false"}),
     ):
         c = TestClient(app)
@@ -446,7 +448,7 @@ def test_successful_mock_render_ffmpeg_disabled():
 
 
 def test_render_asset_goes_to_needs_review():
-    """After successful render, final status must be needs_review."""
+    """After successful render, final status must be needs_review (sync fallback path)."""
     fake_db = FakeDatabase()
     snippet = _approved_snippet()
     pg = _approved_prompt_gen(snippet["_id"])
@@ -457,6 +459,7 @@ def test_render_asset_goes_to_needs_review():
     with (
         patch("main.get_client", fake_get_client),
         patch("main.get_database", fake_get_database),
+        patch("job_queue._connect", return_value=None),
         patch.dict(os.environ, {"COMFYUI_ENABLED": "false", "FFMPEG_ENABLED": "false"}),
     ):
         c = TestClient(app)

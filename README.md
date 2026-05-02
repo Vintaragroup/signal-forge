@@ -251,6 +251,14 @@ v5 adds a rendering pipeline on top of the v4.5 prompt approval layer. An approv
 - Mock render support: `COMFYUI_ENABLED=false` and `FFMPEG_ENABLED=false` (both default) produce safe mock records with no subprocess calls.
 - Caption overlay: optional `add_captions=true` burns caption text via FFmpeg drawtext filter.
 
+**v5 Runtime Infrastructure:**
+- **Redis** service (`signalforge-redis`) — job queue for async render handoff.
+- **Worker** service (`signalforge-worker`) — polls Redis, processes renders (queued → running → generated → needs_review or failed).
+- **ComfyUI** service — available via `docker compose --profile comfyui up` (stub server included for local dev; disabled by default).
+- FFmpeg installed in the API/worker Docker image; gated by `FFMPEG_ENABLED`.
+- Shared `render-output` Docker volume between api and worker containers.
+- **Graceful fallback**: if Redis is unreachable, render runs synchronously inline.
+
 **Safety:**
 - Both snippet AND prompt_generation must be `status='approved'` before any render can start.
 - All renders start as `status: needs_review` — no auto-publish path exists.

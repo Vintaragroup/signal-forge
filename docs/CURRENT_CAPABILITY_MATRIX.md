@@ -119,3 +119,23 @@ All prompt_generations records carry `simulation_only: true` and `outbound_actio
 ### v5 Safety Boundary
 
 All `asset_renders` records carry `simulation_only: true` and `outbound_actions_taken: 0`. No asset is ever published, scheduled, or sent automatically. A render cannot be started unless both the source snippet and prompt_generation have `status: approved`. All rendered assets start as `status: needs_review` and require explicit operator approval before any downstream use. `COMFYUI_ENABLED` and `FFMPEG_ENABLED` are each independently gated and default to `false` — the system makes zero external subprocess or HTTP calls unless explicitly opted in. FFmpeg commands write only to the local filesystem at `FFMPEG_OUTPUT_DIR` (default: `/tmp/signalforge_renders`). No files are uploaded, streamed, or sent to any external service.
+
+---
+
+## Social Creative Engine v5 — Runtime Infrastructure
+
+| Capability | Dashboard-supported | Simulated | Manual | Real/local | Notes |
+|---|---|---|---|---|---|
+| Redis job queue | No | N/A | N/A | Yes | `redis://redis:6379` by default. `job_queue.py` wraps LPUSH/BRPOP. |
+| Async render worker | No | N/A | N/A | Yes | `worker.py` — runs as separate container using same api image. |
+| Sync fallback (no Redis) | Yes | Yes | N/A | N/A | When Redis unreachable, render runs inline. Existing behaviour preserved. |
+| Status: running | Yes | N/A | N/A | N/A | Worker sets `status: running` before processing. |
+| Status: failed | Yes | N/A | N/A | N/A | Worker sets `status: failed` with error on exception. |
+| ComfyUI service (profile) | No | N/A | N/A | Yes (opt-in) | `docker compose --profile comfyui up`. Stub server included for local dev. |
+| FFmpeg binary | No | N/A | N/A | Yes | Installed in api/worker Docker image. Gate: `FFMPEG_ENABLED=false` (default). |
+| Shared render volume | No | N/A | N/A | Yes | `render-output` Docker volume shared between api and worker containers. |
+| Dead-letter queue | No | N/A | N/A | Yes | Failed jobs pushed to `signalforge:render_jobs_failed` for inspection. |
+
+### v5 Runtime Safety Boundary
+
+All safety guarantees from v5 Asset Rendering are preserved. The worker process carries the same `simulation_only: true`, `outbound_actions_taken: 0` invariants as the API. Redis is used only for internal job handoff — no job payload is ever sent to an external service. The ComfyUI service definition uses a local stub server and is fully isolated within the Docker network. `COMFYUI_ENABLED=false` (default) means the worker uses the mock render path regardless of whether the ComfyUI container is running.

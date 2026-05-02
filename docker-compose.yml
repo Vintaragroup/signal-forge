@@ -11,8 +11,12 @@ x-signalforge-env: &signalforge-env
   VAULT_PATH: /vault
   # Social Creative Engine v2 — ComfyUI integration (disabled by default)
   COMFYUI_ENABLED: ${COMFYUI_ENABLED:-false}
-  COMFYUI_BASE_URL: ${COMFYUI_BASE_URL:-http://host.docker.internal:8188}
+  COMFYUI_BASE_URL: ${COMFYUI_BASE_URL:-http://comfyui:8188}
   COMFYUI_WORKFLOW_PATH: ${COMFYUI_WORKFLOW_PATH:-}
+  # Social Creative Engine v5 — render pipeline
+  REDIS_URL: ${REDIS_URL:-redis://redis:6379}
+  FFMPEG_ENABLED: ${FFMPEG_ENABLED:-false}
+  FFMPEG_OUTPUT_DIR: ${FFMPEG_OUTPUT_DIR:-/tmp/signalforge_renders}
 
 services:
   mongo:
@@ -102,9 +106,85 @@ services:
     volumes:
       - ./vault:/vault
       - ./data:/data
+      - render-output:/tmp/signalforge_renders
     depends_on:
       mongo:
         condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  redis:
+    image: redis:7-alpine
+    container_name: signalforge-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+
+  worker:
+    build:
+      context: .
+      dockerfile: services/api/Dockerfile
+    container_name: signalforge-worker
+    restart: unless-stopped
+    command: ["python", "worker.py"]
+    env_file:
+      - .env.example
+    environment: *signalforge-env
+    volumes:
+      - ./vault:/vault
+      - ./data:/data
+      - render-output:/tmp/signalforge_renders
+    depends_on:
+      mongo:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  comfyui:
+    image: python:3.11-slim
+    container_name: signalforge-comfyui
+    profiles: ["comfyui"]
+    restart: unless-stopped
+    ports:
+      - "8188:8188"
+    command:
+      - sh
+      - -c
+      - |
+        pip install -q fastapi uvicorn
+        python - <<'PYEOF'
+        import uvicorn
+        from fastapi import FastAPI
+        import uuid, time
+        app = FastAPI()
+
+        @app.get('/system_stats')
+        def system_stats():
+            return {'cuda': False, 'devices': [{'name': 'stub-cpu', 'type': 'cpu', 'vram_total': 0}]}
+
+        @app.post('/prompt')
+        def run_prompt(body: dict = None):
+            time.sleep(0.1)
+            return {'prompt_id': str(uuid.uuid4()), 'number': 1, 'node_errors': {}}
+
+        @app.get('/history/{prompt_id}')
+        def history(prompt_id: str):
+            return {prompt_id: {'outputs': {}, 'status': {'completed': True}}}
+
+        uvicorn.run(app, host='0.0.0.0', port=8188)
+        PYEOF
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8188/system_stats')\""]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
 
   web:
     build:
@@ -121,3 +201,4 @@ services:
 
 volumes:
   mongo-data:
+  render-output:
