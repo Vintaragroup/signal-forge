@@ -1236,6 +1236,509 @@ function IngestPipelineSection({
 // v4.5: Prompt Library Section
 // ---------------------------------------------------------------------------
 
+// v7.5: PerformanceLoopSection
+function PerformanceLoopSection({
+  assetRenders,
+  manualPublishLogs,
+  assetPerformanceRecords,
+  creativePerformanceSummaries,
+  wsParam,
+  onRefresh,
+  showNotice,
+}) {
+  const [subTab, setSubTab] = useState("publish-log");
+
+  const [logForm, setLogForm] = useState({
+    asset_render_id: "", platform: "", manual_post_url: "", posted_by: "",
+    posted_at: "", caption_used: "", hook_used: "", notes: "",
+  });
+  const [logBusy, setLogBusy] = useState(false);
+
+  const [perfForm, setPerfForm] = useState({
+    asset_render_id: "", manual_publish_log_id: "", platform: "",
+    views: "", likes: "", comments: "", shares: "", saves: "",
+    clicks: "", follows: "", watch_time_seconds: "", average_view_duration: "",
+    retention_rate: "", engagement_rate: "", notes: "",
+  });
+  const [perfBusy, setPerfBusy] = useState(false);
+  const [calculatedScore, setCalculatedScore] = useState(null);
+
+  const [csvText, setCsvText] = useState("");
+  const [csvBusy, setCsvBusy] = useState(false);
+  const [csvResult, setCsvResult] = useState(null);
+
+  const [summaryAssetId, setSummaryAssetId] = useState("");
+  const [summaryBusy, setSummaryBusy] = useState(false);
+  const [summaryResult, setSummaryResult] = useState(null);
+  const [recommendations, setRecommendations] = useState(null);
+
+  const PERF_PLATFORMS = ["instagram", "tiktok", "youtube", "youtube_shorts", "facebook", "twitter", "linkedin", "other"];
+
+  function pn(v, fallback = 0) {
+    const n = parseFloat(v);
+    return isNaN(n) ? fallback : n;
+  }
+
+  function previewScore() {
+    const v = pn(perfForm.views);
+    const eng = pn(perfForm.engagement_rate, -1);
+    const saves = pn(perfForm.saves);
+    const shares = pn(perfForm.shares);
+    const ret = pn(perfForm.retention_rate, 0);
+    const clicks = pn(perfForm.clicks);
+    const likes = pn(perfForm.likes);
+    const comments = pn(perfForm.comments);
+    const clamp = (x) => Math.max(0, Math.min(x, 1));
+    const derived_eng = eng < 0 ? (v > 0 ? (likes + comments + shares + saves) / v : 0) : eng;
+    const score = (
+      0.25 * clamp(v / 10000) +
+      0.20 * clamp(derived_eng) +
+      0.20 * clamp(saves / 500) +
+      0.15 * clamp(shares / 200) +
+      0.15 * clamp(ret) +
+      0.05 * clamp(clicks / 500)
+    ) * 10;
+    return Math.round(score * 1000) / 1000;
+  }
+
+  async function handleCreateLog(e) {
+    e.preventDefault();
+    setLogBusy(true);
+    try {
+      await api.createManualPublishLog({ ...wsParam(), ...logForm });
+      showNotice("Publish log recorded. SignalForge did not publish anything.");
+      setLogForm({ asset_render_id: "", platform: "", manual_post_url: "", posted_by: "", posted_at: "", caption_used: "", hook_used: "", notes: "" });
+      onRefresh();
+    } catch {
+      showNotice("Failed to save publish log.");
+    } finally {
+      setLogBusy(false);
+    }
+  }
+
+  async function handleCreatePerf(e) {
+    e.preventDefault();
+    setPerfBusy(true);
+    try {
+      const result = await api.createAssetPerformanceRecord({
+        ...wsParam(),
+        asset_render_id: perfForm.asset_render_id,
+        manual_publish_log_id: perfForm.manual_publish_log_id,
+        platform: perfForm.platform,
+        views: pn(perfForm.views), likes: pn(perfForm.likes),
+        comments: pn(perfForm.comments), shares: pn(perfForm.shares),
+        saves: pn(perfForm.saves), clicks: pn(perfForm.clicks),
+        follows: pn(perfForm.follows),
+        watch_time_seconds: pn(perfForm.watch_time_seconds),
+        average_view_duration: pn(perfForm.average_view_duration),
+        retention_rate: pn(perfForm.retention_rate, 0),
+        engagement_rate: perfForm.engagement_rate === "" ? -1 : pn(perfForm.engagement_rate, -1),
+        notes: perfForm.notes,
+        imported_from: "manual",
+      });
+      setCalculatedScore(result.performance_score);
+      showNotice(`Performance record saved. Score: ${result.performance_score}`);
+      setPerfForm({ asset_render_id: "", manual_publish_log_id: "", platform: "", views: "", likes: "", comments: "", shares: "", saves: "", clicks: "", follows: "", watch_time_seconds: "", average_view_duration: "", retention_rate: "", engagement_rate: "", notes: "" });
+      onRefresh();
+    } catch {
+      showNotice("Failed to save performance record.");
+    } finally {
+      setPerfBusy(false);
+    }
+  }
+
+  function parseCSVText(text) {
+    const lines = text.trim().split("\n");
+    if (lines.length < 2) return [];
+    const headers = lines[0].split(",").map((h) => h.trim());
+    return lines.slice(1).map((line) => {
+      const vals = line.split(",").map((v) => v.trim());
+      const obj = {};
+      headers.forEach((h, i) => { obj[h] = vals[i] ?? ""; });
+      return obj;
+    });
+  }
+
+  async function handleCSVImport(e) {
+    e.preventDefault();
+    if (!csvText.trim()) { showNotice("Paste CSV text first."); return; }
+    const rows = parseCSVText(csvText);
+    if (!rows.length) { showNotice("Could not parse any rows from CSV."); return; }
+    setCsvBusy(true);
+    try {
+      const result = await api.importPerformanceCSV({ ...wsParam(), rows });
+      setCsvResult(result);
+      showNotice(`Imported ${result.imported_count} record(s). ${result.error_count} error(s).`);
+      setCsvText("");
+      onRefresh();
+    } catch {
+      showNotice("CSV import failed.");
+    } finally {
+      setCsvBusy(false);
+    }
+  }
+
+  async function handleGenerateSummary() {
+    if (!summaryAssetId) { showNotice("Select an asset render to summarise."); return; }
+    setSummaryBusy(true);
+    setSummaryResult(null);
+    setRecommendations(null);
+    try {
+      const result = await api.generateCreativePerformanceSummary({ ...wsParam(), asset_render_id: summaryAssetId });
+      setSummaryResult(result.item);
+      setRecommendations(result.recommendations);
+      showNotice("Summary generated. Recommendations are advisory only.");
+    } catch {
+      showNotice("Summary generation failed.");
+    } finally {
+      setSummaryBusy(false);
+    }
+  }
+
+  const scorePreview = previewScore();
+
+  return (
+    <section className="space-y-6">
+      <div className="flex flex-wrap items-center gap-3">
+        <h2 className="text-base font-semibold text-slate-950">Performance Loop</h2>
+        <span className="rounded-full bg-violet-100 px-2 py-0.5 text-xs text-violet-700">v7.5</span>
+        <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs text-slate-500">
+          No publishing · No platform API calls · Advisory only
+        </span>
+      </div>
+
+      <div className="flex flex-wrap gap-1 border-b border-slate-200 pb-1">
+        {[
+          { id: "publish-log", label: `Publish Log (${(manualPublishLogs || []).length})` },
+          { id: "performance-entry", label: `Performance Entry (${(assetPerformanceRecords || []).length})` },
+          { id: "csv-import", label: "CSV Import" },
+          { id: "summary", label: `Summaries (${(creativePerformanceSummaries || []).length})` },
+        ].map(({ id, label }) => (
+          <button key={id} type="button" onClick={() => setSubTab(id)}
+            className={["rounded-t px-3 py-1.5 text-xs font-medium transition",
+              subTab === id ? "border-b-2 border-violet-600 text-violet-700" : "text-slate-500 hover:text-slate-800"].join(" ")}
+          >{label}</button>
+        ))}
+      </div>
+
+      {subTab === "publish-log" && (
+        <div className="space-y-6">
+          <div className="rounded-lg border border-violet-200 bg-violet-50 p-4">
+            <p className="mb-1 text-sm font-semibold text-violet-900">Record a Manual Post</p>
+            <p className="mb-3 text-xs text-violet-700">
+              Use this after manually posting outside SignalForge. SignalForge does not publish, schedule, or call any social API.
+            </p>
+            <form onSubmit={handleCreateLog} className="space-y-3">
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                {[
+                  { key: "asset_render_id", label: "Asset Render", type: "select", opts: (assetRenders || []).map((r) => ({ v: r._id, l: `${r._id.slice(-8)} · ${r.generation_engine || "render"} · ${r.status}` })) },
+                  { key: "platform", label: "Platform", type: "select", opts: PERF_PLATFORMS.map((p) => ({ v: p, l: p })) },
+                  { key: "manual_post_url", label: "Manual Post URL", placeholder: "https://..." },
+                  { key: "posted_by", label: "Posted By", placeholder: "operator name" },
+                  { key: "posted_at", label: "Posted At", placeholder: "2026-05-03T14:00:00Z" },
+                  { key: "hook_used", label: "Hook Used", placeholder: "hook text or type" },
+                ].map(({ key, label, type, opts, placeholder }) => (
+                  <div key={key}>
+                    <label className="mb-1 block text-xs font-medium text-slate-700">{label}</label>
+                    {type === "select" ? (
+                      <select value={logForm[key]} onChange={(e) => setLogForm((f) => ({ ...f, [key]: e.target.value }))}
+                        className="w-full rounded border border-slate-200 px-2 py-1.5 text-xs">
+                        <option value="">— select —</option>
+                        {(opts || []).map(({ v, l }) => <option key={v} value={v}>{l}</option>)}
+                      </select>
+                    ) : (
+                      <input type="text" value={logForm[key]} placeholder={placeholder}
+                        onChange={(e) => setLogForm((f) => ({ ...f, [key]: e.target.value }))}
+                        className="w-full rounded border border-slate-200 px-2 py-1.5 text-xs" />
+                    )}
+                  </div>
+                ))}
+                <div className="sm:col-span-2">
+                  <label className="mb-1 block text-xs font-medium text-slate-700">Caption Used</label>
+                  <textarea rows={2} value={logForm.caption_used}
+                    onChange={(e) => setLogForm((f) => ({ ...f, caption_used: e.target.value }))}
+                    placeholder="Caption as posted…"
+                    className="w-full rounded border border-slate-200 px-2 py-1.5 text-xs" />
+                </div>
+                <div className="sm:col-span-2">
+                  <label className="mb-1 block text-xs font-medium text-slate-700">Notes</label>
+                  <input type="text" value={logForm.notes}
+                    onChange={(e) => setLogForm((f) => ({ ...f, notes: e.target.value }))}
+                    className="w-full rounded border border-slate-200 px-2 py-1.5 text-xs" />
+                </div>
+              </div>
+              <button type="submit" disabled={logBusy}
+                className="rounded bg-violet-600 px-4 py-1.5 text-xs font-medium text-white hover:bg-violet-700 disabled:opacity-50">
+                {logBusy ? "Saving…" : "Save Publish Log"}
+              </button>
+            </form>
+          </div>
+          {(manualPublishLogs || []).length > 0 && (
+            <div className="space-y-2">
+              <p className="text-xs font-semibold text-slate-700">Recorded Publish Logs</p>
+              {(manualPublishLogs || []).map((log) => (
+                <div key={log._id} className="rounded border border-slate-200 bg-white p-3 text-xs">
+                  <div className="flex flex-wrap gap-3">
+                    <span className="font-medium text-slate-900">{log.platform || "—"}</span>
+                    <span className="text-slate-500">asset: {(log.asset_render_id || "").slice(-8) || "—"}</span>
+                    <span className="text-slate-500">by: {log.posted_by || "—"}</span>
+                    <span className="text-slate-500">{log.posted_at || ""}</span>
+                  </div>
+                  {log.manual_post_url && <p className="mt-1 truncate text-blue-600">{log.manual_post_url}</p>}
+                  {log.hook_used && <p className="mt-1 text-slate-600">Hook: {log.hook_used}</p>}
+                  {log.notes && <p className="mt-1 text-slate-500">{log.notes}</p>}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {subTab === "performance-entry" && (
+        <div className="space-y-6">
+          <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-4">
+            <p className="mb-1 text-sm font-semibold text-emerald-900">Enter Performance Metrics</p>
+            <p className="mb-3 text-xs text-emerald-700">
+              Manually enter metrics from the platform dashboard. No platform API is called. Score is calculated locally.
+            </p>
+            <div className="mb-3 flex items-center gap-2">
+              <span className="text-xs text-slate-600">Live score preview:</span>
+              <span className={`rounded px-2 py-0.5 text-sm font-bold ${scorePreview >= 7 ? "bg-green-100 text-green-800" : scorePreview >= 4 ? "bg-amber-100 text-amber-800" : "bg-red-100 text-red-700"}`}>
+                {scorePreview.toFixed(2)} / 10
+              </span>
+              {calculatedScore !== null && <span className="text-xs text-slate-500">Last saved: {calculatedScore}</span>}
+            </div>
+            <form onSubmit={handleCreatePerf} className="space-y-3">
+              <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+                <div>
+                  <label className="mb-1 block text-xs font-medium text-slate-700">Asset Render</label>
+                  <select value={perfForm.asset_render_id} onChange={(e) => setPerfForm((f) => ({ ...f, asset_render_id: e.target.value }))}
+                    className="w-full rounded border border-slate-200 px-2 py-1.5 text-xs">
+                    <option value="">— select —</option>
+                    {(assetRenders || []).map((r) => <option key={r._id} value={r._id}>{r._id.slice(-8)} · {r.status}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label className="mb-1 block text-xs font-medium text-slate-700">Publish Log</label>
+                  <select value={perfForm.manual_publish_log_id} onChange={(e) => setPerfForm((f) => ({ ...f, manual_publish_log_id: e.target.value }))}
+                    className="w-full rounded border border-slate-200 px-2 py-1.5 text-xs">
+                    <option value="">— select —</option>
+                    {(manualPublishLogs || []).map((l) => <option key={l._id} value={l._id}>{l._id.slice(-8)} · {l.platform}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label className="mb-1 block text-xs font-medium text-slate-700">Platform</label>
+                  <select value={perfForm.platform} onChange={(e) => setPerfForm((f) => ({ ...f, platform: e.target.value }))}
+                    className="w-full rounded border border-slate-200 px-2 py-1.5 text-xs">
+                    <option value="">— select —</option>
+                    {PERF_PLATFORMS.map((p) => <option key={p} value={p}>{p}</option>)}
+                  </select>
+                </div>
+              </div>
+              <div className="grid grid-cols-3 gap-3 sm:grid-cols-6">
+                {[
+                  { key: "views", label: "Views" }, { key: "likes", label: "Likes" },
+                  { key: "comments", label: "Comments" }, { key: "shares", label: "Shares" },
+                  { key: "saves", label: "Saves" }, { key: "clicks", label: "Clicks" },
+                  { key: "follows", label: "Follows" }, { key: "watch_time_seconds", label: "Watch Time (s)" },
+                  { key: "average_view_duration", label: "Avg View Dur (s)" },
+                  { key: "retention_rate", label: "Retention (0–1)" },
+                  { key: "engagement_rate", label: "Engagement (0–1 or blank=auto)" },
+                ].map(({ key, label }) => (
+                  <div key={key}>
+                    <label className="mb-1 block text-xs font-medium text-slate-700">{label}</label>
+                    <input type="number" step="any" min="0" value={perfForm[key]} placeholder="0"
+                      onChange={(e) => setPerfForm((f) => ({ ...f, [key]: e.target.value }))}
+                      className="w-full rounded border border-slate-200 px-2 py-1.5 text-xs" />
+                  </div>
+                ))}
+                <div className="col-span-3 sm:col-span-6">
+                  <label className="mb-1 block text-xs font-medium text-slate-700">Notes</label>
+                  <input type="text" value={perfForm.notes} onChange={(e) => setPerfForm((f) => ({ ...f, notes: e.target.value }))}
+                    className="w-full rounded border border-slate-200 px-2 py-1.5 text-xs" />
+                </div>
+              </div>
+              <button type="submit" disabled={perfBusy}
+                className="rounded bg-emerald-600 px-4 py-1.5 text-xs font-medium text-white hover:bg-emerald-700 disabled:opacity-50">
+                {perfBusy ? "Saving…" : "Save Performance Record"}
+              </button>
+            </form>
+          </div>
+          {(assetPerformanceRecords || []).length > 0 && (
+            <div className="space-y-2">
+              <p className="text-xs font-semibold text-slate-700">Performance Records</p>
+              {(assetPerformanceRecords || []).map((rec) => (
+                <div key={rec._id} className="rounded border border-slate-200 bg-white p-3 text-xs">
+                  <div className="flex flex-wrap gap-3">
+                    <span className={`rounded px-1.5 py-0.5 font-bold ${(rec.performance_score || 0) >= 7 ? "bg-green-100 text-green-800" : (rec.performance_score || 0) >= 4 ? "bg-amber-100 text-amber-800" : "bg-red-100 text-red-700"}`}>
+                      {rec.performance_score ?? "—"} / 10
+                    </span>
+                    <span className="text-slate-600">{rec.platform || "—"}</span>
+                    <span className="text-slate-500">views: {rec.views ?? 0}</span>
+                    <span className="text-slate-500">saves: {rec.saves ?? 0}</span>
+                    <span className="text-slate-500">shares: {rec.shares ?? 0}</span>
+                    <span className="text-slate-400 ml-auto">{rec.imported_from || "manual"}</span>
+                  </div>
+                  {rec.score_reason && <p className="mt-1 text-slate-400 break-all">{rec.score_reason}</p>}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {subTab === "csv-import" && (
+        <div className="space-y-4">
+          <div className="rounded-lg border border-slate-200 bg-slate-50 p-4">
+            <p className="mb-1 text-sm font-semibold text-slate-900">Import Performance Records from CSV</p>
+            <p className="mb-3 text-xs text-slate-600">
+              Paste CSV text (first row = headers). Columns: asset_render_id, manual_publish_log_id, platform,
+              views, likes, comments, shares, saves, clicks, follows, watch_time_seconds,
+              average_view_duration, retention_rate, engagement_rate, notes. No platform API called.
+            </p>
+            <form onSubmit={handleCSVImport} className="space-y-3">
+              <textarea rows={8} value={csvText} onChange={(e) => setCsvText(e.target.value)}
+                placeholder={"asset_render_id,platform,views,likes,saves\nabc123,instagram,5000,200,50"}
+                className="w-full rounded border border-slate-200 px-3 py-2 font-mono text-xs" />
+              <button type="submit" disabled={csvBusy}
+                className="rounded bg-slate-700 px-4 py-1.5 text-xs font-medium text-white hover:bg-slate-900 disabled:opacity-50">
+                {csvBusy ? "Importing…" : "Import CSV"}
+              </button>
+            </form>
+          </div>
+          {csvResult && (
+            <div className="rounded border border-slate-200 bg-white p-3 text-xs">
+              <p className="font-semibold text-slate-900">Imported: {csvResult.imported_count} · Errors: {csvResult.error_count}</p>
+              {csvResult.import_errors?.length > 0 && (
+                <div className="mt-2 space-y-1">
+                  {csvResult.import_errors.map((e, i) => (
+                    <div key={i} className="rounded bg-red-50 border border-red-200 p-2">
+                      <span className="font-medium text-red-800">Row {e.row_index}: </span>
+                      <span className="text-red-700">{(e.errors || []).join("; ")}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+
+      {subTab === "summary" && (
+        <div className="space-y-6">
+          <div className="rounded-lg border border-blue-200 bg-blue-50 p-4">
+            <p className="mb-1 text-sm font-semibold text-blue-900">Generate Performance Summary</p>
+            <p className="mb-3 text-xs text-blue-700">
+              Aggregates performance records and generates advisory learning-loop recommendations.
+              No automatic approvals. No outbound actions.
+            </p>
+            <div className="flex flex-wrap gap-3 items-end">
+              <div>
+                <label className="mb-1 block text-xs font-medium text-slate-700">Asset Render</label>
+                <select value={summaryAssetId} onChange={(e) => setSummaryAssetId(e.target.value)}
+                  className="rounded border border-slate-200 px-2 py-1.5 text-xs">
+                  <option value="">— select —</option>
+                  {(assetRenders || []).map((r) => <option key={r._id} value={r._id}>{r._id.slice(-8)} · {r.status}</option>)}
+                </select>
+              </div>
+              <button type="button" onClick={handleGenerateSummary} disabled={summaryBusy || !summaryAssetId}
+                className="rounded bg-blue-600 px-4 py-1.5 text-xs font-medium text-white hover:bg-blue-700 disabled:opacity-50">
+                {summaryBusy ? "Generating…" : "Generate Summary"}
+              </button>
+            </div>
+          </div>
+
+          {summaryResult && (
+            <div className="rounded-lg border border-blue-200 bg-white p-4 text-xs space-y-2">
+              <p className="font-semibold text-slate-900">Latest Summary</p>
+              <div className="flex flex-wrap gap-3">
+                <span className={`rounded px-2 py-0.5 font-bold text-sm ${summaryResult.performance_score >= 7 ? "bg-green-100 text-green-800" : summaryResult.performance_score >= 4 ? "bg-amber-100 text-amber-800" : "bg-red-100 text-red-700"}`}>
+                  {summaryResult.performance_score ?? "—"} avg
+                </span>
+                {summaryResult.best_performance_score !== undefined && <span className="text-slate-600">best: {summaryResult.best_performance_score}</span>}
+                <span className="text-slate-500">{summaryResult.record_count ?? 0} record(s)</span>
+                {summaryResult.platform && <span className="text-slate-500">platform: {summaryResult.platform}</span>}
+                {summaryResult.hook_type && <span className="rounded bg-indigo-100 px-1.5 text-indigo-700">hook: {summaryResult.hook_type}</span>}
+                {summaryResult.prompt_type && <span className="rounded bg-sky-100 px-1.5 text-sky-700">prompt: {summaryResult.prompt_type}</span>}
+              </div>
+              {(summaryResult.winning_factors || []).length > 0 && (
+                <div className="flex flex-wrap gap-1">
+                  {summaryResult.winning_factors.map((f) => (
+                    <span key={f} className="rounded bg-emerald-100 px-1.5 py-0.5 text-emerald-800">{f}</span>
+                  ))}
+                </div>
+              )}
+              {summaryResult.improvement_notes && <p className="text-slate-600">{summaryResult.improvement_notes}</p>}
+            </div>
+          )}
+
+          {recommendations && (
+            <div className="rounded-lg border border-amber-200 bg-amber-50 p-4 text-xs space-y-3">
+              <p className="font-semibold text-amber-900">
+                Advisory Recommendations
+                <span className="ml-2 rounded bg-amber-200 px-1.5 py-0.5 text-amber-800">
+                  {recommendations.based_on_summary_count} summaries · advisory only
+                </span>
+              </p>
+              <p className="text-amber-700">{recommendations.note}</p>
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                {[
+                  { key: "top_hook_types", label: "Top Hook Types" },
+                  { key: "top_prompt_types", label: "Top Prompt Types" },
+                  { key: "top_generation_engines", label: "Top Engines" },
+                  { key: "top_platforms", label: "Top Platforms" },
+                ].map(({ key, label }) => (
+                  <div key={key}>
+                    <p className="mb-1 font-medium text-slate-700">{label}</p>
+                    {recommendations[key]?.length > 0 ? (
+                      <div className="space-y-1">
+                        {recommendations[key].map((item, i) => (
+                          <div key={i} className="flex items-center gap-2">
+                            <span className="w-5 text-center text-slate-400">{i + 1}.</span>
+                            <span className="flex-1 text-slate-800">{item.value}</span>
+                            <span className="rounded bg-slate-100 px-1.5 text-slate-600">{item.avg_score} avg</span>
+                            <span className="text-slate-400">{item.record_count}x</span>
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <p className="text-slate-400">No data yet.</p>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {(creativePerformanceSummaries || []).length > 0 && (
+            <div className="space-y-2">
+              <p className="text-xs font-semibold text-slate-700">All Performance Summaries</p>
+              {(creativePerformanceSummaries || []).map((s) => (
+                <div key={s._id} className="rounded border border-slate-200 bg-white p-3 text-xs">
+                  <div className="flex flex-wrap gap-3">
+                    <span className={`rounded px-1.5 py-0.5 font-bold ${(s.performance_score || 0) >= 7 ? "bg-green-100 text-green-800" : (s.performance_score || 0) >= 4 ? "bg-amber-100 text-amber-800" : "bg-red-100 text-red-700"}`}>
+                      {s.performance_score ?? "—"}
+                    </span>
+                    {s.hook_type && <span className="rounded bg-indigo-100 px-1.5 text-indigo-700">{s.hook_type}</span>}
+                    {s.prompt_type && <span className="rounded bg-sky-100 px-1.5 text-sky-700">{s.prompt_type}</span>}
+                    {s.platform && <span className="text-slate-500">{s.platform}</span>}
+                    <span className="text-slate-400 ml-auto">{s.record_count ?? 0} records</span>
+                  </div>
+                  {(s.winning_factors || []).length > 0 && (
+                    <div className="mt-1 flex flex-wrap gap-1">
+                      {s.winning_factors.map((f) => <span key={f} className="rounded bg-emerald-100 px-1 text-emerald-700">{f}</span>)}
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+    </section>
+  );
+}
+
 const PROMPT_TYPE_LABELS = {
   faceless_motivational: "Faceless Motivational",
   cinematic_broll: "Cinematic B-Roll",
@@ -1842,10 +2345,15 @@ export default function CreativeStudioPage({ activeWorkspace, refreshTrigger = 0
   // v5 state
   const [assetRenders, setAssetRenders] = useState([]);
 
+  // v7.5 state
+  const [manualPublishLogs, setManualPublishLogs] = useState([]);
+  const [assetPerformanceRecords, setAssetPerformanceRecords] = useState([]);
+  const [creativePerformanceSummaries, setCreativePerformanceSummaries] = useState([]);
+
   async function load() {
     setLoading(true);
     try {
-      const [briefData, draftData, profilesData, channelsData, contentData, snippetsData, assetsData, audioRunsData, transcriptRunsData, segmentsData, intakeData, promptGenData, assetRendersData] = await Promise.all([
+      const [briefData, draftData, profilesData, channelsData, contentData, snippetsData, assetsData, audioRunsData, transcriptRunsData, segmentsData, intakeData, promptGenData, assetRendersData, publishLogsData, perfRecordsData, perfSummariesData] = await Promise.all([
         api.contentBriefs({ ...wsParam() }),
         api.contentDrafts({ ...wsParam() }),
         api.clientProfiles({ ...wsParam() }),
@@ -1859,6 +2367,9 @@ export default function CreativeStudioPage({ activeWorkspace, refreshTrigger = 0
         api.mediaIntakeRecords({ ...wsParam() }),
         api.promptGenerations({ ...wsParam() }),
         api.assetRenders({ ...wsParam() }),
+        api.manualPublishLogs({ ...wsParam() }),
+        api.assetPerformanceRecords({ ...wsParam() }),
+        api.creativePerformanceSummaries({ ...wsParam() }),
       ]);
       setBriefs(briefData.items || []);
       setDrafts(draftData.items || []);
@@ -1873,6 +2384,9 @@ export default function CreativeStudioPage({ activeWorkspace, refreshTrigger = 0
       setMediaIntakeRecords(intakeData.items || []);
       setPromptGenerations(promptGenData.items || []);
       setAssetRenders(assetRendersData.items || []);
+      setManualPublishLogs(publishLogsData.items || []);
+      setAssetPerformanceRecords(perfRecordsData.items || []);
+      setCreativePerformanceSummaries(perfSummariesData.items || []);
     } catch {
       // fail silently
     } finally {
@@ -2017,6 +2531,7 @@ export default function CreativeStudioPage({ activeWorkspace, refreshTrigger = 0
           { id: "ingest", label: `Ingest Pipeline (${transcriptRuns.length})` },
           { id: "prompts", label: `Prompt Library (${promptGenerations.length})` },
           { id: "renders", label: `Rendered Assets (${assetRenders.length})` },
+          { id: "performance-loop", label: `Performance Loop (${manualPublishLogs.length})` },
         ].map(({ id, label }) => (
           <button
             key={id}
@@ -2471,6 +2986,19 @@ export default function CreativeStudioPage({ activeWorkspace, refreshTrigger = 0
           onRefresh={load}
           showNotice={showNotice}
           demoMode={demoMode}
+        />
+      )}
+
+      {/* v7.5: PERFORMANCE LOOP section */}
+      {activeSection === "performance-loop" && (
+        <PerformanceLoopSection
+          assetRenders={assetRenders}
+          manualPublishLogs={manualPublishLogs}
+          assetPerformanceRecords={assetPerformanceRecords}
+          creativePerformanceSummaries={creativePerformanceSummaries}
+          wsParam={wsParam}
+          onRefresh={load}
+          showNotice={showNotice}
         />
       )}
     </div>

@@ -224,3 +224,32 @@ All v6 guarantees are preserved. `snippet_scorer.py` uses only Python stdlib (`r
 ### v7 Safety Boundary
 
 All v6.5 guarantees are preserved. `openai-whisper` is a local Python library — no audio data leaves the machine. No external API keys, no network calls during transcription. The double gate (`TRANSCRIPT_PROVIDER=whisper` AND `TRANSCRIPT_LIVE_ENABLED=true`) ensures stub mode is the safe default for any misconfiguration. `simulation_only: true` and `outbound_actions_taken: 0` on all transcript runs, segments, and auto-scored snippets. No social API calls, no posting, no scheduling, no avatar/voice cloning.
+
+---
+
+## v7.5 Capability Matrix — Performance Feedback & Learning Loop
+
+| Capability | v7 | v7.5 | Notes |
+|---|---|---|---|
+| Manual publish log | No | Yes | Operator records where/when they manually posted. No publishing, no scheduling. |
+| Asset performance records | No | Yes | Operator enters metrics from platform dashboard. No platform API called. |
+| Deterministic performance score | No | Yes | 0.0–10.0 weighted formula. Same inputs → same output always. |
+| Auto-derived engagement rate | No | Yes | When `engagement_rate < 0`, auto-calculated from likes+comments+shares+saves / views. |
+| Performance CSV import | No | Yes | Paste CSV locally; invalid rows stored in `import_errors`, valid rows imported. Max 1000 rows. |
+| Creative performance summary | No | Yes | Per-asset aggregate summary with best/avg score, winning factors, improvement notes. |
+| Learning-loop recommendations | No | Yes | Top hook types, prompt types, engines, platforms ranked by avg score. Advisory only. |
+| Advisory-only guarantee | N/A | Yes | `advisory_only: true` on all recommendations. No auto-approvals, no auto-publishing. |
+| CSV import error safety | N/A | Yes | Invalid rows never crash the import; stored separately in `import_errors`. |
+| Frontend Performance Loop tab | No | Yes | 4 sub-tabs: Publish Log, Performance Entry, CSV Import, Summaries & Recommendations. |
+| Live score preview | No | Yes | Frontend mirrors backend formula in JS for instant preview as operator types metrics. |
+| Score color coding | N/A | Yes | ≥7 green, ≥4 amber, <4 red across all score displays. |
+| Workspace isolation | Yes | Yes | All queries filtered by `workspace_slug`. Cross-workspace records never returned. |
+| Client isolation | Yes | Yes | `client_id` filter supported on all new endpoints. |
+| simulation_only | Yes | Yes | All new record types carry `simulation_only: true` — always. |
+| outbound_actions_taken | Yes | Yes | Always `0` on all new record types — no outbound actions possible. |
+| Platform API calls | None | None | v7.5 makes zero calls to any social platform API. |
+| Auto-approve on high score | N/A | Never | Performance data never triggers snippet or asset approval changes. |
+
+### v7.5 Safety Boundary
+
+All v7 guarantees are preserved. No social platform API is called at any point in the v7.5 pipeline. Performance metrics are entered by the operator from external platform dashboards. Scores are calculated entirely locally using a deterministic formula. Recommendations are advisory and surfaced for human review only — no code path acts on them automatically. CSV import is fully local with row-level validation. All new collections carry `simulation_only: true` and `outbound_actions_taken: 0`.

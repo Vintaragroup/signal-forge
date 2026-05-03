@@ -393,6 +393,43 @@ export const api = {
           method: "POST",
           body: JSON.stringify(payload),
         }),
+
+  // --- Social Creative Engine v7.5 ---
+  manualPublishLogs: (params = {}) =>
+    request(`/manual-publish-logs?${new URLSearchParams({ ...wsParam(), ...params })}`),
+
+  createManualPublishLog: (payload) =>
+    request("/manual-publish-logs", {
+      method: "POST",
+      body: JSON.stringify({ ...wsParam(), ...payload }),
+    }),
+
+  assetPerformanceRecords: (params = {}) =>
+    request(`/asset-performance-records?${new URLSearchParams({ ...wsParam(), ...params })}`),
+
+  createAssetPerformanceRecord: (payload) =>
+    request("/asset-performance-records", {
+      method: "POST",
+      body: JSON.stringify({ ...wsParam(), ...payload }),
+    }),
+
+  importPerformanceCSV: (payload) =>
+    request("/asset-performance-records/import-csv", {
+      method: "POST",
+      body: JSON.stringify({ ...wsParam(), ...payload }),
+    }),
+
+  creativePerformanceSummaries: (params = {}) =>
+    request(`/creative-performance-summaries?${new URLSearchParams({ ...wsParam(), ...params })}`),
+
+  generateCreativePerformanceSummary: (payload) =>
+    request("/creative-performance-summaries/generate", {
+      method: "POST",
+      body: JSON.stringify({ ...wsParam(), ...payload }),
+    }),
+
+  performanceRecommendations: (params = {}) =>
+    request(`/creative-performance-summaries/recommendations?${new URLSearchParams({ ...wsParam(), ...params })}`),
 };
 
 export { API_BASE_URL };

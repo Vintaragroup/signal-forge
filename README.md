@@ -306,6 +306,15 @@ v5 adds a rendering pipeline on top of the v4.5 prompt approval layer. An approv
 - ComfyUI calls are made only to the local `COMFYUI_BASE_URL` — no external image APIs.
 - FFmpeg writes only to local filesystem (`FFMPEG_OUTPUT_DIR`, default `/tmp/signalforge_renders`) — no uploads to external services.
 
+**v7.5 — Performance Feedback & Learning Loop:**
+- Three new collections: `manual_publish_logs`, `asset_performance_records`, `creative_performance_summaries`.
+- `manual_publish_logs`: record when and where an operator manually posted an asset outside SignalForge. No publishing, no scheduling, no social API calls.
+- `asset_performance_records`: store platform metrics (views, likes, saves, shares, etc.) entered by the operator from the platform dashboard. A deterministic performance score (0.0–10.0) is calculated locally: `0.25×reach + 0.20×engagement + 0.20×saves + 0.15×shares + 0.15×retention + 0.05×clicks`. Same inputs always produce the same score.
+- `creative_performance_summaries`: aggregated per-asset summary with `advisory_only` learning-loop recommendations (top hook types, prompt types, engines, platforms ranked by average score). No automatic approvals, no outbound actions.
+- CSV import: paste performance data locally, validated row-by-row; invalid rows stored in `import_errors` without crashing the import.
+- Frontend: "Performance Loop" tab in Creative Studio with 4 sub-tabs: Publish Log, Performance Entry (with live score preview), CSV Import, Summaries & Recommendations.
+- All records carry `simulation_only: true`, `outbound_actions_taken: 0`. No platform API calls at any step.
+
 ## Local Setup
 
 1. Copy the environment template:

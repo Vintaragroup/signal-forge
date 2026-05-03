@@ -5086,3 +5086,713 @@ def review_asset_render(render_id: str, payload: AssetRenderReviewRequest) -> di
         }
     finally:
         client.close()
+
+
+# ===========================================================================
+# Social Creative Engine v7.5 — Performance Feedback & Learning Loop
+# ===========================================================================
+#
+# v7.5 adds:
+#   - manual_publish_logs   — human records of posts made outside the system
+#   - asset_performance_records — manually entered or CSV-imported metrics
+#   - creative_performance_summaries — aggregated insight per asset/snippet
+#   - Deterministic performance_score formula (0.0 – 10.0)
+#   - Advisory learning-loop recommendations (no auto-approvals)
+#   - CSV import via JSON rows (no platform API calls)
+#
+# Safety:
+#   - SignalForge does NOT publish, schedule, DM, or call social APIs.
+#   - All records carry simulation_only=True, outbound_actions_taken=0.
+#   - Recommendations are advisory only; no automatic approvals.
+# ===========================================================================
+
+
+# ---------------------------------------------------------------------------
+# v7.5: Performance score helper
+# ---------------------------------------------------------------------------
+
+def calculate_performance_score(
+    views: int = 0,
+    likes: int = 0,
+    comments: int = 0,
+    shares: int = 0,
+    saves: int = 0,
+    clicks: int = 0,
+    follows: int = 0,
+    watch_time_seconds: float = 0.0,
+    average_view_duration: float = 0.0,
+    retention_rate: float = 0.0,
+    engagement_rate: float = -1.0,
+) -> tuple[float, str]:
+    """Deterministic performance score in the range 0.0 – 10.0.
+
+    Formula (weights sum to 1.0):
+        0.25 × clamp(views / 10_000)        — reach (normalised to 10k views)
+        0.20 × clamp(derived_engagement)    — engagement rate (0–1)
+        0.20 × clamp(saves / 500)           — saves (normalised to 500)
+        0.15 × clamp(shares / 200)          — shares (normalised to 200)
+        0.15 × clamp(retention_rate)        — retention rate (0–1, provided)
+        0.05 × clamp(clicks / 500)          — clicks (normalised to 500)
+
+    engagement_rate is auto-derived from (likes + comments + shares + saves)
+    / views when the caller passes engagement_rate < 0 or the default -1.
+    Scores are rounded to 3 decimal places.
+    """
+    def clamp(x: float) -> float:
+        return max(0.0, min(float(x), 1.0))
+
+    if engagement_rate < 0:
+        eng = (likes + comments + shares + saves) / views if views > 0 else 0.0
+    else:
+        eng = engagement_rate
+
+    score = (
+        0.25 * clamp(views / 10_000.0) +
+        0.20 * clamp(eng) +
+        0.20 * clamp(saves / 500.0) +
+        0.15 * clamp(shares / 200.0) +
+        0.15 * clamp(retention_rate) +
+        0.05 * clamp(clicks / 500.0)
+    ) * 10.0
+
+    reason = (
+        f"views_norm={clamp(views/10_000.0):.3f}, "
+        f"engagement={clamp(eng):.3f}, "
+        f"saves_norm={clamp(saves/500.0):.3f}, "
+        f"shares_norm={clamp(shares/200.0):.3f}, "
+        f"retention={clamp(retention_rate):.3f}, "
+        f"clicks_norm={clamp(clicks/500.0):.3f}"
+    )
+    return round(score, 3), reason
+
+
+# ---------------------------------------------------------------------------
+# v7.5: Pydantic models
+# ---------------------------------------------------------------------------
+
+VALID_PLATFORMS_V75 = frozenset({
+    "instagram", "tiktok", "youtube", "youtube_shorts", "facebook",
+    "twitter", "linkedin", "pinterest", "snapchat", "other",
+})
+
+
+class ManualPublishLogCreateRequest(BaseModel):
+    workspace_slug: str = ""
+    client_id: str = ""
+    asset_render_id: str = ""
+    platform: str = ""
+    manual_post_url: str = ""
+    posted_by: str = ""
+    posted_at: str = ""
+    caption_used: str = ""
+    hook_used: str = ""
+    notes: str = ""
+
+
+class AssetPerformanceRecordCreateRequest(BaseModel):
+    workspace_slug: str = ""
+    client_id: str = ""
+    asset_render_id: str = ""
+    manual_publish_log_id: str = ""
+    platform: str = ""
+    views: int = 0
+    likes: int = 0
+    comments: int = 0
+    shares: int = 0
+    saves: int = 0
+    clicks: int = 0
+    follows: int = 0
+    watch_time_seconds: float = 0.0
+    average_view_duration: float = 0.0
+    retention_rate: float = 0.0
+    engagement_rate: float = -1.0
+    imported_from: Literal["manual", "csv"] = "manual"
+    notes: str = ""
+
+
+class PerformanceCSVImportRequest(BaseModel):
+    """Import performance records from pre-parsed CSV rows.
+
+    Each row dict must contain at least asset_render_id or manual_publish_log_id
+    and numeric metric fields.  Rows that fail validation are stored in
+    import_errors rather than silently discarded.
+    """
+    workspace_slug: str = ""
+    client_id: str = ""
+    rows: list[dict]
+
+
+class PerformanceSummaryGenerateRequest(BaseModel):
+    workspace_slug: str = ""
+    client_id: str = ""
+    asset_render_id: str = ""
+    snippet_id: str = ""
+    prompt_generation_id: str = ""
+    notes: str = ""
+
+
+# ---------------------------------------------------------------------------
+# v7.5: Manual Publish Logs
+# ---------------------------------------------------------------------------
+
+@app.post("/manual-publish-logs", status_code=201)
+def create_manual_publish_log(payload: ManualPublishLogCreateRequest) -> dict:
+    """Record a post that was published manually outside SignalForge.
+
+    SignalForge does not publish or schedule anything.  This endpoint records
+    the fact that a human manually published a rendered asset so that
+    performance data can later be linked to the asset.
+    """
+    now = utc_now()
+    client = get_client()
+    try:
+        db = get_database(client)
+        doc = {
+            "workspace_slug": clean_text(payload.workspace_slug),
+            "client_id": clean_text(payload.client_id),
+            "asset_render_id": clean_text(payload.asset_render_id),
+            "platform": clean_text(payload.platform),
+            "manual_post_url": clean_text(payload.manual_post_url),
+            "posted_by": clean_text(payload.posted_by),
+            "posted_at": clean_text(payload.posted_at),
+            "caption_used": clean_text(payload.caption_used),
+            "hook_used": clean_text(payload.hook_used),
+            "notes": clean_text(payload.notes),
+            "simulation_only": True,
+            "outbound_actions_taken": 0,
+            "created_at": now,
+            "updated_at": now,
+        }
+        result = db.manual_publish_logs.insert_one(doc)
+        created = db.manual_publish_logs.find_one({"_id": result.inserted_id})
+        return {
+            "item": serialize(created),
+            "message": "Manual publish log recorded. SignalForge did not publish or schedule anything.",
+            "simulation_only": True,
+            "outbound_actions_taken": 0,
+        }
+    finally:
+        client.close()
+
+
+@app.get("/manual-publish-logs")
+def list_manual_publish_logs(
+    workspace_slug: str = Query(""),
+    client_id: str = Query(""),
+    asset_render_id: str = Query(""),
+    platform: str = Query(""),
+    limit: int = Query(100),
+) -> dict:
+    client = get_client()
+    try:
+        db = get_database(client)
+        query: dict[str, Any] = {}
+        if workspace_slug:
+            query["workspace_slug"] = workspace_slug
+        if client_id:
+            query["client_id"] = client_id
+        if asset_render_id:
+            query["asset_render_id"] = asset_render_id
+        if platform:
+            query["platform"] = platform
+        cursor = db.manual_publish_logs.find(query).sort("created_at").limit(limit)
+        items = [serialize(d) for d in cursor]
+        return {"items": items, "total": len(items), "simulation_only": True, "outbound_actions_taken": 0}
+    finally:
+        client.close()
+
+
+# ---------------------------------------------------------------------------
+# v7.5: Asset Performance Records
+# ---------------------------------------------------------------------------
+
+@app.post("/asset-performance-records", status_code=201)
+def create_asset_performance_record(payload: AssetPerformanceRecordCreateRequest) -> dict:
+    """Store manually entered performance metrics for a published asset.
+
+    Calculates a deterministic performance_score (0.0 – 10.0) from the
+    provided metrics.  The score is advisory only and does not trigger
+    any automatic approvals or outbound actions.
+    """
+    now = utc_now()
+
+    # Validate numeric fields
+    for field_name, field_val in [
+        ("views", payload.views), ("likes", payload.likes), ("comments", payload.comments),
+        ("shares", payload.shares), ("saves", payload.saves), ("clicks", payload.clicks),
+        ("follows", payload.follows),
+    ]:
+        if field_val < 0:
+            raise HTTPException(status_code=422, detail=f"{field_name} must be >= 0.")
+    if not (0.0 <= payload.retention_rate <= 1.0) and payload.retention_rate != -1.0:
+        raise HTTPException(status_code=422, detail="retention_rate must be between 0.0 and 1.0.")
+    if payload.engagement_rate != -1.0 and not (0.0 <= payload.engagement_rate <= 1.0):
+        raise HTTPException(status_code=422, detail="engagement_rate must be between 0.0 and 1.0 (or -1.0 for auto).")
+
+    perf_score, score_reason = calculate_performance_score(
+        views=payload.views,
+        likes=payload.likes,
+        comments=payload.comments,
+        shares=payload.shares,
+        saves=payload.saves,
+        clicks=payload.clicks,
+        follows=payload.follows,
+        watch_time_seconds=payload.watch_time_seconds,
+        average_view_duration=payload.average_view_duration,
+        retention_rate=payload.retention_rate,
+        engagement_rate=payload.engagement_rate,
+    )
+
+    client = get_client()
+    try:
+        db = get_database(client)
+        doc = {
+            "workspace_slug": clean_text(payload.workspace_slug),
+            "client_id": clean_text(payload.client_id),
+            "asset_render_id": clean_text(payload.asset_render_id),
+            "manual_publish_log_id": clean_text(payload.manual_publish_log_id),
+            "platform": clean_text(payload.platform),
+            "views": payload.views,
+            "likes": payload.likes,
+            "comments": payload.comments,
+            "shares": payload.shares,
+            "saves": payload.saves,
+            "clicks": payload.clicks,
+            "follows": payload.follows,
+            "watch_time_seconds": payload.watch_time_seconds,
+            "average_view_duration": payload.average_view_duration,
+            "retention_rate": payload.retention_rate,
+            "engagement_rate": payload.engagement_rate,
+            "performance_score": perf_score,
+            "score_reason": score_reason,
+            "imported_from": payload.imported_from,
+            "notes": clean_text(payload.notes),
+            "simulation_only": True,
+            "outbound_actions_taken": 0,
+            "recorded_at": now,
+            "created_at": now,
+            "updated_at": now,
+        }
+        result = db.asset_performance_records.insert_one(doc)
+        created = db.asset_performance_records.find_one({"_id": result.inserted_id})
+        return {
+            "item": serialize(created),
+            "performance_score": perf_score,
+            "score_reason": score_reason,
+            "message": "Performance record stored. Score is advisory only. No automatic approvals or outbound actions.",
+            "simulation_only": True,
+            "outbound_actions_taken": 0,
+        }
+    finally:
+        client.close()
+
+
+@app.get("/asset-performance-records")
+def list_asset_performance_records(
+    workspace_slug: str = Query(""),
+    client_id: str = Query(""),
+    asset_render_id: str = Query(""),
+    manual_publish_log_id: str = Query(""),
+    platform: str = Query(""),
+    limit: int = Query(100),
+) -> dict:
+    client = get_client()
+    try:
+        db = get_database(client)
+        query: dict[str, Any] = {}
+        if workspace_slug:
+            query["workspace_slug"] = workspace_slug
+        if client_id:
+            query["client_id"] = client_id
+        if asset_render_id:
+            query["asset_render_id"] = asset_render_id
+        if manual_publish_log_id:
+            query["manual_publish_log_id"] = manual_publish_log_id
+        if platform:
+            query["platform"] = platform
+        cursor = db.asset_performance_records.find(query).sort("recorded_at").limit(limit)
+        items = [serialize(d) for d in cursor]
+        return {"items": items, "total": len(items), "simulation_only": True, "outbound_actions_taken": 0}
+    finally:
+        client.close()
+
+
+# ---------------------------------------------------------------------------
+# v7.5: CSV import for performance records
+# ---------------------------------------------------------------------------
+
+_CSV_INT_FIELDS = {"views", "likes", "comments", "shares", "saves", "clicks", "follows"}
+_CSV_FLOAT_FIELDS = {"watch_time_seconds", "average_view_duration", "retention_rate", "engagement_rate"}
+
+
+@app.post("/asset-performance-records/import-csv")
+def import_performance_csv(payload: PerformanceCSVImportRequest) -> dict:
+    """Import performance records from pre-parsed CSV rows.
+
+    The caller is responsible for parsing the CSV into a list of dicts.
+    No platform API calls are made.  Rows that fail validation are stored
+    in import_errors and the valid rows are written to the database.
+    """
+    if not payload.rows:
+        raise HTTPException(status_code=422, detail="rows must be a non-empty list.")
+    if len(payload.rows) > 1000:
+        raise HTTPException(status_code=422, detail="Maximum 1000 rows per import.")
+
+    now = utc_now()
+    client = get_client()
+    try:
+        db = get_database(client)
+        imported: list[dict] = []
+        import_errors: list[dict] = []
+
+        for idx, row in enumerate(payload.rows):
+            row_errors: list[str] = []
+
+            # Coerce and validate int fields
+            coerced: dict[str, Any] = {}
+            for f in _CSV_INT_FIELDS:
+                raw = row.get(f, 0)
+                try:
+                    v = int(raw)
+                    if v < 0:
+                        row_errors.append(f"{f} must be >= 0 (got {v})")
+                    coerced[f] = max(0, v)
+                except (TypeError, ValueError):
+                    row_errors.append(f"{f} is not a valid integer (got {raw!r})")
+                    coerced[f] = 0
+
+            for f in _CSV_FLOAT_FIELDS:
+                raw = row.get(f, 0.0 if f != "engagement_rate" else -1.0)
+                try:
+                    v = float(raw)
+                    coerced[f] = v
+                except (TypeError, ValueError):
+                    row_errors.append(f"{f} is not a valid float (got {raw!r})")
+                    coerced[f] = -1.0 if f == "engagement_rate" else 0.0
+
+            # Validate retention_rate bounds
+            ret = coerced.get("retention_rate", 0.0)
+            eng = coerced.get("engagement_rate", -1.0)
+            if ret < 0.0 or ret > 1.0:
+                row_errors.append(f"retention_rate must be 0.0–1.0 (got {ret})")
+                coerced["retention_rate"] = 0.0
+            if eng != -1.0 and (eng < 0.0 or eng > 1.0):
+                row_errors.append(f"engagement_rate must be 0.0–1.0 or -1.0 for auto (got {eng})")
+                coerced["engagement_rate"] = -1.0
+
+            if row_errors:
+                import_errors.append({"row_index": idx, "errors": row_errors, "row": row})
+                continue
+
+            perf_score, score_reason = calculate_performance_score(**{k: coerced[k] for k in _CSV_INT_FIELDS | _CSV_FLOAT_FIELDS})
+
+            doc = {
+                "workspace_slug": clean_text(payload.workspace_slug or str(row.get("workspace_slug", ""))),
+                "client_id": clean_text(payload.client_id or str(row.get("client_id", ""))),
+                "asset_render_id": clean_text(str(row.get("asset_render_id", ""))),
+                "manual_publish_log_id": clean_text(str(row.get("manual_publish_log_id", ""))),
+                "platform": clean_text(str(row.get("platform", ""))),
+                **{k: coerced[k] for k in _CSV_INT_FIELDS | _CSV_FLOAT_FIELDS},
+                "performance_score": perf_score,
+                "score_reason": score_reason,
+                "imported_from": "csv",
+                "notes": clean_text(str(row.get("notes", ""))),
+                "simulation_only": True,
+                "outbound_actions_taken": 0,
+                "recorded_at": now,
+                "created_at": now,
+                "updated_at": now,
+            }
+            insert_result = db.asset_performance_records.insert_one(doc)
+            created = db.asset_performance_records.find_one({"_id": insert_result.inserted_id})
+            imported.append(serialize(created))
+
+        return {
+            "imported_count": len(imported),
+            "error_count": len(import_errors),
+            "import_errors": import_errors,
+            "items": imported,
+            "message": f"Imported {len(imported)} record(s). {len(import_errors)} row(s) had validation errors.",
+            "simulation_only": True,
+            "outbound_actions_taken": 0,
+        }
+    finally:
+        client.close()
+
+
+# ---------------------------------------------------------------------------
+# v7.5: Creative Performance Summaries
+# ---------------------------------------------------------------------------
+
+@app.post("/creative-performance-summaries/generate")
+def generate_creative_performance_summary(payload: PerformanceSummaryGenerateRequest) -> dict:
+    """Aggregate performance records for an asset into a summary.
+
+    Pulls asset_performance_records for the given asset_render_id, looks up
+    the associated snippet/prompt metadata, computes aggregate metrics, and
+    upserts a creative_performance_summary record.
+
+    The summary is advisory only; it does not approve snippets or trigger
+    outbound actions.  It also returns learning-loop recommendations based
+    on historically top-performing hook_types and prompt_types for the
+    client/platform.
+    """
+    now = utc_now()
+    client = get_client()
+    try:
+        db = get_database(client)
+
+        asset_render_id = clean_text(payload.asset_render_id)
+        workspace_slug = clean_text(payload.workspace_slug)
+        client_id = clean_text(payload.client_id)
+
+        # Resolve asset render for metadata
+        render_doc: dict[str, Any] = {}
+        if asset_render_id:
+            rd = find_asset_render(db, asset_render_id)
+            if rd:
+                render_doc = rd
+
+        snippet_id = clean_text(payload.snippet_id) or clean_text(str(render_doc.get("snippet_id", "")))
+        prompt_generation_id = (
+            clean_text(payload.prompt_generation_id) or
+            clean_text(str(render_doc.get("prompt_generation_id", "")))
+        )
+        generation_engine = clean_text(str(render_doc.get("generation_engine", "")))
+        platform = clean_text(str(render_doc.get("platform", "")))
+
+        # Pull performance records
+        perf_query: dict[str, Any] = {}
+        if workspace_slug:
+            perf_query["workspace_slug"] = workspace_slug
+        if asset_render_id:
+            perf_query["asset_render_id"] = asset_render_id
+        perf_records = list(db.asset_performance_records.find(perf_query))
+
+        # Aggregate
+        if perf_records:
+            scores = [r.get("performance_score", 0.0) for r in perf_records]
+            avg_score = round(sum(scores) / len(scores), 3)
+            best_score = round(max(scores), 3)
+        else:
+            avg_score = 0.0
+            best_score = 0.0
+
+        # Determine winning_factors from metrics
+        if perf_records:
+            total_views = sum(r.get("views", 0) for r in perf_records)
+            total_saves = sum(r.get("saves", 0) for r in perf_records)
+            total_shares = sum(r.get("shares", 0) for r in perf_records)
+            avg_retention = sum(r.get("retention_rate", 0.0) for r in perf_records) / len(perf_records)
+            winning_factors: list[str] = []
+            if total_views > 5000:
+                winning_factors.append("high_reach")
+            if total_saves > 100:
+                winning_factors.append("high_saves")
+            if total_shares > 50:
+                winning_factors.append("high_shares")
+            if avg_retention > 0.5:
+                winning_factors.append("strong_retention")
+            if not winning_factors:
+                winning_factors = ["no_standout_factors"]
+        else:
+            winning_factors = []
+
+        # Resolve hook_type / prompt_type from snippet / prompt_gen
+        hook_type = ""
+        prompt_type = ""
+        snippet_doc = db.content_snippets.find_one({"_id": snippet_id}) if snippet_id else None
+        if snippet_doc:
+            hook_type = clean_text(str(snippet_doc.get("hook_type", "")))
+        prompt_doc = find_prompt_generation(db, prompt_generation_id) if prompt_generation_id else None
+        if prompt_doc:
+            prompt_type = clean_text(str(prompt_doc.get("prompt_type", "")))
+            if not generation_engine:
+                generation_engine = clean_text(str(prompt_doc.get("generation_engine_target", "")))
+
+        improvement_notes = clean_text(payload.notes) or (
+            "No performance records linked yet. Enter metrics via POST /asset-performance-records."
+            if not perf_records else ""
+        )
+
+        summary_doc = {
+            "workspace_slug": workspace_slug,
+            "client_id": client_id,
+            "snippet_id": snippet_id,
+            "prompt_generation_id": prompt_generation_id,
+            "asset_render_id": asset_render_id,
+            "hook_type": hook_type,
+            "prompt_type": prompt_type,
+            "generation_engine": generation_engine,
+            "platform": platform,
+            "performance_score": avg_score,
+            "best_performance_score": best_score,
+            "record_count": len(perf_records),
+            "score_reason": f"avg of {len(perf_records)} record(s); best={best_score}",
+            "winning_factors": winning_factors,
+            "improvement_notes": improvement_notes,
+            "simulation_only": True,
+            "outbound_actions_taken": 0,
+            "created_at": now,
+            "updated_at": now,
+        }
+
+        # Upsert by asset_render_id + workspace_slug
+        upsert_query: dict[str, Any] = {}
+        if asset_render_id:
+            upsert_query["asset_render_id"] = asset_render_id
+        if workspace_slug:
+            upsert_query["workspace_slug"] = workspace_slug
+
+        if upsert_query:
+            existing = db.creative_performance_summaries.find_one(upsert_query)
+            if existing:
+                db.creative_performance_summaries.update_one(
+                    upsert_query,
+                    {"$set": {**summary_doc, "updated_at": now}},
+                )
+                created_summary = db.creative_performance_summaries.find_one(upsert_query)
+            else:
+                res = db.creative_performance_summaries.insert_one(summary_doc)
+                created_summary = db.creative_performance_summaries.find_one({"_id": res.inserted_id})
+        else:
+            res = db.creative_performance_summaries.insert_one(summary_doc)
+            created_summary = db.creative_performance_summaries.find_one({"_id": res.inserted_id})
+
+        # --- Learning loop recommendations ---
+        recommendations = _build_recommendations(db, workspace_slug, client_id, platform)
+
+        return {
+            "item": serialize(created_summary),
+            "recommendations": recommendations,
+            "message": "Summary generated. Recommendations are advisory only. No approvals or outbound actions taken.",
+            "simulation_only": True,
+            "outbound_actions_taken": 0,
+        }
+    finally:
+        client.close()
+
+
+@app.get("/creative-performance-summaries")
+def list_creative_performance_summaries(
+    workspace_slug: str = Query(""),
+    client_id: str = Query(""),
+    platform: str = Query(""),
+    hook_type: str = Query(""),
+    prompt_type: str = Query(""),
+    limit: int = Query(100),
+) -> dict:
+    client = get_client()
+    try:
+        db = get_database(client)
+        query: dict[str, Any] = {}
+        if workspace_slug:
+            query["workspace_slug"] = workspace_slug
+        if client_id:
+            query["client_id"] = client_id
+        if platform:
+            query["platform"] = platform
+        if hook_type:
+            query["hook_type"] = hook_type
+        if prompt_type:
+            query["prompt_type"] = prompt_type
+        cursor = db.creative_performance_summaries.find(query).sort("performance_score").limit(limit)
+        items = [serialize(d) for d in cursor]
+        return {"items": items, "total": len(items), "simulation_only": True, "outbound_actions_taken": 0}
+    finally:
+        client.close()
+
+
+@app.get("/creative-performance-summaries/recommendations")
+def get_performance_recommendations(
+    workspace_slug: str = Query(""),
+    client_id: str = Query(""),
+    platform: str = Query(""),
+    limit: int = Query(5),
+) -> dict:
+    """Return advisory learning-loop recommendations.
+
+    Aggregates creative_performance_summaries to find historically top-
+    performing hook_types and prompt_types for the given client/platform.
+    Results are advisory only; no approvals or outbound actions occur.
+    """
+    client = get_client()
+    try:
+        db = get_database(client)
+        recommendations = _build_recommendations(db, workspace_slug, client_id, platform, limit=limit)
+        return {
+            **recommendations,
+            "message": "Advisory recommendations only. No automatic approvals or outbound actions.",
+            "simulation_only": True,
+            "outbound_actions_taken": 0,
+        }
+    finally:
+        client.close()
+
+
+# ---------------------------------------------------------------------------
+# v7.5: Learning loop helper
+# ---------------------------------------------------------------------------
+
+def _build_recommendations(
+    db: Any,
+    workspace_slug: str,
+    client_id: str,
+    platform: str,
+    limit: int = 5,
+) -> dict:
+    """Aggregate performance summaries into advisory recommendations.
+
+    Returns top hook_types and prompt_types ranked by average performance_score.
+    These are advisory only — SignalForge never auto-approves based on them.
+    """
+    query: dict[str, Any] = {}
+    if workspace_slug:
+        query["workspace_slug"] = workspace_slug
+    if client_id:
+        query["client_id"] = client_id
+    if platform:
+        query["platform"] = platform
+
+    summaries = list(db.creative_performance_summaries.find(query))
+
+    # Group by hook_type
+    hook_scores: dict[str, list[float]] = defaultdict(list)
+    prompt_scores: dict[str, list[float]] = defaultdict(list)
+    engine_scores: dict[str, list[float]] = defaultdict(list)
+    platform_scores: dict[str, list[float]] = defaultdict(list)
+
+    for s in summaries:
+        score = float(s.get("performance_score", 0.0))
+        if s.get("hook_type"):
+            hook_scores[s["hook_type"]].append(score)
+        if s.get("prompt_type"):
+            prompt_scores[s["prompt_type"]].append(score)
+        if s.get("generation_engine"):
+            engine_scores[s["generation_engine"]].append(score)
+        if s.get("platform"):
+            platform_scores[s["platform"]].append(score)
+
+    def top_n(score_map: dict[str, list[float]], n: int) -> list[dict]:
+        ranked = sorted(
+            [
+                {"value": k, "avg_score": round(sum(v) / len(v), 3), "record_count": len(v)}
+                for k, v in score_map.items()
+            ],
+            key=lambda x: x["avg_score"],
+            reverse=True,
+        )
+        return ranked[:n]
+
+    return {
+        "top_hook_types": top_n(hook_scores, limit),
+        "top_prompt_types": top_n(prompt_scores, limit),
+        "top_generation_engines": top_n(engine_scores, limit),
+        "top_platforms": top_n(platform_scores, limit),
+        "based_on_summary_count": len(summaries),
+        "advisory_only": True,
+        "note": (
+            "These recommendations are based on historical performance data. "
+            "They are advisory only. No automatic approvals or outbound actions are taken."
+        ),
+    }

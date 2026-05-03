@@ -1263,3 +1263,89 @@ The Ingest Pipeline tab now shows per-content-item:
 - `simulation_only: true` and `outbound_actions_taken: 0` on all transcript runs, segments, and snippets
 - Rebuild the API after any env var or code changes: `docker compose build --no-cache api`
 - `ffmpeg` is already installed in the Docker image (added in v5.5)
+
+---
+
+## Section 32: Social Creative Engine v7.5 — Performance Feedback Loop
+
+v7.5 adds a local-only, operator-driven performance tracking and learning loop to the Social Creative Engine. Performance data is entered manually by the operator — no platform API is ever called. The system calculates scores, surfaces advisory recommendations, and informs future creative decisions. It never auto-approves, auto-publishes, or takes any outbound action.
+
+### New collections (v7.5)
+
+| Collection | Purpose |
+|---|---|
+| `manual_publish_logs` | Records that an operator manually posted an asset outside SignalForge |
+| `asset_performance_records` | Platform metrics entered by operator from the platform dashboard |
+| `creative_performance_summaries` | Aggregated per-asset summary with advisory learning-loop recommendations |
+
+### Performance score formula
+
+The score is deterministic (0.0–10.0):
+
+```
+score = (
+    0.25 × clamp(views / 10_000)            # reach
+  + 0.20 × clamp(engagement_rate)           # derived when engagement_rate < 0
+  + 0.20 × clamp(saves / 500)               # saves
+  + 0.15 × clamp(shares / 200)              # shares
+  + 0.15 × clamp(retention_rate)            # 0–1 retention
+  + 0.05 × clamp(clicks / 500)              # clicks
+) × 10
+```
+
+`engagement_rate` is auto-derived as `(likes + comments + shares + saves) / views` when `engagement_rate < 0`.
+
+Same inputs always return the same score — fully deterministic.
+
+### API endpoints (v7.5)
+
+| Method | Endpoint | Description |
+|---|---|---|
+| `POST` | `/manual-publish-logs` | Record a manual post |
+| `GET` | `/manual-publish-logs` | List publish logs |
+| `POST` | `/asset-performance-records` | Record platform metrics |
+| `GET` | `/asset-performance-records` | List performance records |
+| `POST` | `/asset-performance-records/import-csv` | Bulk import from CSV rows (max 1000) |
+| `POST` | `/creative-performance-summaries/generate` | Generate/upsert summary + recommendations |
+| `GET` | `/creative-performance-summaries` | List summaries |
+| `GET` | `/creative-performance-summaries/recommendations` | Get advisory recommendations |
+
+### Typical operator workflow (v7.5)
+
+```
+1. Manually post content outside SignalForge as usual.
+2. Open Creative Studio → Performance Loop tab → Publish Log sub-tab.
+3. Fill in the publish log form (asset, platform, URL, hook used).
+4. After the post has run for 24–72 hours, check the platform dashboard.
+5. Open Performance Entry sub-tab and enter the metrics.
+   — Live score preview updates as you type.
+6. Click Save Performance Record — score is stored to MongoDB.
+7. Open Summary sub-tab, select the asset, click Generate Summary.
+8. Review Advisory Recommendations — top hook types, prompt types, engines, platforms.
+9. Use recommendations to inform the next prompt generation or brief.
+   — No automatic approvals, no changes to existing records.
+```
+
+### CSV import
+
+Paste CSV text into the CSV Import sub-tab (first row = headers). Supported columns: `asset_render_id`, `manual_publish_log_id`, `platform`, `views`, `likes`, `comments`, `shares`, `saves`, `clicks`, `follows`, `watch_time_seconds`, `average_view_duration`, `retention_rate`, `engagement_rate`, `notes`. Invalid rows are stored in `import_errors` — the remaining valid rows are still imported. Maximum 1000 rows per import.
+
+### Advisory recommendations
+
+`GET /creative-performance-summaries/recommendations` returns:
+
+- `top_hook_types` — hook types ranked by average performance_score
+- `top_prompt_types` — prompt types ranked by average performance_score
+- `top_generation_engines` — engines ranked by average performance_score
+- `top_platforms` — platforms ranked by average performance_score
+- `advisory_only: true` — always set; recommendations are never acted on automatically
+
+### Operating rules (v7.5)
+
+- SignalForge never calls any social platform API — all metrics are entered by the operator manually
+- Performance data never triggers automatic snippet approval or asset approval
+- Recommendations are advisory only — no code path acts on them automatically
+- `simulation_only: true` and `outbound_actions_taken: 0` on all new record types
+- CSV import validates rows locally — no network calls at any step
+- Negative metric values (views, likes, etc.) and out-of-range rates (retention_rate > 1.0) are rejected at the API layer
+- Performance summaries are upserted (not duplicated) when regenerated for the same asset
