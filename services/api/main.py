@@ -1,5 +1,7 @@
+import json
 import os
 import re
+import zipfile
 import inspect
 from collections import Counter, defaultdict
 from contextlib import asynccontextmanager
@@ -6245,6 +6247,445 @@ def review_campaign_report(report_id: str, payload: CampaignReportReviewRequest)
             "message": (
                 f"Report marked as {new_status}. "
                 "No publishing or outbound actions triggered."
+            ),
+            "simulation_only": True,
+            "outbound_actions_taken": 0,
+        }
+    finally:
+        client.close()
+
+# ===========================================================================
+# v8.5: Client Export Package
+# ===========================================================================
+
+VALID_EXPORT_FORMATS = {"markdown", "zip", "pdf_placeholder"}
+VALID_EXPORT_STATUSES = {"queued", "generated", "needs_review", "approved", "rejected", "failed"}
+VALID_EXPORT_REVIEW_DECISIONS = {"approve", "reject", "revise"}
+
+EXPORT_BASE_DIR = os.environ.get("SIGNALFORGE_EXPORT_DIR", "/tmp/signalforge_exports")
+
+
+class CampaignExportCreateRequest(BaseModel):
+    workspace_slug: str = ""
+    client_id: str = ""
+    campaign_pack_id: str
+    campaign_report_id: str
+    export_name: str = ""
+    export_format: str = "markdown"
+    included_sections: list[str] = []
+
+
+class CampaignExportReviewRequest(BaseModel):
+    workspace_slug: str = ""
+    decision: str
+    reviewer_notes: str = ""
+
+
+def _build_export_markdown(pack: dict, report: dict, pack_items: list, asset_renders_by_id: dict) -> str:
+    """Build the full markdown export string from pack + report data."""
+    lines: list[str] = []
+
+    # 1. Campaign Overview
+    lines.append("# Campaign Export Report\n")
+    lines.append("## 1. Campaign Overview\n")
+    lines.append(f"- **Campaign Name:** {pack.get('campaign_name', '')}")
+    lines.append(f"- **Client ID:** {pack.get('client_id', '')}")
+    lines.append(f"- **Goal:** {pack.get('campaign_goal', '')}")
+    lines.append(f"- **Platforms:** {', '.join(pack.get('target_platforms') or [])}")
+    lines.append(f"- **Audience:** {pack.get('target_audience', '')}")
+    lines.append(f"- **Themes:** {', '.join(pack.get('content_themes') or [])}")
+    lines.append(f"- **Pack Status:** {pack.get('status', '')}\n")
+
+    # 2. Executive Summary
+    lines.append("## 2. Executive Summary\n")
+    lines.append((report.get("executive_summary") or "_No executive summary available._") + "\n")
+
+    # 3. Source Content Summary
+    sc_items = [i for i in pack_items if i.get("item_type") == "source_content"]
+    lines.append(f"## 3. Source Content Summary ({len(sc_items)} items)\n")
+    if sc_items:
+        for item in sc_items:
+            lines.append(
+                f"- {item.get('title') or item.get('item_id', 'Unknown')} "
+                f"— status: {item.get('status', 'unknown')}"
+            )
+    else:
+        lines.append("_No source content items in this pack._")
+    lines.append("")
+
+    # 4. Top Snippets
+    top_hooks = report.get("top_hooks") or []
+    lines.append(f"## 4. Top Snippets ({len(top_hooks)} items)\n")
+    if top_hooks:
+        for hook in top_hooks[:10]:
+            if isinstance(hook, dict):
+                lines.append(
+                    f"- **Hook:** {hook.get('hook_text', '')} "
+                    f"| **Type:** {hook.get('hook_type', '')} "
+                    f"| **Score:** {hook.get('overall_score', '')}"
+                )
+    else:
+        lines.append("_No top snippets data available._")
+    lines.append("")
+
+    # 5. Prompt Strategy
+    prompt_items = [i for i in pack_items if i.get("item_type") == "prompt_generation"]
+    lines.append(f"## 5. Prompt Strategy ({len(prompt_items)} items)\n")
+    if prompt_items:
+        for item in prompt_items:
+            lines.append(
+                f"- {item.get('title') or item.get('item_id', 'Unknown')} "
+                f"— status: {item.get('status', 'unknown')}"
+            )
+    else:
+        lines.append("_No prompt generation items in this pack._")
+    lines.append("")
+
+    # 6. Rendered Assets
+    asset_items = [i for i in pack_items if i.get("item_type") == "asset_render"]
+    lines.append(f"## 6. Rendered Assets ({len(asset_items)} items)\n")
+    for item in asset_items:
+        item_id = item.get("item_id", "")
+        render = asset_renders_by_id.get(item_id) or {}
+        local_path = render.get("local_file_path", "")
+        lines.append(f"- **ID:** {item_id}")
+        lines.append(f"  - Title: {item.get('title', '')}")
+        lines.append(f"  - Local path: {local_path or '_not available_'}")
+        lines.append(f"  - Status: {render.get('status') or item.get('status', 'unknown')}")
+    if not asset_items:
+        lines.append("_No rendered assets in this pack._")
+    lines.append("")
+
+    # 7. Manual Performance Summary
+    perf = report.get("performance_summary") or {}
+    lines.append("## 7. Manual Performance Summary\n")
+    lines.append(f"- **Records:** {perf.get('record_count', 0)}")
+    avg = perf.get("avg_score")
+    top = perf.get("top_score")
+    lines.append(f"- **Avg Score:** {avg if avg is not None else 'N/A'}")
+    lines.append(f"- **Top Score:** {top if top is not None else 'N/A'}\n")
+
+    # 8. Lessons Learned
+    lines.append("## 8. Lessons Learned\n")
+    learned = report.get("lessons_learned") or []
+    if learned:
+        for lesson in learned:
+            lines.append(f"- {lesson}")
+    else:
+        lines.append("_No lessons learned data available._")
+    lines.append("")
+
+    recs = report.get("next_recommendations") or []
+    lines.append("### Next Recommendations\n")
+    if recs:
+        for rec in recs:
+            lines.append(f"- {rec}")
+    else:
+        lines.append("_No recommendations available._")
+    lines.append("")
+
+    # 9. Safety & Audit Notes
+    lines.append("## 9. Safety & Audit Notes\n")
+    lines.append("- No publishing performed by SignalForge at any step.")
+    lines.append("- No scheduling performed by SignalForge at any step.")
+    lines.append("- No DMs or outbound messages sent.")
+    lines.append("- No social platform API calls made.")
+    lines.append("- `simulation_only: true`")
+    lines.append("- `outbound_actions_taken: 0`")
+    lines.append("- This export is for local review and client delivery only.")
+    lines.append("- Human approval required before any external use.")
+    lines.append("")
+
+    return "\n".join(lines)
+
+
+def _generate_export(db: Any, pack: dict, report: dict, payload: "CampaignExportCreateRequest", now: datetime) -> tuple[str, list, list]:
+    """Write export files to local filesystem.
+
+    Returns (export_path, included_assets, safety_notes).
+    No network calls, no uploads, no email — local filesystem only.
+    """
+    pack_id_str = str(pack.get("_id", ""))
+    ws = clean_text(payload.workspace_slug) or pack.get("workspace_slug", "default")
+    ts = now.strftime("%Y%m%d_%H%M%S")
+    export_name = clean_text(payload.export_name) or "export"
+    fmt = clean_text(payload.export_format)
+
+    # Fetch pack items
+    pack_items = list(db.campaign_pack_items.find({"campaign_pack_id": pack_id_str}))
+
+    # Gather asset renders for each asset_render item
+    asset_items = [i for i in pack_items if i.get("item_type") == "asset_render"]
+    asset_renders_by_id: dict[str, dict] = {}
+    for item in asset_items:
+        item_id = item.get("item_id", "")
+        try:
+            render = db.asset_renders.find_one({"_id": ObjectId(item_id)})
+        except Exception:
+            render = None
+        if render:
+            asset_renders_by_id[item_id] = render
+
+    md_content = _build_export_markdown(pack, report, pack_items, asset_renders_by_id)
+
+    safety_notes = [
+        "No publishing performed by SignalForge.",
+        "No scheduling performed by SignalForge.",
+        "No outbound actions taken.",
+        "simulation_only=true on all records.",
+        "Human review required before any external use.",
+    ]
+
+    # Create output directory
+    base_dir = os.path.join(EXPORT_BASE_DIR, ws, pack_id_str)
+    os.makedirs(base_dir, exist_ok=True)
+
+    included_assets: list[str] = []
+
+    if fmt == "markdown":
+        export_path = os.path.join(base_dir, f"{export_name}_{ts}.md")
+        with open(export_path, "w", encoding="utf-8") as fh:
+            fh.write(md_content)
+
+    elif fmt == "zip":
+        export_path = os.path.join(base_dir, f"{export_name}_{ts}.zip")
+        with zipfile.ZipFile(export_path, "w", zipfile.ZIP_DEFLATED) as zf:
+            zf.writestr("report.md", md_content)
+            # Include local asset files that actually exist on disk
+            for item in asset_items:
+                item_id = item.get("item_id", "")
+                render = asset_renders_by_id.get(item_id) or {}
+                local_path = render.get("local_file_path", "")
+                if local_path and os.path.isfile(local_path):
+                    asset_name = os.path.basename(local_path)
+                    zf.write(local_path, f"assets/{asset_name}")
+                    included_assets.append(local_path)
+            # manifest.json
+            manifest = {
+                "export_name": export_name,
+                "export_format": "zip",
+                "campaign_pack_id": pack_id_str,
+                "campaign_report_id": str(report.get("_id", "")),
+                "workspace_slug": ws,
+                "client_id": pack.get("client_id", ""),
+                "generated_at": now.isoformat(),
+                "included_assets": included_assets,
+                "safety_notes": safety_notes,
+                "simulation_only": True,
+                "outbound_actions_taken": 0,
+            }
+            zf.writestr("manifest.json", json.dumps(manifest, indent=2))
+
+    elif fmt == "pdf_placeholder":
+        export_path = os.path.join(base_dir, f"{export_name}_{ts}_placeholder.md")
+        pdf_note = (
+            "\n\n---\n\n"
+            "> **PDF Generation Note:** PDF export is not yet implemented in this version. "
+            "This placeholder markdown file contains the full report content. "
+            "Use an external markdown-to-PDF converter if a PDF is needed.\n"
+        )
+        with open(export_path, "w", encoding="utf-8") as fh:
+            fh.write(md_content + pdf_note)
+
+    else:
+        export_path = ""
+
+    return export_path, included_assets, safety_notes
+
+
+# ---------------------------------------------------------------------------
+# v8.5: Campaign Exports endpoints
+# ---------------------------------------------------------------------------
+
+@app.post("/campaign-exports", status_code=201)
+def create_campaign_export(payload: CampaignExportCreateRequest) -> dict:
+    """Create a local export package for a campaign pack + report.
+
+    Writes files to the local filesystem only.  No uploading, emailing,
+    scheduling, or any outbound action is performed.
+    """
+    if payload.export_format not in VALID_EXPORT_FORMATS:
+        raise HTTPException(
+            status_code=422,
+            detail=f"export_format must be one of: {sorted(VALID_EXPORT_FORMATS)}",
+        )
+    now = utc_now()
+    client = get_client()
+    try:
+        db = get_database(client)
+
+        # Validate campaign pack
+        try:
+            pack_oid = ObjectId(payload.campaign_pack_id)
+        except Exception:
+            raise HTTPException(status_code=422, detail="Invalid campaign_pack_id format.")
+        pack = db.campaign_packs.find_one({"_id": pack_oid})
+        if not pack:
+            raise HTTPException(status_code=404, detail="Campaign pack not found.")
+
+        # Validate campaign report
+        try:
+            report_oid = ObjectId(payload.campaign_report_id)
+        except Exception:
+            raise HTTPException(status_code=422, detail="Invalid campaign_report_id format.")
+        report = db.campaign_reports.find_one({"_id": report_oid})
+        if not report:
+            raise HTTPException(status_code=404, detail="Campaign report not found.")
+
+        # Workspace isolation
+        req_ws = clean_text(payload.workspace_slug)
+        if req_ws and pack.get("workspace_slug") != req_ws:
+            raise HTTPException(status_code=422, detail="workspace_slug does not match campaign pack.")
+
+        # Client isolation
+        req_client = clean_text(payload.client_id)
+        if req_client and pack.get("client_id") and pack.get("client_id") != req_client:
+            raise HTTPException(status_code=422, detail="client_id does not match campaign pack.")
+
+        # Generate local export files
+        try:
+            export_path, included_assets, safety_notes = _generate_export(db, pack, report, payload, now)
+            export_status = "generated"
+        except Exception as exc:
+            export_path = ""
+            included_assets = []
+            safety_notes = [str(exc)]
+            export_status = "failed"
+
+        doc = {
+            "workspace_slug": pack.get("workspace_slug", ""),
+            "client_id": pack.get("client_id", ""),
+            "campaign_pack_id": str(pack.get("_id", "")),
+            "campaign_report_id": str(report.get("_id", "")),
+            "export_name": clean_text(payload.export_name) or "export",
+            "export_format": clean_text(payload.export_format),
+            "export_status": export_status,
+            "export_path": export_path,
+            "included_assets": included_assets,
+            "included_sections": list(payload.included_sections),
+            "safety_notes": safety_notes,
+            "generated_at": now,
+            "reviewed_at": None,
+            "reviewer_notes": "",
+            "simulation_only": True,
+            "outbound_actions_taken": 0,
+            "created_at": now,
+            "updated_at": now,
+        }
+        result = db.campaign_exports.insert_one(doc)
+        created = db.campaign_exports.find_one({"_id": result.inserted_id})
+        return {
+            "item": serialize(created),
+            "message": (
+                "Campaign export generated locally. "
+                "No publishing, scheduling, uploading, or outbound actions performed."
+            ),
+            "simulation_only": True,
+            "outbound_actions_taken": 0,
+        }
+    finally:
+        client.close()
+
+
+@app.get("/campaign-exports")
+def list_campaign_exports(
+    workspace_slug: str = Query(""),
+    client_id: str = Query(""),
+    campaign_pack_id: str = Query(""),
+    status: str = Query(""),
+    limit: int = Query(100),
+) -> dict:
+    client = get_client()
+    try:
+        db = get_database(client)
+        query: dict[str, Any] = {}
+        if workspace_slug:
+            query["workspace_slug"] = workspace_slug
+        if client_id:
+            query["client_id"] = client_id
+        if campaign_pack_id:
+            query["campaign_pack_id"] = campaign_pack_id
+        if status:
+            query["export_status"] = status
+        cursor = db.campaign_exports.find(query).sort("created_at").limit(limit)
+        items = [serialize(d) for d in cursor]
+        return {
+            "items": items,
+            "total": len(items),
+            "simulation_only": True,
+            "outbound_actions_taken": 0,
+        }
+    finally:
+        client.close()
+
+
+@app.get("/campaign-exports/{export_id}")
+def get_campaign_export(export_id: str) -> dict:
+    """Return a single campaign export record."""
+    client = get_client()
+    try:
+        db = get_database(client)
+        try:
+            oid = ObjectId(export_id)
+        except Exception:
+            raise HTTPException(status_code=422, detail="Invalid export_id format.")
+        export = db.campaign_exports.find_one({"_id": oid})
+        if not export:
+            raise HTTPException(status_code=404, detail="Campaign export not found.")
+        return {
+            "item": serialize(export),
+            "simulation_only": True,
+            "outbound_actions_taken": 0,
+        }
+    finally:
+        client.close()
+
+
+@app.post("/campaign-exports/{export_id}/review")
+def review_campaign_export(export_id: str, payload: CampaignExportReviewRequest) -> dict:
+    """Mark an export as approved, rejected, or needing revision.
+
+    This is a human review step only.  Approving an export does NOT upload,
+    email, publish, schedule, or trigger any outbound action.
+    """
+    if payload.decision not in VALID_EXPORT_REVIEW_DECISIONS:
+        raise HTTPException(
+            status_code=422,
+            detail=f"decision must be one of: {sorted(VALID_EXPORT_REVIEW_DECISIONS)}",
+        )
+    now = utc_now()
+    client = get_client()
+    try:
+        db = get_database(client)
+        try:
+            oid = ObjectId(export_id)
+        except Exception:
+            raise HTTPException(status_code=422, detail="Invalid export_id format.")
+        export = db.campaign_exports.find_one({"_id": oid})
+        if not export:
+            raise HTTPException(status_code=404, detail="Campaign export not found.")
+
+        status_map = {
+            "approve": "approved",
+            "reject": "rejected",
+            "revise": "needs_review",
+        }
+        new_status = status_map[payload.decision]
+        db.campaign_exports.update_one(
+            {"_id": oid},
+            {"$set": {
+                "export_status": new_status,
+                "reviewer_notes": clean_text(payload.reviewer_notes),
+                "reviewed_at": now,
+                "updated_at": now,
+            }},
+        )
+        updated = db.campaign_exports.find_one({"_id": oid})
+        return {
+            "item": serialize(updated),
+            "message": (
+                f"Export marked as {new_status}. "
+                "No uploading, publishing, or outbound actions triggered."
             ),
             "simulation_only": True,
             "outbound_actions_taken": 0,

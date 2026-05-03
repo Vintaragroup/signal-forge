@@ -1442,3 +1442,101 @@ Approving a report never triggers publishing or any outbound action.
 - `simulation_only: true` and `outbound_actions_taken: 0` on all v8 record types
 - Items from a different workspace or client are rejected at the API layer — cross-contamination is impossible
 - Pack reports are generated entirely from local MongoDB data
+
+---
+
+## Section 34: Social Creative Engine v8.5 — Client Export Package
+
+### Overview
+
+v8.5 adds client-facing deliverable generation. After a campaign pack and its performance report are ready, operators can generate a packaged export — a structured file (Markdown, Zip, or PDF placeholder) written to the local filesystem. Exports are reviewed by a human before any external use.
+
+**All export operations are local-only. No upload, email, scheduling, DM, or outbound action is ever triggered — including after approval.**
+
+---
+
+### New Collection: `campaign_exports`
+
+| Field | Description |
+|---|---|
+| `workspace_slug` | Workspace isolation key |
+| `client_id` | Client isolation key |
+| `campaign_pack_id` | Source campaign pack (string) |
+| `campaign_report_id` | Source campaign report (string) |
+| `export_name` | Operator-supplied name for the export |
+| `export_format` | `markdown`, `zip`, or `pdf_placeholder` |
+| `export_status` | `queued → generated → needs_review → approved / rejected / failed` |
+| `export_path` | Absolute local filesystem path of the generated file |
+| `included_assets` | List of local file paths included in a zip export |
+| `included_sections` | List of section names requested by the operator |
+| `safety_notes` | List of safety/audit notes embedded in every export |
+| `generated_at` | UTC timestamp of generation |
+| `reviewed_at` | UTC timestamp of review decision |
+| `reviewer_notes` | Notes entered by the human reviewer |
+| `simulation_only` | Always `true` |
+| `outbound_actions_taken` | Always `0` |
+
+---
+
+### Export Formats
+
+| Format | Output | Contents |
+|---|---|---|
+| `markdown` | Single `.md` file | All 9 export sections (overview, exec summary, snippets, prompts, assets, performance, lessons learned, safety notes) |
+| `zip` | `.zip` archive | `report.md` + `assets/` (local files that exist on disk) + `manifest.json` |
+| `pdf_placeholder` | `.md` file with PDF note | Same as markdown + footer note that PDF export is not yet implemented |
+
+**Zip manifest.json includes:** export_name, export_format, campaign_pack_id, campaign_report_id, workspace_slug, client_id, generated_at, included_assets, safety_notes, simulation_only, outbound_actions_taken.
+
+---
+
+### API Endpoints
+
+| Method | Path | Status | Description |
+|---|---|---|---|
+| `POST` | `/campaign-exports` | 201 | Generate a new export |
+| `GET` | `/campaign-exports` | 200 | List exports (filter: workspace_slug, client_id, campaign_pack_id, status) |
+| `GET` | `/campaign-exports/{id}` | 200 | Get a single export |
+| `POST` | `/campaign-exports/{id}/review` | 200 | Review: approve / reject / revise |
+
+**Validation:**
+- `export_format` must be `markdown`, `zip`, or `pdf_placeholder` → 422 otherwise
+- `campaign_pack_id` must be a valid ObjectId and exist in this workspace → 404 / 422
+- `campaign_report_id` must be valid and exist → 404 / 422
+- `workspace_slug` must match the pack's workspace → 422
+- `client_id` (if supplied) must match the pack's client → 422
+- Review `decision` must be `approve`, `reject`, or `revise` → 422 otherwise
+
+---
+
+### Operator Workflow
+
+1. Navigate to Creative Studio → **Exports** tab
+2. Select **Create Export** sub-tab
+3. Choose the campaign pack and report from the dropdowns
+4. Enter an export name and select a format
+5. Click **Generate Export** — file is written to `SIGNALFORGE_EXPORT_DIR/{workspace}/{pack_id}/`
+6. Review the export in the **Export Detail** sub-tab (check path, safety notes, included assets)
+7. Use **Review Export** to approve, reject, or request revision
+8. Deliver the file to the client manually (copy/share the local path) — SignalForge performs no automatic distribution
+
+---
+
+### Environment Variable
+
+| Variable | Default | Description |
+|---|---|---|
+| `SIGNALFORGE_EXPORT_DIR` | `/tmp/signalforge_exports` | Base directory for all export files |
+
+To persist exports across container restarts, mount a volume or set `SIGNALFORGE_EXPORT_DIR` to a durable path in `docker-compose.yml`.
+
+---
+
+### v8.5 Safety Boundary
+
+- Export files are written to the local filesystem only — no uploads, no email, no social platform API calls
+- Approving an export via `POST /campaign-exports/{id}/review` does NOT change the pack or report status, does NOT publish content, and does NOT trigger any outbound action
+- All `campaign_exports` records carry `simulation_only: true` and `outbound_actions_taken: 0` permanently
+- Workspace and client cross-contamination is rejected at the API layer with 422
+- Safety notes are embedded in every export file and every API response
+- Human delivery (e.g., sending the file path to a client) is always a manual, out-of-band step

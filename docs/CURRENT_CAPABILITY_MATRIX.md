@@ -278,3 +278,35 @@ All v7 guarantees are preserved. No social platform API is called at any point i
 ### v8 Safety Boundary
 
 Approving a `campaign_report` does not publish content, schedule posts, change the status of snippets or assets, or call any external API. Campaign packs and reports are packaging and advisory artifacts only. All v8 collections carry `simulation_only: true` and `outbound_actions_taken: 0`. Pack items are cross-validated at insert time — a workspace or client mismatch is a hard 422 rejection. SignalForge never sends, schedules, or triggers any outbound message or post at any step of the v8 flow.
+
+---
+
+## v8.5 — Client Export Package
+
+| Capability | Status | Notes |
+|---|---|---|
+| Campaign export creation | ✅ | `POST /campaign-exports` → 201 |
+| Markdown export format | ✅ | Single `.md` file with all 9 sections |
+| Zip export format | ✅ | `report.md` + `assets/` + `manifest.json` |
+| PDF placeholder format | ✅ | `.md` with PDF note footer |
+| Local filesystem write only | ✅ | No network calls at write time |
+| Includes local asset files in zip | ✅ | Only if `local_file_path` exists on disk |
+| Handles missing asset gracefully | ✅ | Skip missing files — no crash |
+| manifest.json in zip | ✅ | Includes safety notes + simulation_only |
+| Export review workflow | ✅ | approve / reject / revise decisions |
+| Workspace isolation | ✅ | 422 on workspace mismatch |
+| Client isolation | ✅ | 422 on client_id mismatch |
+| simulation_only on all records | ✅ | Always true, never modified |
+| outbound_actions_taken = 0 | ✅ | Always 0, never incremented |
+| No upload/email/schedule on approve | ✅ | Approval is a human review step only |
+| Safety notes in every export file | ✅ | Embedded in markdown and zip manifest |
+| Frontend Export tab | ✅ | Create / List / Detail / Review sub-tabs |
+| SIGNALFORGE_EXPORT_DIR env var | ✅ | Default: `/tmp/signalforge_exports` |
+
+### v8.5 Safety Boundary
+
+Exporting a campaign pack does not publish, schedule, upload, or email anything. Approving an export does not change the pack or report status and does not trigger any outbound action. All `campaign_exports` records permanently carry `simulation_only: true` and `outbound_actions_taken: 0`. Export files are written to the local filesystem only. SignalForge never auto-distributes export files. Human delivery is always an out-of-band manual step.
+
+| No social API calls | ✅ | All data local-only |
+| No uploads | ✅ | Filesystem write only |
+| No email on approval | ✅ | Approval is human-review metadata only |

@@ -1237,6 +1237,228 @@ function IngestPipelineSection({
 // ---------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------
+// v8.5: Campaign Exports Section
+// ---------------------------------------------------------------------------
+function CampaignExportsSection({ campaignExports, campaignPacks, campaignReports, wsParam, onRefresh, showNotice }) {
+  const [subTab, setSubTab] = useState("exports-list");
+  const [selectedPackId, setSelectedPackId] = useState("");
+  const [selectedReportId, setSelectedReportId] = useState("");
+  const [exportName, setExportName] = useState("");
+  const [exportFormat, setExportFormat] = useState("markdown");
+  const [creating, setCreating] = useState(false);
+  const [selectedExport, setSelectedExport] = useState(null);
+  const [reviewDecision, setReviewDecision] = useState("approve");
+  const [reviewNotes, setReviewNotes] = useState("");
+  const [reviewing, setReviewing] = useState(false);
+
+  async function handleCreateExport() {
+    if (!selectedPackId) { showNotice("Select a campaign pack."); return; }
+    if (!selectedReportId) { showNotice("Select a campaign report."); return; }
+    setCreating(true);
+    try {
+      const res = await api.createCampaignExport({
+        campaign_pack_id: selectedPackId,
+        campaign_report_id: selectedReportId,
+        export_name: exportName || "export",
+        export_format: exportFormat,
+      });
+      showNotice(`Export created — ${res.item?.export_status || "generated"}. Path: ${res.item?.export_path || "n/a"}`);
+      setSelectedExport(res.item);
+      setSubTab("export-detail");
+      onRefresh();
+    } catch { showNotice("Failed to create export."); }
+    finally { setCreating(false); }
+  }
+
+  async function handleReviewExport() {
+    if (!selectedExport) return;
+    setReviewing(true);
+    try {
+      const res = await api.reviewCampaignExport(selectedExport._id, { decision: reviewDecision, reviewer_notes: reviewNotes });
+      showNotice(`Export ${res.item?.export_status}.`);
+      setSelectedExport(res.item);
+      onRefresh();
+    } catch { showNotice("Review failed."); }
+    finally { setReviewing(false); }
+  }
+
+  const subTabs = [
+    { id: "exports-list", label: `All Exports (${campaignExports.length})` },
+    { id: "create-export", label: "Create Export" },
+    { id: "export-detail", label: "Export Detail" },
+    { id: "review-export", label: "Review Export" },
+  ];
+
+  return (
+    <div className="space-y-4">
+      {/* v8.5 safety badge */}
+      <div className="flex flex-wrap gap-2 text-xs">
+        {["v8.5 Campaign Exports", "simulation_only", "outbound_actions_taken: 0", "local filesystem only", "no uploads · no email · no DMs"].map((t) => (
+          <span key={t} className="rounded bg-emerald-50 px-2 py-0.5 font-mono text-emerald-700 border border-emerald-200">{t}</span>
+        ))}
+      </div>
+
+      {/* Sub-tabs */}
+      <div className="flex flex-wrap gap-1 border-b border-slate-200">
+        {subTabs.map(({ id, label }) => (
+          <button
+            key={id}
+            type="button"
+            onClick={() => setSubTab(id)}
+            className={["rounded-t-lg px-3 py-1.5 text-xs font-medium transition", subTab === id ? "border-b-2 border-emerald-600 text-emerald-700" : "text-slate-500 hover:text-slate-800"].join(" ")}
+          >{label}</button>
+        ))}
+      </div>
+
+      {/* All Exports */}
+      {subTab === "exports-list" && (
+        <div className="space-y-3">
+          <h3 className="text-sm font-semibold text-slate-800">Campaign Exports</h3>
+          {campaignExports.length === 0 ? (
+            <div className="rounded-lg border border-dashed border-slate-200 bg-slate-50 p-6 text-center text-sm text-slate-500">
+              No exports yet. Create one from an approved campaign pack and report.
+            </div>
+          ) : (
+            <div className="space-y-2">
+              {campaignExports.map((ex) => (
+                <div key={ex._id} className="rounded-lg border border-slate-200 bg-white p-3 flex flex-wrap items-center gap-3">
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-medium text-slate-800 truncate">{ex.export_name}</p>
+                    <p className="text-xs text-slate-500">{ex.export_format} · {ex.export_status}</p>
+                    <p className="text-xs text-slate-400 font-mono truncate">{ex.export_path}</p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => { setSelectedExport(ex); setSubTab("export-detail"); }}
+                    className="rounded-lg border border-slate-200 px-3 py-1 text-xs text-slate-600 hover:bg-slate-50"
+                  >View</button>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Create Export */}
+      {subTab === "create-export" && (
+        <div className="space-y-4 max-w-lg">
+          <h3 className="text-sm font-semibold text-slate-800">Create Export Package</h3>
+          <div className="space-y-3">
+            <div>
+              <label className="block text-xs font-medium text-slate-700 mb-1">Campaign Pack</label>
+              <select value={selectedPackId} onChange={(e) => setSelectedPackId(e.target.value)} className="w-full rounded border border-slate-200 px-2 py-1.5 text-sm">
+                <option value="">— Select a pack —</option>
+                {campaignPacks.map((p) => <option key={p._id} value={p._id}>{p.campaign_name} ({p.status})</option>)}
+              </select>
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-slate-700 mb-1">Campaign Report</label>
+              <select value={selectedReportId} onChange={(e) => setSelectedReportId(e.target.value)} className="w-full rounded border border-slate-200 px-2 py-1.5 text-sm">
+                <option value="">— Select a report —</option>
+                {campaignReports.map((r) => <option key={r._id} value={r._id}>{r.campaign_pack_id} — {r.status}</option>)}
+              </select>
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-slate-700 mb-1">Export Name</label>
+              <input type="text" value={exportName} onChange={(e) => setExportName(e.target.value)} placeholder="e.g. spring_2025_client_package" className="w-full rounded border border-slate-200 px-2 py-1.5 text-sm" />
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-slate-700 mb-1">Export Format</label>
+              <select value={exportFormat} onChange={(e) => setExportFormat(e.target.value)} className="w-full rounded border border-slate-200 px-2 py-1.5 text-sm">
+                <option value="markdown">Markdown (.md)</option>
+                <option value="zip">Zip archive (.zip with manifest + assets)</option>
+                <option value="pdf_placeholder">PDF Placeholder (markdown with note)</option>
+              </select>
+            </div>
+            <div className="rounded bg-amber-50 border border-amber-200 p-3 text-xs text-amber-800">
+              Export writes to local filesystem only. No uploading, emailing, or outbound actions.
+            </div>
+            <button
+              type="button"
+              onClick={handleCreateExport}
+              disabled={creating}
+              className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-700 disabled:opacity-50"
+            >{creating ? "Generating…" : "Generate Export"}</button>
+          </div>
+        </div>
+      )}
+
+      {/* Export Detail */}
+      {subTab === "export-detail" && (
+        <div className="space-y-4">
+          {!selectedExport ? (
+            <p className="text-sm text-slate-500">Select an export from the list to view details.</p>
+          ) : (
+            <div className="space-y-4">
+              <div className="rounded-lg border border-slate-200 bg-white p-4 space-y-2">
+                <h3 className="text-sm font-semibold text-slate-800">{selectedExport.export_name}</h3>
+                <div className="grid grid-cols-2 gap-2 text-xs">
+                  <span className="text-slate-500">Format:</span><span className="font-mono">{selectedExport.export_format}</span>
+                  <span className="text-slate-500">Status:</span><span className={`font-medium ${selectedExport.export_status === "approved" ? "text-emerald-700" : selectedExport.export_status === "failed" ? "text-red-600" : "text-slate-700"}`}>{selectedExport.export_status}</span>
+                  <span className="text-slate-500">Export Path:</span><span className="font-mono text-xs break-all col-span-1">{selectedExport.export_path || "—"}</span>
+                </div>
+              </div>
+              {(selectedExport.safety_notes || []).length > 0 && (
+                <div className="rounded-lg bg-emerald-50 border border-emerald-200 p-3 space-y-1">
+                  <p className="text-xs font-semibold text-emerald-800">Safety Notes</p>
+                  {selectedExport.safety_notes.map((n, i) => <p key={i} className="text-xs text-emerald-700">✓ {n}</p>)}
+                </div>
+              )}
+              {(selectedExport.included_assets || []).length > 0 && (
+                <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+                  <p className="text-xs font-semibold text-slate-700 mb-1">Included Assets ({selectedExport.included_assets.length})</p>
+                  {selectedExport.included_assets.map((a, i) => <p key={i} className="text-xs font-mono text-slate-600">{a}</p>)}
+                </div>
+              )}
+              <button
+                type="button"
+                onClick={() => setSubTab("review-export")}
+                className="rounded-lg border border-slate-300 px-4 py-2 text-sm text-slate-700 hover:bg-slate-50"
+              >Review this Export →</button>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Review Export */}
+      {subTab === "review-export" && (
+        <div className="space-y-4 max-w-md">
+          <h3 className="text-sm font-semibold text-slate-800">Review Export</h3>
+          {!selectedExport ? (
+            <p className="text-sm text-slate-500">Select an export from the list first.</p>
+          ) : (
+            <div className="space-y-3">
+              <p className="text-xs text-slate-600">Reviewing: <span className="font-medium">{selectedExport.export_name}</span> ({selectedExport.export_status})</p>
+              <div>
+                <label className="block text-xs font-medium text-slate-700 mb-1">Decision</label>
+                <select value={reviewDecision} onChange={(e) => setReviewDecision(e.target.value)} className="w-full rounded border border-slate-200 px-2 py-1.5 text-sm">
+                  <option value="approve">Approve</option>
+                  <option value="reject">Reject</option>
+                  <option value="revise">Request Revision</option>
+                </select>
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-slate-700 mb-1">Reviewer Notes (optional)</label>
+                <textarea value={reviewNotes} onChange={(e) => setReviewNotes(e.target.value)} rows={3} className="w-full rounded border border-slate-200 px-2 py-1.5 text-sm" placeholder="Notes for client or team…" />
+              </div>
+              <div className="rounded bg-amber-50 border border-amber-200 p-3 text-xs text-amber-800">
+                Approving this export does NOT upload, email, publish, or schedule anything.
+              </div>
+              <button
+                type="button"
+                onClick={handleReviewExport}
+                disabled={reviewing}
+                className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50"
+              >{reviewing ? "Submitting…" : "Submit Review"}</button>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // v8: Campaign Packs Section
 // ---------------------------------------------------------------------------
 function CampaignPacksSection({
@@ -2887,11 +3109,13 @@ export default function CreativeStudioPage({ activeWorkspace, refreshTrigger = 0
   // v8 state
   const [campaignPacks, setCampaignPacks] = useState([]);
   const [campaignReports, setCampaignReports] = useState([]);
+  // v8.5 state
+  const [campaignExports, setCampaignExports] = useState([]);
 
   async function load() {
     setLoading(true);
     try {
-      const [briefData, draftData, profilesData, channelsData, contentData, snippetsData, assetsData, audioRunsData, transcriptRunsData, segmentsData, intakeData, promptGenData, assetRendersData, publishLogsData, perfRecordsData, perfSummariesData, campaignPacksData, campaignReportsData] = await Promise.all([
+      const [briefData, draftData, profilesData, channelsData, contentData, snippetsData, assetsData, audioRunsData, transcriptRunsData, segmentsData, intakeData, promptGenData, assetRendersData, publishLogsData, perfRecordsData, perfSummariesData, campaignPacksData, campaignReportsData, campaignExportsData] = await Promise.all([
         api.contentBriefs({ ...wsParam() }),
         api.contentDrafts({ ...wsParam() }),
         api.clientProfiles({ ...wsParam() }),
@@ -2910,6 +3134,7 @@ export default function CreativeStudioPage({ activeWorkspace, refreshTrigger = 0
         api.creativePerformanceSummaries({ ...wsParam() }),
         api.campaignPacks({ ...wsParam() }),
         api.campaignReports({ ...wsParam() }),
+        api.campaignExports({ ...wsParam() }),
       ]);
       setBriefs(briefData.items || []);
       setDrafts(draftData.items || []);
@@ -2929,6 +3154,7 @@ export default function CreativeStudioPage({ activeWorkspace, refreshTrigger = 0
       setCreativePerformanceSummaries(perfSummariesData.items || []);
       setCampaignPacks(campaignPacksData.items || []);
       setCampaignReports(campaignReportsData.items || []);
+      setCampaignExports(campaignExportsData.items || []);
     } catch {
       // fail silently
     } finally {
@@ -3075,6 +3301,7 @@ export default function CreativeStudioPage({ activeWorkspace, refreshTrigger = 0
           { id: "renders", label: `Rendered Assets (${assetRenders.length})` },
           { id: "performance-loop", label: `Performance Loop (${manualPublishLogs.length})` },
           { id: "campaign-packs", label: `Campaign Packs (${campaignPacks.length})` },
+          { id: "campaign-exports", label: `Exports (${campaignExports.length})` },
         ].map(({ id, label }) => (
           <button
             key={id}
@@ -3539,6 +3766,18 @@ export default function CreativeStudioPage({ activeWorkspace, refreshTrigger = 0
           manualPublishLogs={manualPublishLogs}
           assetPerformanceRecords={assetPerformanceRecords}
           creativePerformanceSummaries={creativePerformanceSummaries}
+          wsParam={wsParam}
+          onRefresh={load}
+          showNotice={showNotice}
+        />
+      )}
+
+      {/* v8.5: CAMPAIGN EXPORTS section */}
+      {activeSection === "campaign-exports" && (
+        <CampaignExportsSection
+          campaignExports={campaignExports}
+          campaignPacks={campaignPacks}
+          campaignReports={campaignReports}
           wsParam={wsParam}
           onRefresh={load}
           showNotice={showNotice}

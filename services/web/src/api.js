@@ -461,6 +461,25 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ ...wsParam(), ...payload }),
     }),
+
+  // v8.5: Campaign Exports
+  campaignExports: (params = {}) =>
+    request(`/campaign-exports?${new URLSearchParams({ ...wsParam(), ...params })}`),
+
+  createCampaignExport: (payload) =>
+    request("/campaign-exports", {
+      method: "POST",
+      body: JSON.stringify({ ...wsParam(), ...payload }),
+    }),
+
+  getCampaignExport: (id) =>
+    request(`/campaign-exports/${id}`),
+
+  reviewCampaignExport: (exportId, payload) =>
+    request(`/campaign-exports/${exportId}/review`, {
+      method: "POST",
+      body: JSON.stringify({ ...wsParam(), ...payload }),
+    }),
 };
 
 export { API_BASE_URL };

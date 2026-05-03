@@ -324,6 +324,14 @@ v5 adds a rendering pipeline on top of the v4.5 prompt approval layer. An approv
 - All records carry `simulation_only: true`, `outbound_actions_taken: 0`. Reports are `advisory_only: true`.
 - Frontend: "Campaign Packs" tab in Creative Studio with 5 sub-tabs: All Packs, Create Pack, Add Items, Pack Detail (pipeline timeline with safety badges), Reports (review/approve workflow).
 
+**v8.5 — Client Export Package:**
+- New collection: `campaign_exports`. Each record links a campaign pack + report into a deliverable export file on the local filesystem.
+- Supported formats: `markdown` (single `.md`), `zip` (report.md + referenced local assets + manifest.json), `pdf_placeholder` (markdown with PDF conversion note).
+- Export path lives under `SIGNALFORGE_EXPORT_DIR` (default: `/tmp/signalforge_exports/{workspace}/{pack_id}/`). No uploading, emailing, scheduling, or outbound action occurs at any step — including after review approval.
+- Review workflow: `approve` → `approved`, `reject` → `rejected`, `revise` → `needs_review`. Approving does NOT publish or distribute anything.
+- All exports carry `simulation_only: true`, `outbound_actions_taken: 0`. Safety notes embedded in every export file and every API response.
+- Frontend: "Exports" tab in Creative Studio — Create Export (select pack + report + format), All Exports list, Export Detail with safety notes + included assets, Review Export form (approve/reject/revise).
+
 ## Local Setup
 
 1. Copy the environment template:
