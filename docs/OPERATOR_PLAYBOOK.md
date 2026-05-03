@@ -1101,3 +1101,86 @@ docker compose logs -f worker | grep -i comfyui
 - ComfyUI talks only to the local endpoint (`COMFYUI_BASE_URL`) — no external platform calls
 - Rebuild both images after changing `comfyui_client.py` or `worker.py`: `docker compose build --no-cache api worker`
 - GPU is **not** required for the built-in stub; GPU is recommended for real ComfyUI with production models
+
+---
+
+## Section 30: Social Creative Engine v6.5 — Snippet Scoring and Hook Optimization
+
+v6.5 adds deterministic, local snippet scoring to the content pipeline. Before generating prompts, operators can score any snippet to measure its quality across 5 dimensions. A configurable threshold gate prevents low-quality snippets from proceeding to prompt generation.
+
+### New env vars (v6.5)
+
+| Variable | Default | Notes |
+|---|---|---|
+| `SNIPPET_SCORE_THRESHOLD` | `6.0` | Snippets scored below this value are blocked from prompt generation. Set to `0` to disable the gate. |
+
+### Score dimensions
+
+| Dimension | Weight | What it measures |
+|---|---|---|
+| `hook_strength` | 30% | Presence of curiosity, bold claims, contrarian angles, or emotional pulls in the first sentence |
+| `clarity_score` | 20% | Absence of jargon, filler words, and unclear phrasing |
+| `emotional_impact` | 20% | Presence of emotional keywords, urgency, and transformation language |
+| `shareability_score` | 20% | Quotable phrases, contrarian claims, social proof signals |
+| `platform_fit_score` | 10% | Appropriate length for short-form video (60–250 words is ideal) |
+
+`overall_score = hook×0.30 + clarity×0.20 + emotional×0.20 + shareability×0.20 + platform×0.10` (1 decimal, 0.0–10.0)
+
+### New API endpoints (v6.5)
+
+| Method | Endpoint | Description |
+|---|---|---|
+| `POST` | `/content-snippets/{id}/score` | Score a snippet. Stores all score fields + `scored_at`. |
+| `GET` | `/content-snippets?min_score=7.0` | List snippets filtered by `overall_score >= min_score`. |
+
+### New snippet fields (v6.5)
+
+| Field | Type | Description |
+|---|---|---|
+| `hook_strength` | float | 0.0–10.0 hook quality score |
+| `clarity_score` | float | 0.0–10.0 clarity score |
+| `emotional_impact` | float | 0.0–10.0 emotional resonance |
+| `shareability_score` | float | 0.0–10.0 virality potential |
+| `platform_fit_score` | float | 0.0–10.0 platform length/format fit |
+| `overall_score` | float | Weighted overall quality score |
+| `score_reason` | string | Human-readable explanation of the score |
+| `hook_text` | string | Best extracted hook sentence |
+| `hook_type` | string | `curiosity` / `bold_statement` / `contrarian` / `emotional` / `educational` / `story` |
+| `alternative_hooks` | list[str] | 3 alternative hook reformulations |
+| `scored_at` | datetime | When this snippet was last scored (null = never scored) |
+
+### Score gate logic
+
+```
+if snippet.scored_at is not None and snippet.overall_score < SNIPPET_SCORE_THRESHOLD:
+    → 422 Unprocessable Entity (blocked from prompt generation)
+```
+
+Unscored snippets (`scored_at=None`) bypass the gate — backwards compatible with all v6 and earlier snippets.
+
+### Dashboard changes (v6.5)
+
+- **Score badge**: Sky-colored `score: X.X` badge on each snippet row when `overall_score > 0`
+- **Score breakdown bars**: Per-dimension progress bars in expanded SnippetRow view (emerald ≥7, amber ≥5, red <5)
+- **Hook display**: Extracted hook_text and hook_type in expanded view with 3 alternative hooks
+- **Score Snippet / Re-score button**: Triggers `POST /content-snippets/{id}/score` on demand
+- **Min score filter slider**: Slider on the Snippets tab filters displayed snippets by overall_score
+
+### Typical operator workflow (v6.5)
+
+```bash
+# 1. View a snippet in the Creative Studio → Snippets tab
+# 2. Click "Score Snippet" to run scoring
+# 3. Review the score breakdown and extracted hook
+# 4. If hook_text looks good, proceed to "Generate Prompt"
+# 5. If score is low (< 6.0), refine the source transcript and re-score
+# 6. Adjust SNIPPET_SCORE_THRESHOLD to match your quality bar
+```
+
+### Operating rules (v6.5)
+
+- Scoring uses only Python stdlib — no external APIs, no LLM calls, no network requests
+- Scoring is deterministic: same input always produces the same score
+- The score gate only fires when a snippet has been explicitly scored (`scored_at` is set)
+- `simulation_only: true` and `outbound_actions_taken: 0` on all new code paths
+- Rebuild the API after changes to `snippet_scorer.py`: `docker compose build --no-cache api`

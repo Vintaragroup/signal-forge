@@ -182,6 +182,9 @@ class PromptGenerationResult:
     # Caption
     caption_overlay_suggestion: str = ""
 
+    # Hook (v6.5)
+    hook_text: str = ""
+
     # Operator-facing safety context
     safety_notes: str = ""
 
@@ -437,6 +440,7 @@ def generate_prompt(
     avatar_permissions: bool = False,
     likeness_permissions: bool = False,
     use_likeness: bool = False,
+    hook_text: str = "",
 ) -> PromptGenerationResult:
     """
     Generate a structured visual prompt for a short-form creative segment.
@@ -515,6 +519,12 @@ def generate_prompt(
     builder = _BUILDERS[prompt_type]
     built = builder(snippet_text, brief)  # type: ignore[operator]
 
+    # v6.5: if hook_text is provided, use it as the caption overlay
+    # and prepend it to scene_beats for stronger visual direction
+    if hook_text:
+        built["caption_overlay_suggestion"] = hook_text
+        built["scene_beats"] = [f"Hook: {hook_text}"] + list(built.get("scene_beats", []))
+
     engine_note = _ENGINE_NOTES.get(engine, "")
     safety_notes = (
         f"Default faceless visual — {engine_note} "
@@ -536,6 +546,7 @@ def generate_prompt(
         motion_notes=built.get("motion_notes", ""),
         scene_beats=list(built.get("scene_beats", [])),
         caption_overlay_suggestion=built.get("caption_overlay_suggestion", ""),
+        hook_text=hook_text,
         safety_notes=safety_notes,
         status="draft",
         simulation_only=True,

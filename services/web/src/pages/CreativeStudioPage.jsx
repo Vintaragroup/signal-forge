@@ -562,12 +562,66 @@ function SnippetReviewPanel({ snippet, onReviewed, onClose }) {
 }
 
 // ---------------------------------------------------------------------------
+// v6.5: SnippetScorePanel
+// ---------------------------------------------------------------------------
+
+function SnippetScorePanel({ snippet, onScored, onClose }) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+
+  async function runScore() {
+    setBusy(true);
+    setError("");
+    try {
+      await api.scoreContentSnippet(snippet._id);
+      onScored();
+    } catch (err) {
+      setError(err.message || "Scoring failed.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="mt-4 rounded-lg border border-emerald-200 bg-emerald-50 p-4">
+      <div className="mb-3 flex items-center justify-between">
+        <span className="text-sm font-semibold text-emerald-800">Score Snippet (v6.5)</span>
+        <button type="button" onClick={onClose} className="text-emerald-500 hover:text-emerald-700">
+          <X className="h-4 w-4" />
+        </button>
+      </div>
+      <p className="mb-3 text-xs text-emerald-700">
+        Runs deterministic NLP scoring — no external API calls. Scores hook strength, clarity, emotional impact, shareability, and platform fit.
+      </p>
+      {error && <p className="mb-2 text-xs text-red-600">{error}</p>}
+      <button
+        type="button"
+        disabled={busy}
+        onClick={runScore}
+        className="inline-flex items-center gap-2 rounded-lg bg-emerald-600 px-3 py-1.5 text-sm font-medium text-white transition hover:bg-emerald-700 disabled:opacity-60"
+      >
+        {busy ? "Scoring…" : snippet.scored_at ? "Re-score Snippet" : "Run Scoring"}
+      </button>
+      <p className="mt-2 text-xs text-slate-500">simulation_only: true — no post will be published.</p>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // v2: SnippetRow
 // ---------------------------------------------------------------------------
 
 function SnippetRow({ snippet, onRefresh }) {
   const [expanded, setExpanded] = useState(false);
   const [reviewing, setReviewing] = useState(false);
+  const [scoring, setScoring] = useState(false);
+
+  const hasScore = snippet.overall_score > 0;
+  const scoreColor = snippet.overall_score >= 7
+    ? "bg-emerald-50 text-emerald-700"
+    : snippet.overall_score >= 5
+    ? "bg-amber-50 text-amber-700"
+    : "bg-red-50 text-red-700";
 
   return (
     <div className="rounded-lg border border-slate-200 bg-white">
@@ -581,8 +635,13 @@ function SnippetRow({ snippet, onRefresh }) {
           <div className="flex flex-wrap items-center gap-2">
             <span className="truncate text-sm font-medium text-slate-900">{snippet.theme ? snippet.theme.replaceAll("_", " ") : "Snippet"}</span>
             <StatusBadge value={snippet.status} />
-            {snippet.score != null && (
+            {hasScore ? (
+              <span className={`rounded px-2 py-0.5 text-xs font-medium ${scoreColor}`}>score: {snippet.overall_score.toFixed(1)}</span>
+            ) : snippet.score != null && snippet.score > 0 ? (
               <span className="rounded bg-blue-50 px-2 py-0.5 text-xs text-blue-700">score: {snippet.score}</span>
+            ) : null}
+            {snippet.hook_type && (
+              <span className="rounded-full bg-sky-100 px-2 py-0.5 text-xs text-sky-700">{snippet.hook_type.replaceAll("_", " ")}</span>
             )}
           </div>
           <div className="mt-1 line-clamp-2 text-xs text-slate-500">{snippet.transcript_text}</div>
@@ -593,10 +652,57 @@ function SnippetRow({ snippet, onRefresh }) {
         <div className="border-t border-slate-100 px-4 pb-4 pt-3 space-y-3">
           <div className="rounded-lg bg-slate-50 p-3 text-sm text-slate-800 italic">"{snippet.transcript_text}"</div>
 
+          {/* v6.5 score breakdown */}
+          {hasScore && (
+            <div className="rounded-lg border border-emerald-100 bg-emerald-50 p-3 space-y-2">
+              <div className="text-xs font-semibold text-emerald-800 mb-1">Score Breakdown (v6.5)</div>
+              {[
+                { label: "Hook Strength", value: snippet.hook_strength },
+                { label: "Clarity", value: snippet.clarity_score },
+                { label: "Emotional Impact", value: snippet.emotional_impact },
+                { label: "Shareability", value: snippet.shareability_score },
+                { label: "Platform Fit", value: snippet.platform_fit_score },
+              ].map(({ label, value }) => (
+                <div key={label} className="flex items-center gap-2 text-xs">
+                  <span className="w-28 shrink-0 text-slate-600">{label}</span>
+                  <div className="flex-1 overflow-hidden rounded-full bg-white border border-emerald-100 h-2">
+                    <div
+                      className="h-full rounded-full bg-emerald-400 transition-all"
+                      style={{ width: `${((value || 0) / 10) * 100}%` }}
+                    />
+                  </div>
+                  <span className="w-6 text-right text-emerald-700 font-medium">{(value || 0).toFixed(1)}</span>
+                </div>
+              ))}
+              {snippet.score_reason && (
+                <div className="mt-2 text-xs text-slate-500 italic">{snippet.score_reason}</div>
+              )}
+            </div>
+          )}
+
+          {/* v6.5 hook display */}
+          {snippet.hook_text && (
+            <div className="rounded-lg border border-sky-100 bg-sky-50 p-3 space-y-1">
+              <div className="text-xs font-semibold text-sky-800">Extracted Hook</div>
+              <div className="text-sm text-sky-900">"{snippet.hook_text}"</div>
+              {snippet.hook_type && (
+                <span className="inline-block rounded-full bg-sky-100 px-2 py-0.5 text-xs text-sky-700 mt-1">{snippet.hook_type.replaceAll("_", " ")}</span>
+              )}
+              {snippet.alternative_hooks && snippet.alternative_hooks.length > 0 && (
+                <div className="mt-2 space-y-1">
+                  <div className="text-xs font-medium text-sky-700">Alternative hooks:</div>
+                  {snippet.alternative_hooks.map((h, i) => (
+                    <div key={i} className="text-xs text-slate-600 pl-2 border-l-2 border-sky-200">{h}</div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
           {snippet.hook_angle && (
             <div className="text-xs text-slate-600"><span className="font-medium">Hook angle:</span> {snippet.hook_angle}</div>
           )}
-          {snippet.score_reason && (
+          {!hasScore && snippet.score_reason && (
             <div className="text-xs text-slate-600"><span className="font-medium">Score reason:</span> {snippet.score_reason}</div>
           )}
           {snippet.platform_fit && snippet.platform_fit.length > 0 && (
@@ -610,20 +716,39 @@ function SnippetRow({ snippet, onRefresh }) {
             <div className="rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-700">Note: {snippet.review_note}</div>
           )}
 
-          {snippet.status === "needs_review" && !reviewing && (
-            <button
-              type="button"
-              onClick={() => setReviewing(true)}
-              className="inline-flex items-center gap-1.5 rounded-lg bg-blue-600 px-3 py-1.5 text-sm font-medium text-white transition hover:bg-blue-700"
-            >
-              <PenLine className="h-3.5 w-3.5" /> Review Snippet
-            </button>
-          )}
+          <div className="flex flex-wrap gap-2">
+            {snippet.status === "needs_review" && !reviewing && (
+              <button
+                type="button"
+                onClick={() => setReviewing(true)}
+                className="inline-flex items-center gap-1.5 rounded-lg bg-blue-600 px-3 py-1.5 text-sm font-medium text-white transition hover:bg-blue-700"
+              >
+                <PenLine className="h-3.5 w-3.5" /> Review Snippet
+              </button>
+            )}
+            {!scoring && (
+              <button
+                type="button"
+                onClick={() => setScoring(true)}
+                className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-300 bg-emerald-50 px-3 py-1.5 text-sm font-medium text-emerald-700 transition hover:bg-emerald-100"
+              >
+                {snippet.scored_at ? "Re-score" : "Score Snippet"}
+              </button>
+            )}
+          </div>
+
           {reviewing && (
             <SnippetReviewPanel
               snippet={snippet}
               onReviewed={() => { setReviewing(false); onRefresh(); }}
               onClose={() => setReviewing(false)}
+            />
+          )}
+          {scoring && (
+            <SnippetScorePanel
+              snippet={snippet}
+              onScored={() => { setScoring(false); onRefresh(); }}
+              onClose={() => setScoring(false)}
             />
           )}
         </div>
@@ -1675,6 +1800,9 @@ export default function CreativeStudioPage({ activeWorkspace, refreshTrigger = 0
   const [contentSnippets, setContentSnippets] = useState([]);
   const [creativeAssets, setCreativeAssets] = useState([]);
 
+  // v6.5 snippet filter
+  const [minScore, setMinScore] = useState(0);
+
   // v3 state
   const [audioExtractionRuns, setAudioExtractionRuns] = useState([]);
   const [transcriptRuns, setTranscriptRuns] = useState([]);
@@ -2166,6 +2294,23 @@ export default function CreativeStudioPage({ activeWorkspace, refreshTrigger = 0
               Scored transcript segments extracted from approved source content. Review each before assets are generated.
             </p>
           </div>
+          {/* v6.5 min score filter */}
+          <div className="flex items-center gap-3">
+            <label className="text-xs text-slate-600 font-medium whitespace-nowrap">Min overall score</label>
+            <input
+              type="range"
+              min={0}
+              max={10}
+              step={0.5}
+              value={minScore}
+              onChange={(e) => setMinScore(parseFloat(e.target.value))}
+              className="w-32 accent-emerald-600"
+            />
+            <span className="w-8 text-xs font-medium text-emerald-700">{minScore > 0 ? minScore.toFixed(1) : "off"}</span>
+            {minScore > 0 && (
+              <button type="button" onClick={() => setMinScore(0)} className="text-xs text-slate-400 underline hover:text-slate-600">clear</button>
+            )}
+          </div>
           {loading ? (
             <p className="text-sm text-slate-500">Loading…</p>
           ) : contentSnippets.length === 0 ? (
@@ -2174,9 +2319,14 @@ export default function CreativeStudioPage({ activeWorkspace, refreshTrigger = 0
             </div>
           ) : (
             <div className="space-y-2">
-              {contentSnippets.map((s) => (
-                <SnippetRow key={s._id} snippet={s} onRefresh={load} />
-              ))}
+              {contentSnippets
+                .filter((s) => minScore <= 0 || (s.overall_score || 0) >= minScore)
+                .map((s) => (
+                  <SnippetRow key={s._id} snippet={s} onRefresh={load} />
+                ))}
+              {contentSnippets.filter((s) => minScore <= 0 || (s.overall_score || 0) >= minScore).length === 0 && (
+                <p className="text-xs text-slate-500">No snippets match the current score filter.</p>
+              )}
             </div>
           )}
         </section>

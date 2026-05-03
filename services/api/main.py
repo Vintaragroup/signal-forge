@@ -27,6 +27,12 @@ except Exception:  # pragma: no cover — import guard for test isolation
     GENERATION_ENGINES = frozenset()
 
 try:
+    from snippet_scorer import score_snippet as _score_snippet, SCORE_THRESHOLD_DEFAULT
+except Exception:  # pragma: no cover
+    _score_snippet = None  # type: ignore[assignment]
+    SCORE_THRESHOLD_DEFAULT = 6.0
+
+try:
     from agents.base_agent import SUPPORTED_MODULES
     from agents.content_agent import ContentAgent
     from agents.fan_engagement_agent import FanEngagementAgent
@@ -2675,6 +2681,16 @@ class ContentSnippetCreateRequest(BaseModel):
     hook_angle: str = ""
     platform_fit: list[str] = Field(default_factory=list)
     status: Literal["needs_review", "approved", "rejected"] = "needs_review"
+    # v6.5 scoring fields (populated by POST /content-snippets/{id}/score)
+    hook_strength: float = 0.0
+    clarity_score: float = 0.0
+    emotional_impact: float = 0.0
+    shareability_score: float = 0.0
+    platform_fit_score: float = 0.0
+    overall_score: float = 0.0
+    hook_text: str = ""
+    hook_type: str = ""
+    alternative_hooks: list[str] = Field(default_factory=list)
 
 
 class ContentSnippetReviewRequest(BaseModel):
@@ -3010,6 +3026,7 @@ def list_content_snippets(
     transcript_id: str = "",
     status: str = "",
     theme: str = "",
+    min_score: float = Query(0.0, ge=0.0, le=10.0),
     include_legacy: bool = Query(False),
     include_test: bool = Query(False),
     limit: int = Query(100, ge=1, le=500),
@@ -3028,7 +3045,9 @@ def list_content_snippets(
             query["status"] = status
         if theme:
             query["theme"] = theme
-        records = list(db.content_snippets.find(query).sort([("score", -1), ("created_at", -1)]).limit(limit))
+        if min_score > 0.0:
+            query["overall_score"] = {"$gte": min_score}
+        records = list(db.content_snippets.find(query).sort([("overall_score", -1), ("score", -1), ("created_at", -1)]).limit(limit))
         records = apply_real_mode_filters(records, workspace_slug=workspace_slug, include_legacy=include_legacy, include_test=include_test)
         return {"items": serialize(records)}
     finally:
@@ -3053,6 +3072,17 @@ def create_content_snippet(payload: ContentSnippetCreateRequest) -> dict:
         "platform_fit": [clean_text(p) for p in payload.platform_fit if clean_text(p)],
         "status": payload.status,
         "review_events": [],
+        # v6.5 scoring fields — zero/empty until POST /{id}/score is called
+        "hook_strength": 0.0,
+        "clarity_score": 0.0,
+        "emotional_impact": 0.0,
+        "shareability_score": 0.0,
+        "platform_fit_score": 0.0,
+        "overall_score": 0.0,
+        "hook_text": "",
+        "hook_type": "",
+        "alternative_hooks": [],
+        "scored_at": None,
         "simulation_only": True,
         "outbound_actions_taken": 0,
         "created_at": now,
@@ -3109,9 +3139,52 @@ def review_content_snippet(snippet_id: str, payload: ContentSnippetReviewRequest
         client.close()
 
 
-# ---------------------------------------------------------------------------
-# Social Creative Engine v2 — Part 5: Creative Assets + Tool Runs
-# ---------------------------------------------------------------------------
+@app.post("/content-snippets/{snippet_id}/score")
+def score_content_snippet(snippet_id: str) -> dict:
+    """Score a content snippet using deterministic NLP analysis (v6.5).
+
+    Rules
+    -----
+    * No external API calls.  All scoring is local and deterministic.
+    * ``simulation_only`` is always ``True``.
+    * ``scored_at`` is set on the snippet after scoring.
+    """
+    if _score_snippet is None:
+        raise HTTPException(status_code=500, detail="Snippet scorer module is unavailable.")
+    client = get_client()
+    scored_at = utc_now()
+    try:
+        db = get_database(client)
+        snippet = find_content_snippet(db, snippet_id)
+        if not snippet:
+            raise HTTPException(status_code=404, detail="Content snippet not found.")
+        result = _score_snippet(snippet.get("transcript_text", ""))
+        update_fields = {
+            "hook_strength": result.hook_strength,
+            "clarity_score": result.clarity_score,
+            "emotional_impact": result.emotional_impact,
+            "shareability_score": result.shareability_score,
+            "platform_fit_score": result.platform_fit_score,
+            "overall_score": result.overall_score,
+            "score_reason": result.score_reason,
+            "hook_text": result.hook_text,
+            "hook_type": result.hook_type,
+            "alternative_hooks": result.alternative_hooks,
+            "scored_at": scored_at,
+            "updated_at": scored_at,
+            "simulation_only": True,
+            "outbound_actions_taken": 0,
+        }
+        db.content_snippets.update_one({"_id": snippet["_id"]}, {"$set": update_fields})
+        updated = db.content_snippets.find_one({"_id": snippet["_id"]})
+        return {
+            "item": serialize(updated),
+            "message": "Snippet scored. No post published or scheduled.",
+            "simulation_only": True,
+            "outbound_actions_taken": 0,
+        }
+    finally:
+        client.close()
 
 @app.get("/creative-assets")
 def list_creative_assets(
@@ -4373,6 +4446,21 @@ def create_prompt_generation(payload: PromptGenerationCreateRequest):
                 ),
             )
 
+        # v6.5 score gate: block snippets that have been scored but score below threshold
+        _threshold = float(
+            __import__("os").environ.get("SNIPPET_SCORE_THRESHOLD", str(SCORE_THRESHOLD_DEFAULT))
+        )
+        _overall = float(snippet.get("overall_score", 0.0))
+        if snippet.get("scored_at") and _overall < _threshold:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    f"Snippet overall_score {_overall:.1f} is below the required "
+                    f"threshold {_threshold:.1f}. Improve the snippet content or "
+                    "lower SNIPPET_SCORE_THRESHOLD."
+                ),
+            )
+
         # Fetch client profile for permissions check
         client_profile: dict = {}
         if payload.client_id:
@@ -4436,6 +4524,7 @@ def create_prompt_generation(payload: PromptGenerationCreateRequest):
                 avatar_permissions=avatar_permissions,
                 likeness_permissions=likeness_permissions,
                 use_likeness=payload.use_likeness,
+                hook_text=snippet.get("hook_text", ""),
             )
         except (ValueError, PermissionError) as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc

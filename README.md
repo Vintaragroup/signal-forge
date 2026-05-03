@@ -278,6 +278,17 @@ v5 adds a rendering pipeline on top of the v4.5 prompt approval layer. An approv
 - `GET /health/comfyui` endpoint returns `comfyui_enabled`, `comfyui_base_url`, `comfyui_reachable`.
 - `COMFYUI_MODEL_CHECKPOINT` env var selects the checkpoint (defaults to `v1-5-pruned-emaonly.safetensors`).
 
+**v6.5 — Snippet Scoring and Hook Optimization:**
+- `snippet_scorer.py`: deterministic, local scoring of transcript snippets. Uses only Python stdlib — no external APIs.
+- 5 quality dimensions: `hook_strength` (30%), `clarity_score` (20%), `emotional_impact` (20%), `shareability_score` (20%), `platform_fit_score` (10%).
+- `POST /content-snippets/{id}/score` scores a snippet and stores all fields + `scored_at` timestamp.
+- Score gate: if a snippet has been scored and `overall_score < SNIPPET_SCORE_THRESHOLD` (default 6.0), prompt generation is blocked with a 422.
+- Hook extraction: `hook_text`, `hook_type` (curiosity/bold_statement/contrarian/emotional/educational/story), and 3 `alternative_hooks` per snippet.
+- Hook-enhanced prompts: `hook_text` is injected into `scene_beats[0]` and `caption_overlay_suggestion` in `generate_prompt()`.
+- Dashboard: score breakdown bars, hook display, Score Snippet button, min-score filter slider on Snippets tab.
+- Unscored snippets bypass the gate — fully backwards compatible with v6 and earlier.
+- `SNIPPET_SCORE_THRESHOLD` env var (default `6.0`) controls the quality gate.
+
 **Safety:**
 - Both snippet AND prompt_generation must be `status='approved'` before any render can start.
 - All renders start as `status: needs_review` — no auto-publish path exists.

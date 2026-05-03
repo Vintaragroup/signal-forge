@@ -19,6 +19,7 @@ COPY services/api/video_assembler.py .
 COPY services/api/job_queue.py .
 COPY services/api/worker.py .
 COPY services/api/comfyui_client.py .
+COPY services/api/snippet_scorer.py .
 COPY agents ./agents
 COPY tools ./tools
 COPY modules ./modules

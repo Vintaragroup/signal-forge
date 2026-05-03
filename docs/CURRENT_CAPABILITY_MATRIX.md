@@ -182,3 +182,24 @@ All v5 and v5 Runtime safety guarantees are preserved. `FFMPEG_ENABLED=true` is 
 ### v6 Safety Boundary
 
 All v5.5 guarantees are preserved. ComfyUI calls are made only to the local endpoint specified by `COMFYUI_BASE_URL` — no external image generation APIs. The worker never posts generated images externally. `simulation_only: true` and `outbound_actions_taken: 0` are maintained on every path, including ComfyUI success, ComfyUI failure, and fallback. GPU is not required — the built-in stub runs on CPU. `COMFYUI_ENABLED=false` is the default; the ComfyUI service requires the `comfyui` Docker profile to start.
+
+---
+
+## Social Creative Engine v6.5 — Snippet Scoring and Hook Optimization
+
+| Capability | Dashboard-supported | Simulated | Manual | Real/local | Notes |
+|---|---|---|---|---|---|
+| Snippet scoring (deterministic) | Yes | No | No | Yes | `snippet_scorer.py` scores any transcript text. Dimensions: hook_strength, clarity_score, emotional_impact, shareability_score, platform_fit_score. All stdlib — no external APIs. |
+| Overall score (weighted) | Yes | N/A | N/A | N/A | Weighted: hook×0.30 + clarity×0.20 + emotional×0.20 + shareability×0.20 + platform×0.10. Range 0.0–10.0. |
+| Hook extraction | Yes | N/A | N/A | N/A | Extracts hook_text (first strong sentence), hook_type (curiosity/bold_statement/contrarian/emotional/educational/story), 3 alternative_hooks per snippet. |
+| Score gate for prompt generation | No | N/A | N/A | Yes | If snippet has been scored (`scored_at` set) and `overall_score < SNIPPET_SCORE_THRESHOLD` (default 6.0), POST /prompt-generations returns 422. Unscored snippets pass through unchanged. |
+| POST /content-snippets/{id}/score | No | N/A | N/A | Yes | Scores a snippet on demand. Stores all score fields + `scored_at` timestamp. |
+| GET /content-snippets?min_score= | Yes | N/A | N/A | N/A | Filters snippets by overall_score. `min_score=0` (default) returns all. |
+| Hook-enhanced prompt generation | No | N/A | N/A | Yes | hook_text prepended to scene_beats and used as caption_overlay_suggestion in `generate_prompt()`. |
+| Score breakdown UI | Yes | N/A | N/A | N/A | Per-dimension progress bars in SnippetRow expanded view. Color: emerald ≥7, amber ≥5, red <5. |
+| Score Snippet / Re-score button | Yes | N/A | N/A | N/A | Triggers POST /content-snippets/{id}/score. Shows SnippetScorePanel on click. |
+| Min score filter slider | Yes | N/A | N/A | N/A | Range slider on Snippets tab. Filters visible snippets client-side; default "off" (0). |
+
+### v6.5 Safety Boundary
+
+All v6 guarantees are preserved. `snippet_scorer.py` uses only Python stdlib (`re`, `dataclasses`) — no network calls, no external APIs, no LLM calls. Scoring is fully deterministic and local. `simulation_only: true` and `outbound_actions_taken: 0` are maintained on all new code paths (score endpoint, score gate, prompt hook injection). The score gate is opt-in — it only fires once a snippet has been explicitly scored; existing unscored snippets are unaffected.

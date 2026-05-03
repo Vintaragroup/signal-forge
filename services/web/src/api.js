@@ -223,6 +223,17 @@ export const api = {
           body: JSON.stringify(payload),
         }),
 
+  scoreContentSnippet: (id) =>
+    isDemoModeEnabled()
+      ? Promise.resolve({
+          item: { _id: id, overall_score: 7.5, hook_type: "bold_statement", simulation_only: true },
+          message: "Demo snippet scored. No post published.",
+          simulation_only: true,
+        })
+      : request(`/content-snippets/${encodeURIComponent(id)}/score`, {
+          method: "POST",
+        }),
+
   creativeAssets: (params = {}) =>
     isDemoModeEnabled()
       ? Promise.resolve({ items: demoItems("creative_assets") })
