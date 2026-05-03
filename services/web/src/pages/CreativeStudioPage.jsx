@@ -1236,6 +1236,540 @@ function IngestPipelineSection({
 // v4.5: Prompt Library Section
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// v8: Campaign Packs Section
+// ---------------------------------------------------------------------------
+function CampaignPacksSection({
+  campaignPacks,
+  campaignReports,
+  sourceContent,
+  contentSnippets,
+  promptGenerations,
+  assetRenders,
+  manualPublishLogs,
+  assetPerformanceRecords,
+  clientProfiles,
+  wsParam,
+  onRefresh,
+  showNotice,
+}) {
+  const [subTab, setSubTab] = useState("packs-list");
+
+  // Create Pack form
+  const [packName, setPackName] = useState("");
+  const [packGoal, setPackGoal] = useState("");
+  const [packClient, setPackClient] = useState("");
+  const [packPlatforms, setPackPlatforms] = useState("");
+  const [packAudience, setPackAudience] = useState("");
+  const [packThemes, setPackThemes] = useState("");
+  const [packCreating, setPackCreating] = useState(false);
+
+  // Selected pack for detail / add items / report
+  const [selectedPackId, setSelectedPackId] = useState(null);
+  const [packDetail, setPackDetail] = useState(null);
+  const [packDetailLoading, setPackDetailLoading] = useState(false);
+
+  // Add Item form
+  const [addItemType, setAddItemType] = useState("source_content");
+  const [addItemId, setAddItemId] = useState("");
+  const [addItemTitle, setAddItemTitle] = useState("");
+  const [addItemAdding, setAddItemAdding] = useState(false);
+
+  // Report
+  const [packReports, setPackReports] = useState([]);
+  const [reportGenerating, setReportGenerating] = useState(false);
+  const [reviewingReportId, setReviewingReportId] = useState(null);
+  const [reviewDecision, setReviewDecision] = useState("approve");
+  const [reviewNotes, setReviewNotes] = useState("");
+  const [reviewing, setReviewing] = useState(false);
+
+  const ITEM_TYPE_OPTIONS = [
+    { value: "source_content", label: "Source Content" },
+    { value: "snippet", label: "Snippet" },
+    { value: "prompt_generation", label: "Prompt Generation" },
+    { value: "asset_render", label: "Rendered Asset" },
+    { value: "publish_log", label: "Publish Log" },
+    { value: "performance_record", label: "Performance Record" },
+  ];
+
+  function itemTypeLabel(t) {
+    return ITEM_TYPE_OPTIONS.find((o) => o.value === t)?.label || t;
+  }
+
+  function itemTypeItems(t) {
+    switch (t) {
+      case "source_content": return sourceContent;
+      case "snippet": return contentSnippets;
+      case "prompt_generation": return promptGenerations;
+      case "asset_render": return assetRenders;
+      case "publish_log": return manualPublishLogs;
+      case "performance_record": return assetPerformanceRecords;
+      default: return [];
+    }
+  }
+
+  async function loadPackDetail(packId) {
+    if (!packId) return;
+    setPackDetailLoading(true);
+    try {
+      const data = await api.getCampaignPack(packId);
+      setPackDetail(data);
+      // Also load reports for this pack
+      const rpData = await api.campaignReports({ ...wsParam(), campaign_pack_id: packId });
+      setPackReports(rpData.items || []);
+    } catch {
+      showNotice("Failed to load pack detail.");
+    } finally {
+      setPackDetailLoading(false);
+    }
+  }
+
+  async function handleCreatePack(e) {
+    e.preventDefault();
+    if (!packName.trim()) { showNotice("Campaign name is required."); return; }
+    setPackCreating(true);
+    try {
+      await api.createCampaignPack({
+        campaign_name: packName.trim(),
+        campaign_goal: packGoal.trim(),
+        client_id: packClient.trim(),
+        target_platforms: packPlatforms.split(",").map((p) => p.trim()).filter(Boolean),
+        target_audience: packAudience.trim(),
+        content_themes: packThemes.split(",").map((t) => t.trim()).filter(Boolean),
+      });
+      showNotice("Campaign pack created.");
+      setPackName(""); setPackGoal(""); setPackClient(""); setPackPlatforms(""); setPackAudience(""); setPackThemes("");
+      onRefresh();
+      setSubTab("packs-list");
+    } catch {
+      showNotice("Failed to create campaign pack.");
+    } finally {
+      setPackCreating(false);
+    }
+  }
+
+  async function handleAddItem(e) {
+    e.preventDefault();
+    if (!selectedPackId) { showNotice("Select a pack first."); return; }
+    if (!addItemId.trim()) { showNotice("Select an item."); return; }
+    setAddItemAdding(true);
+    try {
+      await api.addCampaignPackItem(selectedPackId, {
+        item_type: addItemType,
+        item_id: addItemId.trim(),
+        title: addItemTitle.trim(),
+      });
+      showNotice("Item added to pack.");
+      setAddItemId(""); setAddItemTitle("");
+      await loadPackDetail(selectedPackId);
+    } catch (err) {
+      const msg = err?.message || "Failed to add item.";
+      showNotice(msg.includes("workspace") || msg.includes("client") ? msg : "Failed to add item.");
+    } finally {
+      setAddItemAdding(false);
+    }
+  }
+
+  async function handleSelectPack(packId) {
+    setSelectedPackId(packId);
+    await loadPackDetail(packId);
+    setSubTab("pack-detail");
+  }
+
+  async function handleGenerateReport() {
+    if (!selectedPackId) { showNotice("Select a pack first."); return; }
+    setReportGenerating(true);
+    try {
+      await api.generateCampaignReport(selectedPackId);
+      showNotice("Campaign report generated.");
+      await loadPackDetail(selectedPackId);
+      setSubTab("campaign-report");
+    } catch {
+      showNotice("Failed to generate report.");
+    } finally {
+      setReportGenerating(false);
+    }
+  }
+
+  async function handleReviewReport(e) {
+    e.preventDefault();
+    if (!reviewingReportId) return;
+    setReviewing(true);
+    try {
+      await api.reviewCampaignReport(reviewingReportId, {
+        decision: reviewDecision,
+        reviewer_notes: reviewNotes.trim(),
+      });
+      showNotice(`Report ${reviewDecision}d.`);
+      setReviewingReportId(null); setReviewNotes("");
+      await loadPackDetail(selectedPackId);
+    } catch {
+      showNotice("Review failed.");
+    } finally {
+      setReviewing(false);
+    }
+  }
+
+  function scoreColor(s) {
+    if (s === null || s === undefined) return "text-slate-400";
+    if (s >= 7) return "text-green-700 font-semibold";
+    if (s >= 4) return "text-amber-600 font-semibold";
+    return "text-red-600 font-semibold";
+  }
+
+  const subTabs = [
+    { id: "packs-list", label: `All Packs (${campaignPacks.length})` },
+    { id: "create-pack", label: "Create Pack" },
+    { id: "add-items", label: "Add Items" },
+    { id: "pack-detail", label: selectedPackId ? "Pack Detail" : "Pack Detail" },
+    { id: "campaign-report", label: `Reports (${packReports.length})` },
+  ];
+
+  return (
+    <div className="mt-4 space-y-4">
+      {/* Safety badge */}
+      <div className="flex items-center gap-2 rounded border border-blue-200 bg-blue-50 px-3 py-2 text-xs text-blue-700">
+        <span className="font-semibold">v8 Campaign Packs</span>
+        <span className="rounded bg-blue-100 px-1">simulation_only</span>
+        <span className="rounded bg-blue-100 px-1">outbound_actions_taken: 0</span>
+        <span className="rounded bg-blue-100 px-1">advisory reports only</span>
+        <span className="rounded bg-blue-100 px-1">no auto-publish</span>
+      </div>
+
+      {/* Sub-tab bar */}
+      <div className="flex gap-1 border-b">
+        {subTabs.map(({ id, label }) => (
+          <button
+            key={id}
+            type="button"
+            onClick={() => setSubTab(id)}
+            className={[
+              "rounded-t-lg px-3 py-2 text-xs font-medium transition",
+              subTab === id ? "border-b-2 border-indigo-600 text-indigo-700" : "text-slate-500 hover:text-slate-800",
+            ].join(" ")}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+
+      {/* ── All Packs ── */}
+      {subTab === "packs-list" && (
+        <div className="space-y-2">
+          <p className="text-xs text-slate-500">Select a pack to view detail, add items, or generate a report.</p>
+          {campaignPacks.length === 0 && (
+            <p className="text-sm text-slate-400 italic">No campaign packs yet. Use "Create Pack" to get started.</p>
+          )}
+          {campaignPacks.map((pack) => (
+            <div key={pack.id} className="rounded border bg-white p-3 shadow-sm">
+              <div className="flex items-start justify-between gap-2">
+                <div>
+                  <p className="font-medium text-slate-800">{pack.campaign_name}</p>
+                  <p className="text-xs text-slate-500">{pack.campaign_goal}</p>
+                  <div className="mt-1 flex flex-wrap gap-1">
+                    <span className={[
+                      "rounded px-1 py-0.5 text-xs",
+                      pack.status === "approved" ? "bg-green-100 text-green-700" :
+                      pack.status === "needs_review" ? "bg-amber-100 text-amber-700" :
+                      pack.status === "archived" ? "bg-slate-200 text-slate-500" :
+                      "bg-slate-100 text-slate-500",
+                    ].join(" ")}>{pack.status}</span>
+                    {(pack.target_platforms || []).map((p) => (
+                      <span key={p} className="rounded bg-indigo-50 px-1 py-0.5 text-xs text-indigo-600">{p}</span>
+                    ))}
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => handleSelectPack(pack.id)}
+                  className="rounded bg-indigo-600 px-3 py-1 text-xs text-white hover:bg-indigo-700"
+                >
+                  Open
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* ── Create Pack ── */}
+      {subTab === "create-pack" && (
+        <form onSubmit={handleCreatePack} className="space-y-3 max-w-lg">
+          <h3 className="font-semibold text-slate-700">Create Campaign Pack</h3>
+          <div>
+            <label className="text-xs text-slate-600">Campaign Name *</label>
+            <input className="mt-0.5 w-full rounded border px-2 py-1 text-sm" value={packName} onChange={(e) => setPackName(e.target.value)} required />
+          </div>
+          <div>
+            <label className="text-xs text-slate-600">Campaign Goal</label>
+            <input className="mt-0.5 w-full rounded border px-2 py-1 text-sm" value={packGoal} onChange={(e) => setPackGoal(e.target.value)} />
+          </div>
+          <div>
+            <label className="text-xs text-slate-600">Client</label>
+            <select className="mt-0.5 w-full rounded border px-2 py-1 text-sm" value={packClient} onChange={(e) => setPackClient(e.target.value)}>
+              <option value="">— No client —</option>
+              {clientProfiles.map((c) => (
+                <option key={c.id} value={c.id}>{c.name || c.id}</option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <label className="text-xs text-slate-600">Target Platforms (comma-separated)</label>
+            <input className="mt-0.5 w-full rounded border px-2 py-1 text-sm" placeholder="instagram, tiktok, youtube" value={packPlatforms} onChange={(e) => setPackPlatforms(e.target.value)} />
+          </div>
+          <div>
+            <label className="text-xs text-slate-600">Target Audience</label>
+            <input className="mt-0.5 w-full rounded border px-2 py-1 text-sm" value={packAudience} onChange={(e) => setPackAudience(e.target.value)} />
+          </div>
+          <div>
+            <label className="text-xs text-slate-600">Content Themes (comma-separated)</label>
+            <input className="mt-0.5 w-full rounded border px-2 py-1 text-sm" placeholder="education, behind-the-scenes" value={packThemes} onChange={(e) => setPackThemes(e.target.value)} />
+          </div>
+          <button type="submit" disabled={packCreating} className="rounded bg-indigo-600 px-4 py-1.5 text-sm text-white hover:bg-indigo-700 disabled:opacity-50">
+            {packCreating ? "Creating…" : "Create Campaign Pack"}
+          </button>
+        </form>
+      )}
+
+      {/* ── Add Items ── */}
+      {subTab === "add-items" && (
+        <div className="space-y-4 max-w-lg">
+          <h3 className="font-semibold text-slate-700">Add Items to Pack</h3>
+          {!selectedPackId && (
+            <p className="rounded border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-700">
+              Open a pack from "All Packs" first, then return here to add items.
+            </p>
+          )}
+          {selectedPackId && (
+            <p className="text-xs text-slate-500">
+              Adding to pack: <span className="font-mono">{selectedPackId}</span>
+            </p>
+          )}
+          <form onSubmit={handleAddItem} className="space-y-3">
+            <div>
+              <label className="text-xs text-slate-600">Item Type</label>
+              <select className="mt-0.5 w-full rounded border px-2 py-1 text-sm" value={addItemType} onChange={(e) => { setAddItemType(e.target.value); setAddItemId(""); }}>
+                {ITEM_TYPE_OPTIONS.map((o) => (
+                  <option key={o.value} value={o.value}>{o.label}</option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className="text-xs text-slate-600">Select Item</label>
+              <select className="mt-0.5 w-full rounded border px-2 py-1 text-sm" value={addItemId} onChange={(e) => setAddItemId(e.target.value)}>
+                <option value="">— Select —</option>
+                {itemTypeItems(addItemType).map((item) => (
+                  <option key={item.id} value={item.id}>
+                    {item.title || item.name || item.campaign_name || item.platform || item.id}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className="text-xs text-slate-600">Title (optional override)</label>
+              <input className="mt-0.5 w-full rounded border px-2 py-1 text-sm" value={addItemTitle} onChange={(e) => setAddItemTitle(e.target.value)} />
+            </div>
+            <button type="submit" disabled={addItemAdding || !selectedPackId} className="rounded bg-indigo-600 px-4 py-1.5 text-sm text-white hover:bg-indigo-700 disabled:opacity-50">
+              {addItemAdding ? "Adding…" : "Add to Pack"}
+            </button>
+          </form>
+          {packDetail && packDetail.pack_items && packDetail.pack_items.length > 0 && (
+            <div className="mt-4">
+              <p className="text-xs font-semibold text-slate-600 mb-1">Current Pack Items ({packDetail.pack_items.length})</p>
+              <div className="space-y-1">
+                {packDetail.pack_items.map((item) => (
+                  <div key={item.id} className="flex items-center gap-2 rounded border bg-white px-2 py-1 text-xs">
+                    <span className="rounded bg-indigo-50 px-1 text-indigo-600">{itemTypeLabel(item.item_type)}</span>
+                    <span className="text-slate-600 truncate">{item.title || item.item_id}</span>
+                    <span className={["ml-auto rounded px-1", item.status === "approved" ? "bg-green-100 text-green-700" : "bg-slate-100 text-slate-500"].join(" ")}>{item.status}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ── Pack Detail ── */}
+      {subTab === "pack-detail" && (
+        <div className="space-y-4">
+          {!selectedPackId && (
+            <p className="text-sm text-slate-400 italic">Open a pack from "All Packs" to see its detail.</p>
+          )}
+          {packDetailLoading && <p className="text-xs text-slate-400">Loading…</p>}
+          {packDetail && !packDetailLoading && (
+            <div className="space-y-3">
+              <div className="rounded border bg-white p-4 shadow-sm">
+                <h3 className="font-semibold text-slate-800">{packDetail.item?.campaign_name}</h3>
+                <p className="text-xs text-slate-500 mt-1">{packDetail.item?.campaign_goal}</p>
+                <div className="mt-2 flex flex-wrap gap-2 text-xs">
+                  <span className="rounded bg-blue-50 px-1 text-blue-600">Status: {packDetail.item?.status}</span>
+                  {(packDetail.item?.target_platforms || []).map((p) => (
+                    <span key={p} className="rounded bg-indigo-50 px-1 text-indigo-600">{p}</span>
+                  ))}
+                  {(packDetail.item?.content_themes || []).map((t) => (
+                    <span key={t} className="rounded bg-emerald-50 px-1 text-emerald-700">{t}</span>
+                  ))}
+                </div>
+                <div className="mt-2 flex flex-wrap gap-2 text-xs">
+                  <span className="rounded bg-slate-100 px-1">simulation_only: true</span>
+                  <span className="rounded bg-slate-100 px-1">outbound_actions_taken: 0</span>
+                  <span className="rounded bg-slate-100 px-1">advisory only</span>
+                </div>
+              </div>
+
+              {/* Timeline */}
+              <h4 className="text-xs font-semibold text-slate-600 uppercase tracking-wide">Pipeline Timeline</h4>
+              {["source_content", "snippet", "prompt_generation", "asset_render", "publish_log", "performance_record"].map((stage) => {
+                const stageItems = (packDetail.pack_items || []).filter((i) => i.item_type === stage);
+                return (
+                  <div key={stage} className="flex items-start gap-3">
+                    <div className="flex-shrink-0 w-28 text-right text-xs text-slate-400 pt-1">{itemTypeLabel(stage)}</div>
+                    <div className="flex-1 space-y-1">
+                      {stageItems.length === 0 && <p className="text-xs text-slate-300 italic">none</p>}
+                      {stageItems.map((item) => (
+                        <div key={item.id} className="flex items-center gap-2 rounded border bg-slate-50 px-2 py-1 text-xs">
+                          <span className="truncate text-slate-700">{item.title || item.item_id}</span>
+                          <span className={["ml-auto rounded px-1 text-xs", item.status === "approved" ? "bg-green-100 text-green-700" : item.status === "needs_review" ? "bg-amber-100 text-amber-700" : "bg-slate-100 text-slate-500"].join(" ")}>{item.status}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                );
+              })}
+
+              <button
+                type="button"
+                onClick={handleGenerateReport}
+                disabled={reportGenerating}
+                className="rounded bg-indigo-600 px-4 py-1.5 text-sm text-white hover:bg-indigo-700 disabled:opacity-50"
+              >
+                {reportGenerating ? "Generating…" : "Generate Campaign Report"}
+              </button>
+              <p className="text-xs text-slate-400">Advisory only — no publishing or outbound actions.</p>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ── Campaign Reports ── */}
+      {subTab === "campaign-report" && (
+        <div className="space-y-4">
+          {packReports.length === 0 && (
+            <p className="text-sm text-slate-400 italic">No reports yet for this pack. Use "Generate Campaign Report" from Pack Detail.</p>
+          )}
+          {packReports.map((report) => (
+            <div key={report.id} className="rounded border bg-white p-4 shadow-sm space-y-3">
+              <div className="flex items-start justify-between gap-2">
+                <h3 className="font-semibold text-slate-800">{report.report_title}</h3>
+                <span className={["rounded px-1.5 py-0.5 text-xs", report.status === "approved" ? "bg-green-100 text-green-700" : report.status === "needs_review" ? "bg-amber-100 text-amber-700" : "bg-slate-100 text-slate-500"].join(" ")}>
+                  {report.status}
+                </span>
+              </div>
+
+              <p className="text-sm text-slate-600">{report.executive_summary}</p>
+
+              {report.performance_summary && (
+                <div className="rounded bg-slate-50 p-2 text-xs space-y-1">
+                  <p className="font-semibold text-slate-600">Performance Summary</p>
+                  <p>Records: {report.performance_summary.record_count}</p>
+                  {report.performance_summary.avg_score !== null && (
+                    <p>Avg Score: <span className={scoreColor(report.performance_summary.avg_score)}>{report.performance_summary.avg_score}/10</span></p>
+                  )}
+                  {report.performance_summary.top_score !== null && (
+                    <p>Top Score: <span className={scoreColor(report.performance_summary.top_score)}>{report.performance_summary.top_score}/10</span></p>
+                  )}
+                </div>
+              )}
+
+              {(report.top_hooks || []).length > 0 && (
+                <div className="text-xs">
+                  <p className="font-semibold text-slate-600 mb-1">Top Hooks</p>
+                  {report.top_hooks.map((h) => (
+                    <div key={h.value} className="flex gap-2">
+                      <span className="text-slate-700">{h.value}</span>
+                      <span className={scoreColor(h.avg_score)}>{h.avg_score}/10</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {(report.top_prompt_types || []).length > 0 && (
+                <div className="text-xs">
+                  <p className="font-semibold text-slate-600 mb-1">Top Prompt Types</p>
+                  {report.top_prompt_types.map((p) => (
+                    <div key={p.value} className="flex gap-2">
+                      <span className="text-slate-700">{p.value}</span>
+                      <span className={scoreColor(p.avg_score)}>{p.avg_score}/10</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {(report.top_assets || []).length > 0 && (
+                <div className="text-xs">
+                  <p className="font-semibold text-slate-600 mb-1">Top Assets</p>
+                  {report.top_assets.map((a) => (
+                    <div key={a.asset_render_id} className="flex gap-2">
+                      <span className="font-mono text-slate-600 truncate">{a.asset_render_id}</span>
+                      <span className={scoreColor(a.avg_score)}>{a.avg_score}/10</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              <div className="text-xs space-y-1">
+                <p className="font-semibold text-slate-600">Lessons Learned</p>
+                <p className="text-slate-600">{report.lessons_learned}</p>
+              </div>
+              <div className="text-xs space-y-1">
+                <p className="font-semibold text-slate-600">Next Recommendations</p>
+                <p className="text-slate-600">{report.next_recommendations}</p>
+              </div>
+
+              <div className="flex flex-wrap gap-1 text-xs">
+                <span className="rounded bg-slate-100 px-1">simulation_only: true</span>
+                <span className="rounded bg-slate-100 px-1">advisory_only: true</span>
+                <span className="rounded bg-slate-100 px-1">outbound_actions_taken: 0</span>
+              </div>
+
+              {/* Review controls */}
+              {reviewingReportId === report.id ? (
+                <form onSubmit={handleReviewReport} className="space-y-2 border-t pt-2">
+                  <label className="text-xs text-slate-600">Decision</label>
+                  <select className="w-full rounded border px-2 py-1 text-sm" value={reviewDecision} onChange={(e) => setReviewDecision(e.target.value)}>
+                    <option value="approve">Approve</option>
+                    <option value="reject">Reject</option>
+                    <option value="revise">Needs Revision</option>
+                  </select>
+                  <input className="w-full rounded border px-2 py-1 text-sm" placeholder="Reviewer notes (optional)" value={reviewNotes} onChange={(e) => setReviewNotes(e.target.value)} />
+                  <div className="flex gap-2">
+                    <button type="submit" disabled={reviewing} className="rounded bg-indigo-600 px-3 py-1 text-xs text-white hover:bg-indigo-700 disabled:opacity-50">
+                      {reviewing ? "Saving…" : "Submit Review"}
+                    </button>
+                    <button type="button" onClick={() => setReviewingReportId(null)} className="rounded border px-3 py-1 text-xs text-slate-600 hover:bg-slate-50">
+                      Cancel
+                    </button>
+                  </div>
+                  <p className="text-xs text-slate-400">Approving does not trigger any publishing or outbound action.</p>
+                </form>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => { setReviewingReportId(report.id); setReviewDecision("approve"); setReviewNotes(""); }}
+                  className="rounded border border-indigo-300 px-3 py-1 text-xs text-indigo-700 hover:bg-indigo-50"
+                >
+                  Review Report
+                </button>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // v7.5: PerformanceLoopSection
 function PerformanceLoopSection({
   assetRenders,
@@ -2350,10 +2884,14 @@ export default function CreativeStudioPage({ activeWorkspace, refreshTrigger = 0
   const [assetPerformanceRecords, setAssetPerformanceRecords] = useState([]);
   const [creativePerformanceSummaries, setCreativePerformanceSummaries] = useState([]);
 
+  // v8 state
+  const [campaignPacks, setCampaignPacks] = useState([]);
+  const [campaignReports, setCampaignReports] = useState([]);
+
   async function load() {
     setLoading(true);
     try {
-      const [briefData, draftData, profilesData, channelsData, contentData, snippetsData, assetsData, audioRunsData, transcriptRunsData, segmentsData, intakeData, promptGenData, assetRendersData, publishLogsData, perfRecordsData, perfSummariesData] = await Promise.all([
+      const [briefData, draftData, profilesData, channelsData, contentData, snippetsData, assetsData, audioRunsData, transcriptRunsData, segmentsData, intakeData, promptGenData, assetRendersData, publishLogsData, perfRecordsData, perfSummariesData, campaignPacksData, campaignReportsData] = await Promise.all([
         api.contentBriefs({ ...wsParam() }),
         api.contentDrafts({ ...wsParam() }),
         api.clientProfiles({ ...wsParam() }),
@@ -2370,6 +2908,8 @@ export default function CreativeStudioPage({ activeWorkspace, refreshTrigger = 0
         api.manualPublishLogs({ ...wsParam() }),
         api.assetPerformanceRecords({ ...wsParam() }),
         api.creativePerformanceSummaries({ ...wsParam() }),
+        api.campaignPacks({ ...wsParam() }),
+        api.campaignReports({ ...wsParam() }),
       ]);
       setBriefs(briefData.items || []);
       setDrafts(draftData.items || []);
@@ -2387,6 +2927,8 @@ export default function CreativeStudioPage({ activeWorkspace, refreshTrigger = 0
       setManualPublishLogs(publishLogsData.items || []);
       setAssetPerformanceRecords(perfRecordsData.items || []);
       setCreativePerformanceSummaries(perfSummariesData.items || []);
+      setCampaignPacks(campaignPacksData.items || []);
+      setCampaignReports(campaignReportsData.items || []);
     } catch {
       // fail silently
     } finally {
@@ -2532,6 +3074,7 @@ export default function CreativeStudioPage({ activeWorkspace, refreshTrigger = 0
           { id: "prompts", label: `Prompt Library (${promptGenerations.length})` },
           { id: "renders", label: `Rendered Assets (${assetRenders.length})` },
           { id: "performance-loop", label: `Performance Loop (${manualPublishLogs.length})` },
+          { id: "campaign-packs", label: `Campaign Packs (${campaignPacks.length})` },
         ].map(({ id, label }) => (
           <button
             key={id}
@@ -2996,6 +3539,24 @@ export default function CreativeStudioPage({ activeWorkspace, refreshTrigger = 0
           manualPublishLogs={manualPublishLogs}
           assetPerformanceRecords={assetPerformanceRecords}
           creativePerformanceSummaries={creativePerformanceSummaries}
+          wsParam={wsParam}
+          onRefresh={load}
+          showNotice={showNotice}
+        />
+      )}
+
+      {/* v8: CAMPAIGN PACKS section */}
+      {activeSection === "campaign-packs" && (
+        <CampaignPacksSection
+          campaignPacks={campaignPacks}
+          campaignReports={campaignReports}
+          sourceContent={sourceContent}
+          contentSnippets={contentSnippets}
+          promptGenerations={promptGenerations}
+          assetRenders={assetRenders}
+          manualPublishLogs={manualPublishLogs}
+          assetPerformanceRecords={assetPerformanceRecords}
+          clientProfiles={clientProfiles}
           wsParam={wsParam}
           onRefresh={load}
           showNotice={showNotice}

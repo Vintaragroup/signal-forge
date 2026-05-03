@@ -5796,3 +5796,458 @@ def _build_recommendations(
             "They are advisory only. No automatic approvals or outbound actions are taken."
         ),
     }
+
+
+# ===========================================================================
+# v8: Client Campaign Packs
+# ===========================================================================
+# Adds three collections:
+#   campaign_packs           — top-level pack record per client/campaign
+#   campaign_pack_items      — individual pipeline items attached to a pack
+#   campaign_reports         — advisory reports generated from a pack
+#
+# Safety guarantees:
+#   - simulation_only: True and outbound_actions_taken: 0 on every record
+#   - No publishing, scheduling, or social API calls at any point
+#   - Reports are advisory and human-review only
+#   - Items are cross-checked for workspace + client match before insertion
+# ===========================================================================
+
+VALID_PACK_STATUSES = frozenset({"draft", "needs_review", "approved", "archived"})
+VALID_REPORT_STATUSES = frozenset({"draft", "needs_review", "approved"})
+VALID_REVIEW_DECISIONS = frozenset({"approve", "reject", "revise"})
+VALID_ITEM_TYPES = frozenset({
+    "source_content",
+    "snippet",
+    "prompt_generation",
+    "asset_render",
+    "publish_log",
+    "performance_record",
+})
+
+
+# ---------------------------------------------------------------------------
+# v8: Pydantic models
+# ---------------------------------------------------------------------------
+
+class CampaignPackCreateRequest(BaseModel):
+    workspace_slug: str
+    client_id: str = ""
+    campaign_name: str
+    campaign_goal: str = ""
+    target_platforms: list[str] = Field(default_factory=list)
+    target_audience: str = ""
+    content_themes: list[str] = Field(default_factory=list)
+    source_content_ids: list[str] = Field(default_factory=list)
+    snippet_ids: list[str] = Field(default_factory=list)
+    prompt_generation_ids: list[str] = Field(default_factory=list)
+    asset_render_ids: list[str] = Field(default_factory=list)
+    manual_publish_log_ids: list[str] = Field(default_factory=list)
+    performance_record_ids: list[str] = Field(default_factory=list)
+    summary: str = ""
+    recommendations: str = ""
+
+
+class CampaignPackItemCreateRequest(BaseModel):
+    workspace_slug: str
+    client_id: str = ""
+    item_type: str
+    item_id: str
+    title: str = ""
+    description: str = ""
+    status: str = "draft"
+    sort_order: int = 0
+
+
+class CampaignReportReviewRequest(BaseModel):
+    workspace_slug: str
+    decision: str  # approve | reject | revise
+    reviewer_notes: str = ""
+
+
+# ---------------------------------------------------------------------------
+# v8: Helpers
+# ---------------------------------------------------------------------------
+
+def _build_campaign_report(db: Any, pack: dict) -> dict:
+    """Aggregate pack items into an advisory report dict.
+
+    Pulls performance data from asset_performance_records and
+    creative_performance_summaries where they exist.  Safe when empty.
+    """
+    workspace_slug = pack.get("workspace_slug", "")
+    client_id = pack.get("client_id", "")
+    pack_id = str(pack["_id"])
+
+    # Pull items for this pack
+    items = list(db.campaign_pack_items.find({"campaign_pack_id": pack_id}))
+
+    # Collect referenced IDs by type
+    render_ids = [i["item_id"] for i in items if i.get("item_type") == "asset_render"]
+    snippet_ids = [i["item_id"] for i in items if i.get("item_type") == "snippet"]
+
+    # Performance records for pack assets
+    perf_query: dict[str, Any] = {"workspace_slug": workspace_slug}
+    if client_id:
+        perf_query["client_id"] = client_id
+    perf_records = list(db.asset_performance_records.find(perf_query))
+
+    # Filter to only records whose asset_render_id appears in this pack
+    if render_ids:
+        perf_records = [r for r in perf_records if r.get("asset_render_id") in render_ids]
+
+    # Score aggregation
+    scores = [float(r.get("performance_score", 0.0)) for r in perf_records if r.get("performance_score") is not None]
+    avg_score = round(sum(scores) / len(scores), 3) if scores else None
+    top_score = round(max(scores), 3) if scores else None
+
+    # Top assets by score
+    asset_scores: dict[str, list[float]] = defaultdict(list)
+    for r in perf_records:
+        aid = r.get("asset_render_id", "")
+        if aid:
+            asset_scores[aid].append(float(r.get("performance_score", 0.0)))
+    top_assets = sorted(
+        [{"asset_render_id": k, "avg_score": round(sum(v) / len(v), 3)} for k, v in asset_scores.items()],
+        key=lambda x: x["avg_score"],
+        reverse=True,
+    )[:5]
+
+    # Hook aggregation from performance summaries
+    summaries = list(db.creative_performance_summaries.find(perf_query))
+    if render_ids:
+        summaries = [s for s in summaries if s.get("asset_render_id") in render_ids]
+
+    hook_scores: dict[str, list[float]] = defaultdict(list)
+    prompt_type_scores: dict[str, list[float]] = defaultdict(list)
+    for s in summaries:
+        sc = float(s.get("performance_score", 0.0))
+        if s.get("hook_type"):
+            hook_scores[s["hook_type"]].append(sc)
+        if s.get("prompt_type"):
+            prompt_type_scores[s["prompt_type"]].append(sc)
+
+    def _rank(d: dict[str, list[float]]) -> list[dict]:
+        return sorted(
+            [{"value": k, "avg_score": round(sum(v) / len(v), 3)} for k, v in d.items()],
+            key=lambda x: x["avg_score"],
+            reverse=True,
+        )[:5]
+
+    # Top snippets: prefer approved, sort by created_at desc
+    top_snippet_ids = snippet_ids[:5]
+
+    now = utc_now()
+    return {
+        "workspace_slug": workspace_slug,
+        "client_id": client_id,
+        "campaign_pack_id": pack_id,
+        "report_title": f"Campaign Report — {pack.get('campaign_name', '')}",
+        "executive_summary": (
+            f"This campaign pack contains {len(items)} item(s) across "
+            f"{len(set(i.get('item_type') for i in items))} pipeline stage(s). "
+            f"Performance data covers {len(perf_records)} record(s)."
+            + (f" Average performance score: {avg_score}/10." if avg_score is not None else " No performance data yet.")
+        ),
+        "top_snippets": top_snippet_ids,
+        "top_hooks": _rank(hook_scores),
+        "top_prompt_types": _rank(prompt_type_scores),
+        "top_assets": top_assets,
+        "performance_summary": {
+            "record_count": len(perf_records),
+            "avg_score": avg_score,
+            "top_score": top_score,
+        },
+        "lessons_learned": (
+            "Review the top-performing hooks and prompt types above to inform the next creative batch. "
+            "Focus on assets with avg_score ≥ 7 for repeat use."
+        ),
+        "next_recommendations": (
+            "Use top hook types and prompt types when generating the next batch of prompts. "
+            "Archive low-performing source content (score < 4) and review for replacement."
+        ),
+        "status": "draft",
+        "advisory_only": True,
+        "simulation_only": True,
+        "outbound_actions_taken": 0,
+        "created_at": now,
+        "updated_at": now,
+    }
+
+
+# ---------------------------------------------------------------------------
+# v8: Campaign Packs endpoints
+# ---------------------------------------------------------------------------
+
+@app.post("/campaign-packs", status_code=201)
+def create_campaign_pack(payload: CampaignPackCreateRequest) -> dict:
+    """Create a new campaign pack.
+
+    A campaign pack aggregates all pipeline records for a single client
+    campaign into one reviewable package.  SignalForge does not publish,
+    schedule, or take any outbound action.
+    """
+    now = utc_now()
+    client = get_client()
+    try:
+        db = get_database(client)
+        doc = {
+            "workspace_slug": clean_text(payload.workspace_slug),
+            "client_id": clean_text(payload.client_id),
+            "campaign_name": clean_text(payload.campaign_name),
+            "campaign_goal": clean_text(payload.campaign_goal),
+            "target_platforms": [clean_text(p) for p in payload.target_platforms],
+            "target_audience": clean_text(payload.target_audience),
+            "content_themes": [clean_text(t) for t in payload.content_themes],
+            "source_content_ids": [clean_text(i) for i in payload.source_content_ids],
+            "snippet_ids": [clean_text(i) for i in payload.snippet_ids],
+            "prompt_generation_ids": [clean_text(i) for i in payload.prompt_generation_ids],
+            "asset_render_ids": [clean_text(i) for i in payload.asset_render_ids],
+            "manual_publish_log_ids": [clean_text(i) for i in payload.manual_publish_log_ids],
+            "performance_record_ids": [clean_text(i) for i in payload.performance_record_ids],
+            "status": "draft",
+            "summary": clean_text(payload.summary),
+            "recommendations": clean_text(payload.recommendations),
+            "simulation_only": True,
+            "outbound_actions_taken": 0,
+            "created_at": now,
+            "updated_at": now,
+        }
+        result = db.campaign_packs.insert_one(doc)
+        created = db.campaign_packs.find_one({"_id": result.inserted_id})
+        return {
+            "item": serialize(created),
+            "message": "Campaign pack created. SignalForge has not published or scheduled anything.",
+            "simulation_only": True,
+            "outbound_actions_taken": 0,
+        }
+    finally:
+        client.close()
+
+
+@app.get("/campaign-packs")
+def list_campaign_packs(
+    workspace_slug: str = Query(""),
+    client_id: str = Query(""),
+    status: str = Query(""),
+    limit: int = Query(100),
+) -> dict:
+    client = get_client()
+    try:
+        db = get_database(client)
+        query: dict[str, Any] = {}
+        if workspace_slug:
+            query["workspace_slug"] = workspace_slug
+        if client_id:
+            query["client_id"] = client_id
+        if status:
+            query["status"] = status
+        cursor = db.campaign_packs.find(query).sort("created_at").limit(limit)
+        items = [serialize(d) for d in cursor]
+        return {"items": items, "total": len(items), "simulation_only": True, "outbound_actions_taken": 0}
+    finally:
+        client.close()
+
+
+@app.get("/campaign-packs/{pack_id}")
+def get_campaign_pack(pack_id: str) -> dict:
+    """Return a single campaign pack with its items."""
+    client = get_client()
+    try:
+        db = get_database(client)
+        try:
+            oid = ObjectId(pack_id)
+        except Exception:
+            raise HTTPException(status_code=422, detail="Invalid pack_id format.")
+        pack = db.campaign_packs.find_one({"_id": oid})
+        if not pack:
+            raise HTTPException(status_code=404, detail="Campaign pack not found.")
+        items = list(db.campaign_pack_items.find({"campaign_pack_id": pack_id}).sort("sort_order"))
+        return {
+            "item": serialize(pack),
+            "pack_items": [serialize(i) for i in items],
+            "simulation_only": True,
+            "outbound_actions_taken": 0,
+        }
+    finally:
+        client.close()
+
+
+@app.post("/campaign-packs/{pack_id}/items", status_code=201)
+def add_campaign_pack_item(pack_id: str, payload: CampaignPackItemCreateRequest) -> dict:
+    """Add a pipeline item to a campaign pack.
+
+    Validates that the item's workspace and client match the pack.
+    Items from a different workspace or client are rejected.
+    """
+    if payload.item_type not in VALID_ITEM_TYPES:
+        raise HTTPException(
+            status_code=422,
+            detail=f"item_type must be one of: {sorted(VALID_ITEM_TYPES)}",
+        )
+    now = utc_now()
+    client = get_client()
+    try:
+        db = get_database(client)
+        try:
+            oid = ObjectId(pack_id)
+        except Exception:
+            raise HTTPException(status_code=422, detail="Invalid pack_id format.")
+        pack = db.campaign_packs.find_one({"_id": oid})
+        if not pack:
+            raise HTTPException(status_code=404, detail="Campaign pack not found.")
+
+        # Workspace isolation check
+        req_ws = clean_text(payload.workspace_slug)
+        if req_ws and pack.get("workspace_slug") and req_ws != pack["workspace_slug"]:
+            raise HTTPException(
+                status_code=422,
+                detail="Item workspace_slug does not match pack workspace_slug.",
+            )
+
+        # Client isolation check
+        req_client = clean_text(payload.client_id)
+        if req_client and pack.get("client_id") and req_client != pack["client_id"]:
+            raise HTTPException(
+                status_code=422,
+                detail="Item client_id does not match pack client_id.",
+            )
+
+        doc = {
+            "workspace_slug": pack.get("workspace_slug", ""),
+            "campaign_pack_id": pack_id,
+            "item_type": clean_text(payload.item_type),
+            "item_id": clean_text(payload.item_id),
+            "title": clean_text(payload.title),
+            "description": clean_text(payload.description),
+            "status": clean_text(payload.status) or "draft",
+            "sort_order": int(payload.sort_order),
+            "simulation_only": True,
+            "outbound_actions_taken": 0,
+            "created_at": now,
+        }
+        result = db.campaign_pack_items.insert_one(doc)
+        created = db.campaign_pack_items.find_one({"_id": result.inserted_id})
+        return {
+            "item": serialize(created),
+            "message": "Item added to campaign pack.",
+            "simulation_only": True,
+            "outbound_actions_taken": 0,
+        }
+    finally:
+        client.close()
+
+
+@app.post("/campaign-packs/{pack_id}/generate-report", status_code=201)
+def generate_campaign_report(pack_id: str) -> dict:
+    """Generate an advisory campaign report for a pack.
+
+    Aggregates performance data and learning-loop insights into a
+    human-readable report.  The report is advisory only — it does not
+    trigger publishing, approvals, or any outbound action.
+    """
+    client = get_client()
+    try:
+        db = get_database(client)
+        try:
+            oid = ObjectId(pack_id)
+        except Exception:
+            raise HTTPException(status_code=422, detail="Invalid pack_id format.")
+        pack = db.campaign_packs.find_one({"_id": oid})
+        if not pack:
+            raise HTTPException(status_code=404, detail="Campaign pack not found.")
+
+        report_doc = _build_campaign_report(db, pack)
+        result = db.campaign_reports.insert_one(report_doc)
+        created = db.campaign_reports.find_one({"_id": result.inserted_id})
+        return {
+            "item": serialize(created),
+            "message": (
+                "Campaign report generated. Advisory only — "
+                "no publishing, scheduling, or outbound actions taken."
+            ),
+            "simulation_only": True,
+            "outbound_actions_taken": 0,
+        }
+    finally:
+        client.close()
+
+
+# ---------------------------------------------------------------------------
+# v8: Campaign Reports endpoints
+# ---------------------------------------------------------------------------
+
+@app.get("/campaign-reports")
+def list_campaign_reports(
+    workspace_slug: str = Query(""),
+    client_id: str = Query(""),
+    campaign_pack_id: str = Query(""),
+    status: str = Query(""),
+    limit: int = Query(100),
+) -> dict:
+    client = get_client()
+    try:
+        db = get_database(client)
+        query: dict[str, Any] = {}
+        if workspace_slug:
+            query["workspace_slug"] = workspace_slug
+        if client_id:
+            query["client_id"] = client_id
+        if campaign_pack_id:
+            query["campaign_pack_id"] = campaign_pack_id
+        if status:
+            query["status"] = status
+        cursor = db.campaign_reports.find(query).sort("created_at").limit(limit)
+        items = [serialize(d) for d in cursor]
+        return {"items": items, "total": len(items), "simulation_only": True, "outbound_actions_taken": 0}
+    finally:
+        client.close()
+
+
+@app.post("/campaign-reports/{report_id}/review")
+def review_campaign_report(report_id: str, payload: CampaignReportReviewRequest) -> dict:
+    """Mark a campaign report as approved, rejected, or needing revision.
+
+    This is a human-review step only.  Approving a report does NOT trigger
+    publishing, scheduling, or any outbound action.
+    """
+    if payload.decision not in VALID_REVIEW_DECISIONS:
+        raise HTTPException(
+            status_code=422,
+            detail=f"decision must be one of: {sorted(VALID_REVIEW_DECISIONS)}",
+        )
+    now = utc_now()
+    client = get_client()
+    try:
+        db = get_database(client)
+        try:
+            oid = ObjectId(report_id)
+        except Exception:
+            raise HTTPException(status_code=422, detail="Invalid report_id format.")
+        report = db.campaign_reports.find_one({"_id": oid})
+        if not report:
+            raise HTTPException(status_code=404, detail="Campaign report not found.")
+
+        status_map = {"approve": "approved", "reject": "draft", "revise": "needs_review"}
+        new_status = status_map[payload.decision]
+        db.campaign_reports.update_one(
+            {"_id": oid},
+            {"$set": {
+                "status": new_status,
+                "reviewer_notes": clean_text(payload.reviewer_notes),
+                "reviewed_at": now,
+                "updated_at": now,
+            }},
+        )
+        updated = db.campaign_reports.find_one({"_id": oid})
+        return {
+            "item": serialize(updated),
+            "message": (
+                f"Report marked as {new_status}. "
+                "No publishing or outbound actions triggered."
+            ),
+            "simulation_only": True,
+            "outbound_actions_taken": 0,
+        }
+    finally:
+        client.close()

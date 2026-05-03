@@ -430,6 +430,37 @@ export const api = {
 
   performanceRecommendations: (params = {}) =>
     request(`/creative-performance-summaries/recommendations?${new URLSearchParams({ ...wsParam(), ...params })}`),
+
+  // v8: Campaign Packs
+  campaignPacks: (params = {}) =>
+    request(`/campaign-packs?${new URLSearchParams({ ...wsParam(), ...params })}`),
+
+  createCampaignPack: (payload) =>
+    request("/campaign-packs", {
+      method: "POST",
+      body: JSON.stringify({ ...wsParam(), ...payload }),
+    }),
+
+  getCampaignPack: (id) =>
+    request(`/campaign-packs/${id}`),
+
+  addCampaignPackItem: (packId, payload) =>
+    request(`/campaign-packs/${packId}/items`, {
+      method: "POST",
+      body: JSON.stringify({ ...wsParam(), ...payload }),
+    }),
+
+  generateCampaignReport: (packId) =>
+    request(`/campaign-packs/${packId}/generate-report`, { method: "POST", body: "{}" }),
+
+  campaignReports: (params = {}) =>
+    request(`/campaign-reports?${new URLSearchParams({ ...wsParam(), ...params })}`),
+
+  reviewCampaignReport: (reportId, payload) =>
+    request(`/campaign-reports/${reportId}/review`, {
+      method: "POST",
+      body: JSON.stringify({ ...wsParam(), ...payload }),
+    }),
 };
 
 export { API_BASE_URL };

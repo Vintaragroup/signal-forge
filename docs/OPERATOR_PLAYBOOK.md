@@ -1349,3 +1349,96 @@ Paste CSV text into the CSV Import sub-tab (first row = headers). Supported colu
 - CSV import validates rows locally — no network calls at any step
 - Negative metric values (views, likes, etc.) and out-of-range rates (retention_rate > 1.0) are rejected at the API layer
 - Performance summaries are upserted (not duplicated) when regenerated for the same asset
+
+---
+
+## Section 33: Social Creative Engine v8 — Client Campaign Packs
+
+v8 adds a client-facing campaign packaging layer. Operators can assemble all pipeline artifacts for a single client campaign into a structured pack, generate an advisory report, and share findings with clients. SignalForge still does not publish, schedule, DM, or call social APIs at any step.
+
+### New collections (v8)
+
+| Collection | Purpose |
+|---|---|
+| `campaign_packs` | Top-level pack record — campaign goals, platforms, audience, themes, and referenced item IDs |
+| `campaign_pack_items` | Individual pipeline items attached to a pack, organized by stage |
+| `campaign_reports` | Advisory report generated from pack data — executive summary, performance, recommendations |
+
+### Campaign pack status lifecycle
+
+```
+draft → needs_review → approved → archived
+```
+
+### Campaign report status lifecycle
+
+```
+draft → needs_review → approved
+```
+
+Approving a report never triggers publishing or any outbound action.
+
+### API endpoints (v8)
+
+| Method | Endpoint | Description |
+|---|---|---|
+| `POST` | `/campaign-packs` | Create a new campaign pack (status_code 201) |
+| `GET` | `/campaign-packs` | List packs (filterable by workspace, client, status) |
+| `GET` | `/campaign-packs/{id}` | Get pack detail with all items |
+| `POST` | `/campaign-packs/{id}/items` | Add a pipeline item to a pack (201) |
+| `POST` | `/campaign-packs/{id}/generate-report` | Generate advisory campaign report (201) |
+| `GET` | `/campaign-reports` | List reports (filterable by workspace, client, pack, status) |
+| `POST` | `/campaign-reports/{id}/review` | Submit approve/reject/revise decision |
+
+### Item types
+
+| item_type | Pipeline stage |
+|---|---|
+| `source_content` | Raw source content |
+| `snippet` | Extracted content snippet |
+| `prompt_generation` | AI-generated visual prompt |
+| `asset_render` | Rendered asset (image/video) |
+| `publish_log` | Manual publish log record |
+| `performance_record` | Platform performance metrics |
+
+### Pack generation rules
+
+- A pack item's `workspace_slug` must match the pack's `workspace_slug` — cross-workspace items are rejected (422).
+- A pack item's `client_id` (if set) must match the pack's `client_id` — cross-client items are rejected (422).
+- Pack reports are generated from existing performance data in MongoDB — no network calls.
+- Draft/unreviewed items may be included and are marked with their current status.
+- Reports are `advisory_only: true` — they never trigger automatic approvals, status changes, or scheduling.
+
+### Typical operator workflow (v8)
+
+```
+1. Select a client campaign to package.
+2. Creative Studio → Campaign Packs tab → Create Pack sub-tab.
+3. Fill in campaign name, goal, platforms, audience, themes. Save.
+4. Add Items sub-tab: work through each pipeline stage:
+   - Select source content pieces used in the campaign
+   - Select snippets extracted from that content
+   - Select prompt generations approved for rendering
+   - Select rendered assets from this campaign
+   - Select publish logs from the manual publish step
+   - Select performance records entered after posting
+5. Pack Detail sub-tab: review the pipeline timeline.
+   - Each stage shows its items and review states.
+   - Safety badges confirm simulation_only + no outbound actions.
+6. Click "Generate Campaign Report" — report created as draft.
+7. Reports sub-tab: review the advisory report.
+   - Check executive summary, top hooks, top prompt types, top assets.
+   - Review lessons learned and next-batch recommendations.
+8. Click "Review Report" → Approve / Reject / Needs Revision.
+   - Approved report is for internal and client-briefing use only.
+   - Approval does NOT publish anything or change any other record.
+```
+
+### Operating rules (v8)
+
+- SignalForge never calls any social platform API at any step of v8
+- Campaign reports are advisory only — `advisory_only: true` always
+- Approving a report does NOT trigger publishing, scheduling, or status changes to snippets, assets, or any other record
+- `simulation_only: true` and `outbound_actions_taken: 0` on all v8 record types
+- Items from a different workspace or client are rejected at the API layer — cross-contamination is impossible
+- Pack reports are generated entirely from local MongoDB data

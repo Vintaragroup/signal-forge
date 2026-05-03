@@ -253,3 +253,28 @@ All v6.5 guarantees are preserved. `openai-whisper` is a local Python library �
 ### v7.5 Safety Boundary
 
 All v7 guarantees are preserved. No social platform API is called at any point in the v7.5 pipeline. Performance metrics are entered by the operator from external platform dashboards. Scores are calculated entirely locally using a deterministic formula. Recommendations are advisory and surfaced for human review only — no code path acts on them automatically. CSV import is fully local with row-level validation. All new collections carry `simulation_only: true` and `outbound_actions_taken: 0`.
+
+---
+
+## v8 — Client Campaign Packs
+
+| Capability | Status | Notes |
+|---|---|---|
+| Create campaign pack | ✅ | POST /campaign-packs; status_code=201 |
+| List campaign packs | ✅ | Filterable by workspace, client, status |
+| Campaign pack detail | ✅ | Returns pack + all pack_items |
+| Add item to pack | ✅ | 6 item types; workspace/client validated |
+| Generate campaign report | ✅ | Advisory only; no outbound actions |
+| List campaign reports | ✅ | Filterable by workspace, client, pack, status |
+| Review campaign report | ✅ | approve/reject/revise; no auto-publish |
+| Workspace isolation | ✅ | Cross-workspace items rejected at API layer |
+| Client isolation | ✅ | Cross-client items rejected at API layer |
+| Frontend Campaign Packs tab | ✅ | 5 sub-tabs in Creative Studio |
+| simulation_only on all records | ✅ | campaign_packs, campaign_pack_items, campaign_reports |
+| outbound_actions_taken: 0 always | ✅ | All v8 record types |
+| advisory_only on all reports | ✅ | Reports never trigger publishing |
+| No social API calls | ✅ | All data local-only |
+
+### v8 Safety Boundary
+
+Approving a `campaign_report` does not publish content, schedule posts, change the status of snippets or assets, or call any external API. Campaign packs and reports are packaging and advisory artifacts only. All v8 collections carry `simulation_only: true` and `outbound_actions_taken: 0`. Pack items are cross-validated at insert time — a workspace or client mismatch is a hard 422 rejection. SignalForge never sends, schedules, or triggers any outbound message or post at any step of the v8 flow.

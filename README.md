@@ -315,6 +315,15 @@ v5 adds a rendering pipeline on top of the v4.5 prompt approval layer. An approv
 - Frontend: "Performance Loop" tab in Creative Studio with 4 sub-tabs: Publish Log, Performance Entry (with live score preview), CSV Import, Summaries & Recommendations.
 - All records carry `simulation_only: true`, `outbound_actions_taken: 0`. No platform API calls at any step.
 
+**v8 — Client Campaign Packs:**
+- Three new collections: `campaign_packs`, `campaign_pack_items`, `campaign_reports`.
+- `campaign_packs`: top-level record for a named client campaign — stores goals, platforms, audience, themes, and lists of all referenced pipeline item IDs (source content, snippets, prompts, renders, publish logs, performance records).
+- `campaign_pack_items`: individual pipeline items attached to a pack, typed by stage (`source_content`, `snippet`, `prompt_generation`, `asset_render`, `publish_log`, `performance_record`). Items are workspace- and client-isolated at insert time.
+- `campaign_reports`: advisory report generated from a pack — includes executive summary, top snippets, best hooks, best prompt types, top assets, performance summary, lessons learned, and next-batch recommendations. Status lifecycle: draft → needs_review → approved. Approving does not trigger any publishing or outbound action.
+- Pack reports are generated locally from existing performance data — no social API calls.
+- All records carry `simulation_only: true`, `outbound_actions_taken: 0`. Reports are `advisory_only: true`.
+- Frontend: "Campaign Packs" tab in Creative Studio with 5 sub-tabs: All Packs, Create Pack, Add Items, Pack Detail (pipeline timeline with safety badges), Reports (review/approve workflow).
+
 ## Local Setup
 
 1. Copy the environment template:
