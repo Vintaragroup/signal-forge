@@ -6692,3 +6692,429 @@ def review_campaign_export(export_id: str, payload: CampaignExportReviewRequest)
         }
     finally:
         client.close()
+
+# ===========================================================================
+# v9.5: Client Intelligence Layer
+# ===========================================================================
+#
+# Unifies acquisition (leads) + content (campaigns, performance) into a
+# structured intelligence record per client.
+#
+# Safety guarantees:
+#   - No posting, scheduling, DMs, or external API calls at any step.
+#   - All records carry simulation_only=True, outbound_actions_taken=0.
+#   - All intelligence and correlation outputs are advisory_only=True.
+#   - Workspace and client isolation enforced at every endpoint.
+# ===========================================================================
+
+from client_intelligence import (
+    build_client_intelligence,
+    correlate_lead_to_content_patterns,
+    calculate_estimated_roi,
+    identify_top_performers,
+)
+
+VALID_CONVERSION_STATUSES = {"prospect", "contacted", "converted", "inactive"}
+VALID_FUNNEL_STAGE_IMPACTS = {"awareness", "engagement", "conversion"}
+
+
+# ---------------------------------------------------------------------------
+# v9.5: Models
+# ---------------------------------------------------------------------------
+
+class ClientProfileIntelligencePatchRequest(BaseModel):
+    workspace_slug: str = ""
+    source_lead_id: str = ""
+    acquisition_score: float = 0.0
+    acquisition_notes: str = ""
+    conversion_status: str = "prospect"
+    conversion_date: str = ""
+    lifetime_value_estimate: float = 0.0
+    content_fit_score: float = 0.0
+
+
+class CampaignPackLinkRequest(BaseModel):
+    workspace_slug: str = ""
+    linked_lead_id: str = ""
+    linked_deal_id: str = ""
+    campaign_roi_estimate: float = 0.0
+    performance_summary_score: float = 0.0
+
+
+class AssetPerformanceIntelligencePatchRequest(BaseModel):
+    workspace_slug: str = ""
+    estimated_revenue_impact: float = 0.0
+    funnel_stage_impact: str = ""
+    attribution_notes: str = ""
+
+
+class ClientIntelligenceGenerateRequest(BaseModel):
+    workspace_slug: str = ""
+
+
+class LeadContentCorrelationGenerateRequest(BaseModel):
+    workspace_slug: str = ""
+    lead_id: str = ""
+    client_id: str = ""
+
+
+# ---------------------------------------------------------------------------
+# v9.5: PATCH extensions for existing collections
+# ---------------------------------------------------------------------------
+
+@app.patch("/client-profiles/{client_id}/intelligence")
+def patch_client_profile_intelligence(
+    client_id: str,
+    payload: ClientProfileIntelligencePatchRequest,
+) -> dict:
+    """Add intelligence fields to an existing client profile.
+
+    No external actions. Data linking only.
+    """
+    if payload.conversion_status and payload.conversion_status not in VALID_CONVERSION_STATUSES:
+        raise HTTPException(
+            status_code=422,
+            detail=f"conversion_status must be one of: {sorted(VALID_CONVERSION_STATUSES)}",
+        )
+    now = utc_now()
+    client = get_client()
+    try:
+        db = get_database(client)
+        profile = find_client_profile(db, client_id)
+        if not profile:
+            raise HTTPException(status_code=404, detail="Client profile not found.")
+
+        req_ws = clean_text(payload.workspace_slug)
+        if req_ws and profile.get("workspace_slug") != req_ws:
+            raise HTTPException(status_code=422, detail="workspace_slug does not match client profile.")
+
+        update_fields: dict[str, Any] = {
+            "updated_at": now,
+        }
+        if payload.source_lead_id:
+            update_fields["source_lead_id"] = clean_text(payload.source_lead_id)
+        if payload.acquisition_score:
+            update_fields["acquisition_score"] = float(payload.acquisition_score)
+        if payload.acquisition_notes:
+            update_fields["acquisition_notes"] = clean_text(payload.acquisition_notes)
+        if payload.conversion_status:
+            update_fields["conversion_status"] = payload.conversion_status
+        if payload.conversion_date:
+            update_fields["conversion_date"] = clean_text(payload.conversion_date)
+        if payload.lifetime_value_estimate:
+            update_fields["lifetime_value_estimate"] = float(payload.lifetime_value_estimate)
+        if payload.content_fit_score:
+            update_fields["content_fit_score"] = float(payload.content_fit_score)
+
+        db.client_profiles.update_one({"_id": profile["_id"]}, {"$set": update_fields})
+        updated = find_client_profile(db, client_id)
+        return {
+            "item": serialize(updated),
+            "message": "Client profile intelligence fields updated. No external actions taken.",
+            "simulation_only": True,
+            "outbound_actions_taken": 0,
+        }
+    finally:
+        client.close()
+
+
+@app.patch("/campaign-packs/{pack_id}/link")
+def patch_campaign_pack_link(pack_id: str, payload: CampaignPackLinkRequest) -> dict:
+    """Link a campaign pack to a lead and/or deal for full traceability.
+
+    Data linking only — no external actions.
+    """
+    now = utc_now()
+    client = get_client()
+    try:
+        db = get_database(client)
+        try:
+            pack_oid = ObjectId(pack_id)
+        except Exception:
+            raise HTTPException(status_code=422, detail="Invalid pack_id format.")
+        pack = db.campaign_packs.find_one({"_id": pack_oid})
+        if not pack:
+            raise HTTPException(status_code=404, detail="Campaign pack not found.")
+
+        req_ws = clean_text(payload.workspace_slug)
+        if req_ws and pack.get("workspace_slug") != req_ws:
+            raise HTTPException(status_code=422, detail="workspace_slug does not match campaign pack.")
+
+        update_fields: dict[str, Any] = {"updated_at": now}
+        if payload.linked_lead_id:
+            update_fields["linked_lead_id"] = clean_text(payload.linked_lead_id)
+        if payload.linked_deal_id:
+            update_fields["linked_deal_id"] = clean_text(payload.linked_deal_id)
+        if payload.campaign_roi_estimate:
+            update_fields["campaign_roi_estimate"] = float(payload.campaign_roi_estimate)
+        if payload.performance_summary_score:
+            update_fields["performance_summary_score"] = float(payload.performance_summary_score)
+
+        db.campaign_packs.update_one({"_id": pack_oid}, {"$set": update_fields})
+        updated = db.campaign_packs.find_one({"_id": pack_oid})
+        return {
+            "item": serialize(updated),
+            "message": "Campaign pack linked. No external actions taken.",
+            "simulation_only": True,
+            "outbound_actions_taken": 0,
+        }
+    finally:
+        client.close()
+
+
+@app.patch("/asset-performance-records/{record_id}/intelligence")
+def patch_asset_performance_intelligence(
+    record_id: str,
+    payload: AssetPerformanceIntelligencePatchRequest,
+) -> dict:
+    """Add intelligence fields (revenue impact, funnel stage) to a performance record.
+
+    Data enrichment only — no external actions.
+    """
+    if payload.funnel_stage_impact and payload.funnel_stage_impact not in VALID_FUNNEL_STAGE_IMPACTS:
+        raise HTTPException(
+            status_code=422,
+            detail=f"funnel_stage_impact must be one of: {sorted(VALID_FUNNEL_STAGE_IMPACTS)}",
+        )
+    now = utc_now()
+    client = get_client()
+    try:
+        db = get_database(client)
+        try:
+            oid = ObjectId(record_id)
+        except Exception:
+            raise HTTPException(status_code=422, detail="Invalid record_id format.")
+        record = db.asset_performance_records.find_one({"_id": oid})
+        if not record:
+            raise HTTPException(status_code=404, detail="Asset performance record not found.")
+
+        req_ws = clean_text(payload.workspace_slug)
+        if req_ws and record.get("workspace_slug") != req_ws:
+            raise HTTPException(status_code=422, detail="workspace_slug does not match record.")
+
+        update_fields: dict[str, Any] = {"updated_at": now}
+        if payload.estimated_revenue_impact:
+            update_fields["estimated_revenue_impact"] = float(payload.estimated_revenue_impact)
+        if payload.funnel_stage_impact:
+            update_fields["funnel_stage_impact"] = payload.funnel_stage_impact
+        if payload.attribution_notes:
+            update_fields["attribution_notes"] = clean_text(payload.attribution_notes)
+
+        db.asset_performance_records.update_one({"_id": oid}, {"$set": update_fields})
+        updated = db.asset_performance_records.find_one({"_id": oid})
+        return {
+            "item": serialize(updated),
+            "message": "Performance record intelligence fields updated. No external actions taken.",
+            "simulation_only": True,
+            "outbound_actions_taken": 0,
+        }
+    finally:
+        client.close()
+
+
+# ---------------------------------------------------------------------------
+# v9.5: Client Intelligence endpoints
+# ---------------------------------------------------------------------------
+
+@app.post("/client-intelligence/{client_id}/generate", status_code=201)
+def generate_client_intelligence(
+    client_id: str,
+    payload: ClientIntelligenceGenerateRequest,
+) -> dict:
+    """Generate a client intelligence record.
+
+    Aggregates performance data, snippets, and campaign reports into
+    structured insights and recommendations.
+
+    Advisory only. No external actions at any step.
+    """
+    now = utc_now()
+    client = get_client()
+    try:
+        db = get_database(client)
+
+        # Validate client exists
+        profile = find_client_profile(db, client_id)
+        if not profile:
+            raise HTTPException(status_code=404, detail="Client profile not found.")
+
+        req_ws = clean_text(payload.workspace_slug)
+        if req_ws and profile.get("workspace_slug") != req_ws:
+            raise HTTPException(
+                status_code=422,
+                detail="workspace_slug does not match client profile.",
+            )
+
+        workspace_slug = profile.get("workspace_slug", req_ws)
+
+        intelligence = build_client_intelligence(db, client_id, workspace_slug)
+        doc = {
+            **intelligence,
+            "generated_at": now,
+            "created_at": now,
+            "updated_at": now,
+        }
+        result = db.client_intelligence_records.insert_one(doc)
+        created = db.client_intelligence_records.find_one({"_id": result.inserted_id})
+        return {
+            "item": serialize(created),
+            "message": (
+                "Client intelligence generated. Advisory only. "
+                "No external actions, posts, messages, or API calls performed."
+            ),
+            "simulation_only": True,
+            "outbound_actions_taken": 0,
+            "advisory_only": True,
+        }
+    finally:
+        client.close()
+
+
+@app.get("/client-intelligence")
+def list_client_intelligence(
+    workspace_slug: str = Query(""),
+    client_id: str = Query(""),
+    limit: int = Query(100),
+) -> dict:
+    """List client intelligence records, optionally filtered."""
+    client = get_client()
+    try:
+        db = get_database(client)
+        query: dict[str, Any] = {}
+        if workspace_slug:
+            query["workspace_slug"] = workspace_slug
+        if client_id:
+            query["client_id"] = client_id
+        cursor = db.client_intelligence_records.find(query).sort("created_at").limit(limit)
+        items = [serialize(d) for d in cursor]
+        return {
+            "items": items,
+            "total": len(items),
+            "simulation_only": True,
+            "outbound_actions_taken": 0,
+            "advisory_only": True,
+        }
+    finally:
+        client.close()
+
+
+@app.get("/client-intelligence/{client_id}")
+def get_client_intelligence(
+    client_id: str,
+    workspace_slug: str = Query(""),
+) -> dict:
+    """Return the most recent intelligence record for a client."""
+    client = get_client()
+    try:
+        db = get_database(client)
+        query: dict[str, Any] = {"client_id": client_id}
+        if workspace_slug:
+            query["workspace_slug"] = workspace_slug
+        # Get the most recent record
+        cursor = db.client_intelligence_records.find(query).sort("created_at").limit(1)
+        records = list(cursor)
+        if not records:
+            raise HTTPException(
+                status_code=404,
+                detail="No intelligence record found for this client.",
+            )
+        return {
+            "item": serialize(records[-1]),
+            "simulation_only": True,
+            "outbound_actions_taken": 0,
+            "advisory_only": True,
+        }
+    finally:
+        client.close()
+
+
+# ---------------------------------------------------------------------------
+# v9.5: Lead-Content Correlation endpoints
+# ---------------------------------------------------------------------------
+
+@app.post("/lead-content-correlations/generate", status_code=201)
+def generate_lead_content_correlations(
+    payload: LeadContentCorrelationGenerateRequest,
+) -> dict:
+    """Generate lead-to-content correlation records.
+
+    Correlates a lead/client's conversion attributes to their content
+    performance patterns. Advisory only. No external actions.
+    """
+    if not clean_text(payload.client_id):
+        raise HTTPException(status_code=422, detail="client_id is required.")
+
+    now = utc_now()
+    client = get_client()
+    try:
+        db = get_database(client)
+
+        # Validate client exists
+        profile = find_client_profile(db, payload.client_id)
+        if not profile:
+            raise HTTPException(status_code=404, detail="Client profile not found.")
+
+        req_ws = clean_text(payload.workspace_slug)
+        if req_ws and profile.get("workspace_slug") != req_ws:
+            raise HTTPException(
+                status_code=422,
+                detail="workspace_slug does not match client profile.",
+            )
+
+        workspace_slug = profile.get("workspace_slug", req_ws)
+        lead_id = clean_text(payload.lead_id)
+
+        correlations = correlate_lead_to_content_patterns(
+            db, workspace_slug, lead_id, payload.client_id
+        )
+
+        inserted_ids: list[str] = []
+        for corr in correlations:
+            doc = {**corr, "generated_at": now, "created_at": now, "updated_at": now}
+            result = db.lead_content_correlations.insert_one(doc)
+            inserted_ids.append(str(result.inserted_id))
+
+        return {
+            "generated_count": len(inserted_ids),
+            "correlation_ids": inserted_ids,
+            "message": (
+                f"{len(inserted_ids)} correlation record(s) generated. "
+                "Advisory only. No external actions performed."
+            ),
+            "simulation_only": True,
+            "outbound_actions_taken": 0,
+            "advisory_only": True,
+        }
+    finally:
+        client.close()
+
+
+@app.get("/lead-content-correlations")
+def list_lead_content_correlations(
+    workspace_slug: str = Query(""),
+    lead_id: str = Query(""),
+    client_id: str = Query(""),
+    limit: int = Query(100),
+) -> dict:
+    """List lead-content correlations, optionally filtered."""
+    client = get_client()
+    try:
+        db = get_database(client)
+        query: dict[str, Any] = {}
+        if workspace_slug:
+            query["workspace_slug"] = workspace_slug
+        if lead_id:
+            query["lead_id"] = lead_id
+        if client_id:
+            query["client_id"] = client_id
+        cursor = db.lead_content_correlations.find(query).sort("created_at").limit(limit)
+        items = [serialize(d) for d in cursor]
+        return {
+            "items": items,
+            "total": len(items),
+            "simulation_only": True,
+            "outbound_actions_taken": 0,
+            "advisory_only": True,
+        }
+    finally:
+        client.close()

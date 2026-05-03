@@ -537,3 +537,22 @@ The Messages page now supports full draft review with message body, recipient de
 - Services remain independently runnable.
 - AI behavior is prompt-driven and observable through the vault.
 # signal-forge
+
+---
+
+### v9.5 — Client Intelligence Layer
+
+v9.5 introduces a structured **client intelligence layer** that links acquisition data (leads, deals) to content performance (performance records, campaign reports) and generates deterministic, advisory-only insights per client.
+
+**New capabilities:**
+- **`client_intelligence_records`** collection: aggregates acquisition score, content performance score, estimated ROI, top performers (hook types, prompt types, platforms), insights, and recommendations — all deterministic, no ML.
+- **`lead_content_correlations`** collection: groups performance records by (content theme, hook type, prompt type, platform) and classifies each group as `strong` / `moderate` / `weak`.
+- **`client_intelligence.py`** module: pure-Python, rule-based, no external calls, fully unit-testable in isolation.
+- **PATCH extensions** for `client_profiles`, `campaign_packs`, and `asset_performance_records` to link acquisition and funnel data.
+- **Frontend "Intelligence" tab** in Creative Studio with 5 sub-sections: Client Overview, Top Performers, Insights, Recommendations, Correlations.
+
+**v9.5 Safety guarantees:**
+- All intelligence and correlation records permanently carry `simulation_only: true`, `outbound_actions_taken: 0`, `advisory_only: true`.
+- Generating intelligence never modifies existing records.
+- No external API calls, no posting, no scheduling, no DMs at any step.
+- Workspace and client isolation enforced at every endpoint.

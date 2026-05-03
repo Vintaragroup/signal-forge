@@ -1237,6 +1237,296 @@ function IngestPipelineSection({
 // ---------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------
+// v9.5: Client Intelligence Section
+// ---------------------------------------------------------------------------
+function ClientIntelligenceSection({
+  clientIntelligenceRecords,
+  leadCorrelations,
+  clientProfiles,
+  assetPerformanceRecords,
+  wsParam,
+  onRefresh,
+  showNotice,
+}) {
+  const [subTab, setSubTab] = useState("overview");
+  const [selectedClientId, setSelectedClientId] = useState("");
+  const [generating, setGenerating] = useState(false);
+  const [leadId, setLeadId] = useState("");
+
+  const selectedRecord = clientIntelligenceRecords
+    .filter((r) => !selectedClientId || r.client_id === selectedClientId)
+    .slice(-1)[0] || null;
+
+  const filteredCorrelations = leadCorrelations.filter(
+    (c) => !selectedClientId || c.client_id === selectedClientId
+  );
+
+  async function handleGenerate() {
+    if (!selectedClientId) return showNotice("Select a client first.", "error");
+    setGenerating(true);
+    try {
+      await api.generateClientIntelligence(selectedClientId, {});
+      showNotice("Intelligence generated.", "success");
+      onRefresh();
+    } catch {
+      showNotice("Failed to generate intelligence.", "error");
+    } finally {
+      setGenerating(false);
+    }
+  }
+
+  async function handleGenerateCorrelations() {
+    if (!selectedClientId) return showNotice("Select a client first.", "error");
+    setGenerating(true);
+    try {
+      await api.generateLeadContentCorrelations({
+        client_id: selectedClientId,
+        lead_id: leadId,
+        ...wsParam(),
+      });
+      showNotice("Correlations generated.", "success");
+      onRefresh();
+    } catch {
+      showNotice("Failed to generate correlations.", "error");
+    } finally {
+      setGenerating(false);
+    }
+  }
+
+  const subTabs = [
+    { id: "overview", label: "Client Overview" },
+    { id: "top-performers", label: "Top Performers" },
+    { id: "insights", label: "Insights" },
+    { id: "recommendations", label: "Recommendations" },
+    { id: "correlations", label: "Correlations" },
+  ];
+
+  return (
+    <div className="space-y-6">
+      {/* Safety badge */}
+      <div className="rounded bg-blue-50 border border-blue-200 px-4 py-2 text-xs text-blue-700 font-mono">
+        v9.5 Client Intelligence · simulation_only · advisory_only · outbound_actions_taken: 0 · no external calls
+      </div>
+
+      {/* Client selector + generate button */}
+      <div className="flex flex-wrap items-end gap-3 rounded-lg border border-slate-200 bg-slate-50 px-4 py-3">
+        <div className="flex flex-col gap-1">
+          <label className="text-xs font-medium text-slate-500">Client</label>
+          <select
+            className="rounded border border-slate-300 px-3 py-1.5 text-sm"
+            value={selectedClientId}
+            onChange={(e) => setSelectedClientId(e.target.value)}
+          >
+            <option value="">— All clients —</option>
+            {clientProfiles.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.client_name || p.brand_name || p.id}
+              </option>
+            ))}
+          </select>
+        </div>
+        <button
+          type="button"
+          disabled={!selectedClientId || generating}
+          onClick={handleGenerate}
+          className="rounded bg-blue-600 px-4 py-1.5 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50"
+        >
+          {generating ? "Generating…" : "Generate Intelligence"}
+        </button>
+        <div className="flex flex-col gap-1">
+          <label className="text-xs font-medium text-slate-500">Lead ID (for correlations)</label>
+          <input
+            className="rounded border border-slate-300 px-3 py-1.5 text-sm w-48"
+            value={leadId}
+            onChange={(e) => setLeadId(e.target.value)}
+            placeholder="lead id (optional)"
+          />
+        </div>
+        <button
+          type="button"
+          disabled={!selectedClientId || generating}
+          onClick={handleGenerateCorrelations}
+          className="rounded bg-slate-600 px-4 py-1.5 text-sm font-medium text-white hover:bg-slate-700 disabled:opacity-50"
+        >
+          Generate Correlations
+        </button>
+      </div>
+
+      {/* Sub-tabs */}
+      <div className="flex gap-1 border-b border-slate-200 pb-0">
+        {subTabs.map(({ id, label }) => (
+          <button
+            key={id}
+            type="button"
+            onClick={() => setSubTab(id)}
+            className={[
+              "rounded-t-lg px-4 py-2 text-sm font-medium transition",
+              subTab === id
+                ? "border-b-2 border-blue-600 text-blue-700"
+                : "text-slate-500 hover:text-slate-800",
+            ].join(" ")}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+
+      {/* Sub-tab content */}
+      {subTab === "overview" && (
+        <div className="rounded-lg border border-slate-200 bg-white p-4">
+          {selectedRecord ? (
+            <dl className="grid grid-cols-2 gap-x-6 gap-y-3 text-sm">
+              <div><dt className="text-slate-500">Client ID</dt><dd className="font-mono text-xs">{selectedRecord.client_id}</dd></div>
+              <div><dt className="text-slate-500">Conversion Status</dt><dd>{selectedRecord.conversion_status || "—"}</dd></div>
+              <div><dt className="text-slate-500">Acquisition Score</dt><dd>{selectedRecord.acquisition_score ?? "—"}</dd></div>
+              <div><dt className="text-slate-500">Content Performance Score</dt><dd>{selectedRecord.content_performance_score ?? "—"}</dd></div>
+              <div><dt className="text-slate-500">Estimated ROI</dt><dd>{selectedRecord.estimated_roi ?? "—"}</dd></div>
+              <div><dt className="text-slate-500">Confidence Score</dt><dd>{selectedRecord.confidence_score ?? "—"}</dd></div>
+              <div><dt className="text-slate-500">Source Lead ID</dt><dd className="font-mono text-xs">{selectedRecord.source_lead_id || "—"}</dd></div>
+              <div><dt className="text-slate-500">Generated At</dt><dd>{selectedRecord.generated_at || selectedRecord.created_at || "—"}</dd></div>
+            </dl>
+          ) : (
+            <p className="text-sm text-slate-500">No intelligence record found. Select a client and click "Generate Intelligence".</p>
+          )}
+        </div>
+      )}
+
+      {subTab === "top-performers" && (
+        <div className="space-y-4">
+          {selectedRecord ? (
+            <>
+              {[
+                { label: "Top Hook Types", key: "top_hook_types" },
+                { label: "Top Prompt Types", key: "top_prompt_types" },
+                { label: "Best Platforms", key: "best_platforms" },
+                { label: "Top Snippet IDs", key: "top_snippet_ids" },
+              ].map(({ label, key }) => (
+                <div key={key} className="rounded-lg border border-slate-200 bg-white p-4">
+                  <h4 className="text-sm font-semibold text-slate-700 mb-2">{label}</h4>
+                  {(selectedRecord[key] || []).length > 0 ? (
+                    <ol className="list-decimal list-inside text-sm text-slate-700 space-y-1">
+                      {(selectedRecord[key] || []).map((v, i) => (
+                        <li key={i}>{v}</li>
+                      ))}
+                    </ol>
+                  ) : (
+                    <p className="text-xs text-slate-400">No data.</p>
+                  )}
+                </div>
+              ))}
+            </>
+          ) : (
+            <p className="text-sm text-slate-500">Generate intelligence first.</p>
+          )}
+        </div>
+      )}
+
+      {subTab === "insights" && (
+        <div className="rounded-lg border border-slate-200 bg-white p-4">
+          {selectedRecord && (selectedRecord.insights || []).length > 0 ? (
+            <ul className="list-disc list-inside space-y-2 text-sm text-slate-700">
+              {(selectedRecord.insights || []).map((ins, i) => (
+                <li key={i}>{ins}</li>
+              ))}
+            </ul>
+          ) : (
+            <p className="text-sm text-slate-500">No insights available. Generate intelligence first.</p>
+          )}
+        </div>
+      )}
+
+      {subTab === "recommendations" && (
+        <div className="rounded-lg border border-slate-200 bg-white p-4">
+          {selectedRecord && (selectedRecord.recommendations || []).length > 0 ? (
+            <ul className="list-disc list-inside space-y-2 text-sm text-slate-700">
+              {(selectedRecord.recommendations || []).map((rec, i) => (
+                <li key={i}>{rec}</li>
+              ))}
+            </ul>
+          ) : (
+            <p className="text-sm text-slate-500">No recommendations available. Generate intelligence first.</p>
+          )}
+        </div>
+      )}
+
+      {subTab === "correlations" && (
+        <div className="rounded-lg border border-slate-200 bg-white overflow-x-auto">
+          <table className="min-w-full text-sm">
+            <thead className="bg-slate-50">
+              <tr>
+                {["Lead ID", "Client ID", "Content Theme", "Hook Type", "Prompt Type", "Platform", "Score", "Strength"].map((h) => (
+                  <th key={h} className="px-3 py-2 text-left text-xs font-semibold text-slate-500">{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-100">
+              {filteredCorrelations.length === 0 ? (
+                <tr>
+                  <td colSpan={8} className="px-3 py-4 text-center text-slate-400 text-xs">
+                    No correlation records. Generate correlations for a client.
+                  </td>
+                </tr>
+              ) : (
+                filteredCorrelations.map((c, i) => (
+                  <tr key={c.id || i} className="hover:bg-slate-50">
+                    <td className="px-3 py-2 font-mono text-xs">{c.lead_id || "—"}</td>
+                    <td className="px-3 py-2 font-mono text-xs">{c.client_id || "—"}</td>
+                    <td className="px-3 py-2">{c.content_theme || "—"}</td>
+                    <td className="px-3 py-2">{c.hook_type || "—"}</td>
+                    <td className="px-3 py-2">{c.prompt_type || "—"}</td>
+                    <td className="px-3 py-2">{c.platform || "—"}</td>
+                    <td className="px-3 py-2">{c.performance_score ?? "—"}</td>
+                    <td className="px-3 py-2">
+                      <span className={[
+                        "rounded px-2 py-0.5 text-xs font-medium",
+                        c.correlation_strength === "strong" ? "bg-green-100 text-green-700" :
+                        c.correlation_strength === "moderate" ? "bg-yellow-100 text-yellow-700" :
+                        "bg-slate-100 text-slate-600",
+                      ].join(" ")}>
+                        {c.correlation_strength || "—"}
+                      </span>
+                    </td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {/* All records table */}
+      {subTab === "overview" && clientIntelligenceRecords.length > 0 && (
+        <div className="rounded-lg border border-slate-200 bg-white overflow-x-auto mt-4">
+          <div className="px-4 py-2 border-b border-slate-100 text-xs font-semibold text-slate-500">
+            All Intelligence Records ({clientIntelligenceRecords.length})
+          </div>
+          <table className="min-w-full text-sm">
+            <thead className="bg-slate-50">
+              <tr>
+                {["Client ID", "Perf Score", "Est. ROI", "Confidence", "Generated At"].map((h) => (
+                  <th key={h} className="px-3 py-2 text-left text-xs font-semibold text-slate-500">{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-100">
+              {clientIntelligenceRecords.map((r, i) => (
+                <tr key={r.id || i} className="hover:bg-slate-50">
+                  <td className="px-3 py-2 font-mono text-xs">{r.client_id || "—"}</td>
+                  <td className="px-3 py-2">{r.content_performance_score ?? "—"}</td>
+                  <td className="px-3 py-2">{r.estimated_roi ?? "—"}</td>
+                  <td className="px-3 py-2">{r.confidence_score ?? "—"}</td>
+                  <td className="px-3 py-2 text-xs">{r.generated_at || r.created_at || "—"}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // v8.5: Campaign Exports Section
 // ---------------------------------------------------------------------------
 function CampaignExportsSection({ campaignExports, campaignPacks, campaignReports, wsParam, onRefresh, showNotice }) {
@@ -3112,10 +3402,14 @@ export default function CreativeStudioPage({ activeWorkspace, refreshTrigger = 0
   // v8.5 state
   const [campaignExports, setCampaignExports] = useState([]);
 
+  // v9.5: Client Intelligence Layer
+  const [clientIntelligenceRecords, setClientIntelligenceRecords] = useState([]);
+  const [leadCorrelations, setLeadCorrelations] = useState([]);
+
   async function load() {
     setLoading(true);
     try {
-      const [briefData, draftData, profilesData, channelsData, contentData, snippetsData, assetsData, audioRunsData, transcriptRunsData, segmentsData, intakeData, promptGenData, assetRendersData, publishLogsData, perfRecordsData, perfSummariesData, campaignPacksData, campaignReportsData, campaignExportsData] = await Promise.all([
+      const [briefData, draftData, profilesData, channelsData, contentData, snippetsData, assetsData, audioRunsData, transcriptRunsData, segmentsData, intakeData, promptGenData, assetRendersData, publishLogsData, perfRecordsData, perfSummariesData, campaignPacksData, campaignReportsData, campaignExportsData, clientIntelligenceData, leadCorrelationsData] = await Promise.all([
         api.contentBriefs({ ...wsParam() }),
         api.contentDrafts({ ...wsParam() }),
         api.clientProfiles({ ...wsParam() }),
@@ -3135,6 +3429,8 @@ export default function CreativeStudioPage({ activeWorkspace, refreshTrigger = 0
         api.campaignPacks({ ...wsParam() }),
         api.campaignReports({ ...wsParam() }),
         api.campaignExports({ ...wsParam() }),
+        api.clientIntelligence({ ...wsParam() }),
+        api.leadContentCorrelations({ ...wsParam() }),
       ]);
       setBriefs(briefData.items || []);
       setDrafts(draftData.items || []);
@@ -3155,6 +3451,8 @@ export default function CreativeStudioPage({ activeWorkspace, refreshTrigger = 0
       setCampaignPacks(campaignPacksData.items || []);
       setCampaignReports(campaignReportsData.items || []);
       setCampaignExports(campaignExportsData.items || []);
+      setClientIntelligenceRecords(clientIntelligenceData.items || []);
+      setLeadCorrelations(leadCorrelationsData.items || []);
     } catch {
       // fail silently
     } finally {
@@ -3302,6 +3600,7 @@ export default function CreativeStudioPage({ activeWorkspace, refreshTrigger = 0
           { id: "performance-loop", label: `Performance Loop (${manualPublishLogs.length})` },
           { id: "campaign-packs", label: `Campaign Packs (${campaignPacks.length})` },
           { id: "campaign-exports", label: `Exports (${campaignExports.length})` },
+          { id: "client-intelligence", label: `Intelligence (${clientIntelligenceRecords.length})` },
         ].map(({ id, label }) => (
           <button
             key={id}
@@ -3766,6 +4065,19 @@ export default function CreativeStudioPage({ activeWorkspace, refreshTrigger = 0
           manualPublishLogs={manualPublishLogs}
           assetPerformanceRecords={assetPerformanceRecords}
           creativePerformanceSummaries={creativePerformanceSummaries}
+          wsParam={wsParam}
+          onRefresh={load}
+          showNotice={showNotice}
+        />
+      )}
+
+      {/* v9.5: CLIENT INTELLIGENCE section */}
+      {activeSection === "client-intelligence" && (
+        <ClientIntelligenceSection
+          clientIntelligenceRecords={clientIntelligenceRecords}
+          leadCorrelations={leadCorrelations}
+          clientProfiles={clientProfiles}
+          assetPerformanceRecords={assetPerformanceRecords}
           wsParam={wsParam}
           onRefresh={load}
           showNotice={showNotice}

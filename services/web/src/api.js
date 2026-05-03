@@ -480,6 +480,46 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ ...wsParam(), ...payload }),
     }),
+
+  // v9.5: Client Intelligence Layer
+  clientIntelligence: (params = {}) =>
+    request(`/client-intelligence?${new URLSearchParams({ ...wsParam(), ...params })}`),
+
+  getClientIntelligence: (clientId) =>
+    request(`/client-intelligence/${clientId}?${new URLSearchParams({ ...wsParam() })}`),
+
+  generateClientIntelligence: (clientId, payload = {}) =>
+    request(`/client-intelligence/${clientId}/generate`, {
+      method: "POST",
+      body: JSON.stringify({ ...wsParam(), ...payload }),
+    }),
+
+  leadContentCorrelations: (params = {}) =>
+    request(`/lead-content-correlations?${new URLSearchParams({ ...wsParam(), ...params })}`),
+
+  generateLeadContentCorrelations: (payload) =>
+    request("/lead-content-correlations/generate", {
+      method: "POST",
+      body: JSON.stringify({ ...wsParam(), ...payload }),
+    }),
+
+  patchClientProfileIntelligence: (clientId, payload) =>
+    request(`/client-profiles/${clientId}/intelligence`, {
+      method: "PATCH",
+      body: JSON.stringify({ ...wsParam(), ...payload }),
+    }),
+
+  linkCampaignPack: (packId, payload) =>
+    request(`/campaign-packs/${packId}/link`, {
+      method: "PATCH",
+      body: JSON.stringify({ ...wsParam(), ...payload }),
+    }),
+
+  patchAssetPerformanceIntelligence: (recordId, payload) =>
+    request(`/asset-performance-records/${recordId}/intelligence`, {
+      method: "PATCH",
+      body: JSON.stringify({ ...wsParam(), ...payload }),
+    }),
 };
 
 export { API_BASE_URL };

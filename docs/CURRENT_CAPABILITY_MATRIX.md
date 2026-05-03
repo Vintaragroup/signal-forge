@@ -310,3 +310,40 @@ Exporting a campaign pack does not publish, schedule, upload, or email anything.
 | No social API calls | ✅ | All data local-only |
 | No uploads | ✅ | Filesystem write only |
 | No email on approval | ✅ | Approval is human-review metadata only |
+
+---
+
+## v9.5 — Client Intelligence Layer
+
+| Capability | Status | Notes |
+|---|---|---|
+| `client_intelligence_records` collection | ✅ | Per-client aggregated intelligence |
+| `lead_content_correlations` collection | ✅ | Per-(theme, hook, prompt, platform) group |
+| `client_intelligence.py` module | ✅ | Pure-Python, rule-based, no ML, no external calls |
+| `calculate_estimated_roi()` | ✅ | avg_score × count × 12.5 — deterministic |
+| `identify_top_performers()` | ✅ | Counter + avg-score ranking |
+| `build_client_intelligence()` | ✅ | Full aggregation from local DB only |
+| `correlate_lead_to_content_patterns()` | ✅ | Groups by combo, assigns strong/moderate/weak |
+| `POST /client-intelligence/{client_id}/generate` | ✅ | Returns 201 |
+| `GET /client-intelligence` | ✅ | Filter: workspace_slug, client_id |
+| `GET /client-intelligence/{client_id}` | ✅ | Latest record for client |
+| `POST /lead-content-correlations/generate` | ✅ | Returns 201 |
+| `GET /lead-content-correlations` | ✅ | Filter: workspace_slug, lead_id, client_id |
+| `PATCH /client-profiles/{client_id}/intelligence` | ✅ | acquisition_score, conversion_status, etc. |
+| `PATCH /campaign-packs/{pack_id}/link` | ✅ | linked_lead_id, linked_deal_id |
+| `PATCH /asset-performance-records/{id}/intelligence` | ✅ | estimated_revenue_impact, funnel_stage_impact |
+| Frontend "Intelligence" tab | ✅ | 5 sub-sections: Overview, Top Performers, Insights, Recommendations, Correlations |
+| Workspace isolation | ✅ | 422 on mismatch |
+| Client isolation | ✅ | Filter enforced at every endpoint |
+| simulation_only on all records | ✅ | Always true, hardcoded in module |
+| advisory_only on all records | ✅ | Always true, hardcoded in module |
+| outbound_actions_taken = 0 | ✅ | Always 0, never incremented |
+| No external API calls | ✅ | All logic reads from local DB only |
+| No posting / scheduling / DMs | ✅ | Strict safety boundary maintained |
+| ROI deterministic formula | ✅ | avg_score × count × 12.5 |
+| Correlation strength: strong/moderate/weak | ✅ | ≥5.0 / ≥3.0 / <3.0 thresholds |
+| Confidence score from data volume | ✅ | 0.0 / 0.3 / 0.6 / 0.9 tiers |
+
+### v9.5 Safety Boundary
+
+All `client_intelligence_records` and `lead_content_correlations` records permanently carry `simulation_only: true`, `advisory_only: true`, and `outbound_actions_taken: 0`. No external API calls are made during intelligence generation. All intelligence is deterministic and rule-based — no ML, no randomness. Generating intelligence never modifies existing records. PATCH endpoints update metadata fields only and never trigger outbound actions.

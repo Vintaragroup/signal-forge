@@ -1540,3 +1540,48 @@ To persist exports across container restarts, mount a volume or set `SIGNALFORGE
 - Workspace and client cross-contamination is rejected at the API layer with 422
 - Safety notes are embedded in every export file and every API response
 - Human delivery (e.g., sending the file path to a client) is always a manual, out-of-band step
+
+---
+
+## Section 35 — v9.5: Client Intelligence Layer
+
+### What it does
+v9.5 introduces deterministic, advisory-only intelligence generation per client. It links acquisition data (leads, conversion status, acquisition score) to content performance outcomes (performance scores, hook types, prompt types, platforms) and produces structured insights and recommendations — all without any external API calls, posting, scheduling, or messaging.
+
+### Key workflows
+
+**Generate client intelligence:**
+1. Log performance records for the client (`POST /asset-performance-records`).
+2. Create campaign packs and generate reports for the client.
+3. Call `POST /client-intelligence/{client_id}/generate` to build the intelligence record.
+4. Review insights and recommendations in the "Intelligence" tab of Creative Studio.
+
+**Link acquisition data:**
+- `PATCH /client-profiles/{client_id}/intelligence` — set `source_lead_id`, `acquisition_score`, `conversion_status`, `conversion_date`, `lifetime_value_estimate`, `content_fit_score`.
+- `PATCH /campaign-packs/{pack_id}/link` — link a pack to a lead and/or deal, add `campaign_roi_estimate`.
+
+**Generate lead-content correlations:**
+1. Ensure performance records exist for the client.
+2. Call `POST /lead-content-correlations/generate` with `workspace_slug`, `client_id`, and optionally `lead_id`.
+3. Review correlation strength (strong ≥ 5.0 avg score, moderate ≥ 3.0, weak < 3.0) in the Correlations sub-tab.
+
+### API reference
+
+| Method | Endpoint | Purpose |
+|--------|----------|---------|
+| `POST` | `/client-intelligence/{client_id}/generate` | Generate intelligence record |
+| `GET`  | `/client-intelligence` | List records (filter: workspace_slug, client_id) |
+| `GET`  | `/client-intelligence/{client_id}` | Get latest record for client |
+| `POST` | `/lead-content-correlations/generate` | Generate correlation records |
+| `GET`  | `/lead-content-correlations` | List correlations (filter: workspace_slug, lead_id, client_id) |
+| `PATCH`| `/client-profiles/{client_id}/intelligence` | Update intelligence fields on client profile |
+| `PATCH`| `/campaign-packs/{pack_id}/link` | Link pack to lead/deal |
+| `PATCH`| `/asset-performance-records/{record_id}/intelligence` | Add revenue impact + funnel stage |
+
+### v9.5 Safety Boundary
+
+- All `client_intelligence_records` and `lead_content_correlations` records permanently carry `simulation_only: true`, `advisory_only: true`, and `outbound_actions_taken: 0`.
+- Generating intelligence is a read-only aggregation of local DB data — no external API calls, no modifications to existing records.
+- Insights and recommendations are text advisory output only. No automatic actions are triggered.
+- PATCH endpoints update metadata fields only — no outbound actions result from any PATCH.
+- Intelligence generation is deterministic: same inputs always produce the same outputs.
