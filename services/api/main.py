@@ -4168,20 +4168,31 @@ def create_transcript_run_v4(payload: TranscriptRunCreateRequest) -> dict:
             if audio_run:
                 audio_path = audio_run.get("output_path", "")
 
-        segments = provider.transcribe(
-            source_content_id=source_content_id,
-            audio_path=audio_path,
-            text_hint=clean_text(payload.text_hint),
-        )
+        # v7: wrap transcription in try/except — errors stored on the run record
+        transcript_error = ""
+        transcript_language = clean_text(payload.language) or "en"
+        try:
+            segments = provider.transcribe(
+                source_content_id=source_content_id,
+                audio_path=audio_path,
+                text_hint=clean_text(payload.text_hint),
+            )
+            run_status = "complete"
+        except Exception as exc:
+            segments = []
+            run_status = "failed"
+            transcript_error = str(exc)
 
         run_record: dict[str, Any] = {
             "workspace_slug": workspace_slug,
             "source_content_id": source_content_id,
             "audio_extraction_run_id": audio_run_id,
             "provider": provider.provider_name,
-            "language": clean_text(payload.language) or "en",
+            "language": transcript_language,
             "segment_count": len(segments),
-            "status": "complete",
+            "status": run_status,
+            "input_path": audio_path,
+            "error_message": transcript_error,
             "simulation_only": True,
             "outbound_actions_taken": 0,
             "created_at": now,
@@ -4210,6 +4221,13 @@ def create_transcript_run_v4(payload: TranscriptRunCreateRequest) -> dict:
             db.transcript_segments.insert_one(seg_record)
 
         created = db.transcript_runs.find_one({"_id": run_id})
+        if run_status == "failed":
+            return {
+                "item": serialize(created),
+                "segment_count": 0,
+                "message": f"Transcript run failed: {transcript_error}",
+                "simulation_only": True,
+            }
         return {
             "item": serialize(created),
             "segment_count": len(segments),
@@ -4337,6 +4355,34 @@ def generate_snippets_from_transcript_v4(
             }
             insert_res = db.content_snippets.insert_one(snippet_record)
             created = db.content_snippets.find_one({"_id": insert_res.inserted_id})
+
+            # v7: AUTO_SCORE_SNIPPETS — score immediately after creation if enabled
+            _auto_score = os.getenv("AUTO_SCORE_SNIPPETS", "false").lower() in (
+                "1", "true", "yes", "on"
+            )
+            if _auto_score and _score_snippet is not None and created:
+                try:
+                    score_result = _score_snippet(snippet_record["transcript_text"])
+                    score_update = {
+                        "hook_strength": score_result.hook_strength,
+                        "clarity_score": score_result.clarity_score,
+                        "emotional_impact": score_result.emotional_impact,
+                        "shareability_score": score_result.shareability_score,
+                        "platform_fit_score": score_result.platform_fit_score,
+                        "overall_score": score_result.overall_score,
+                        "hook_text": score_result.hook_text,
+                        "hook_type": score_result.hook_type,
+                        "alternative_hooks": score_result.alternative_hooks,
+                        "scored_at": now,
+                    }
+                    db.content_snippets.update_one(
+                        {"_id": insert_res.inserted_id},
+                        {"$set": score_update},
+                    )
+                    created = db.content_snippets.find_one({"_id": insert_res.inserted_id})
+                except Exception:
+                    pass  # auto-scoring failure must not block snippet creation
+
             created_snippets.append(serialize(created))
 
         return {

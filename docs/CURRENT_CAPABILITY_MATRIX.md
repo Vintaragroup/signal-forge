@@ -203,3 +203,24 @@ All v5.5 guarantees are preserved. ComfyUI calls are made only to the local endp
 ### v6.5 Safety Boundary
 
 All v6 guarantees are preserved. `snippet_scorer.py` uses only Python stdlib (`re`, `dataclasses`) — no network calls, no external APIs, no LLM calls. Scoring is fully deterministic and local. `simulation_only: true` and `outbound_actions_taken: 0` are maintained on all new code paths (score endpoint, score gate, prompt hook injection). The score gate is opt-in — it only fires once a snippet has been explicitly scored; existing unscored snippets are unaffected.
+
+---
+
+## Social Creative Engine v7 — Real Local Transcription Provider
+
+| Capability | Dashboard-supported | Simulated | Manual | Real/local | Notes |
+|---|---|---|---|---|---|
+| WhisperTranscriptProvider | No | N/A | N/A | Yes | Fully on-device using `openai-whisper`. No audio sent to external services. Requires `TRANSCRIPT_PROVIDER=whisper` AND `TRANSCRIPT_LIVE_ENABLED=true`. Falls back to stub if either gate missing. |
+| StubTranscriptProvider (default) | Yes | Yes | N/A | N/A | Always enabled; produces deterministic synthetic segments. Default when no gates are set. |
+| Double gate safety | N/A | N/A | N/A | Yes | Two independent env vars required to activate Whisper: `TRANSCRIPT_PROVIDER=whisper` + `TRANSCRIPT_LIVE_ENABLED=true`. Any misconfiguration silently falls back to stub. |
+| Audio file validation | N/A | N/A | N/A | Yes | `os.path.isfile()` checked before transcription. Missing file → `status=failed`, `error_message` stored. No crash. |
+| Transcript run error handling | Yes | N/A | N/A | Yes | All provider exceptions caught. Failed runs stored with `status=failed`, `error_message`, `segment_count=0`. |
+| `input_path` field on run | No | N/A | N/A | Yes | Path to audio file used for transcription stored on `transcript_run` record. |
+| `error_message` field on run | Yes | N/A | N/A | Yes | Populated on failure; empty string on success. Displayed in frontend Ingest Pipeline tab. |
+| AUTO_SCORE_SNIPPETS | No | N/A | N/A | Yes | When `AUTO_SCORE_SNIPPETS=true`, each snippet from `/generate-snippets/v4` is auto-scored immediately. Scoring failure is non-fatal. |
+| Ingest Pipeline transcript status | Yes | N/A | N/A | N/A | Shows provider badge, status badge, segment count, and error message panel per content item. |
+| WHISPER_MODEL env var | N/A | N/A | N/A | Yes | Controls model size: tiny/base/small/medium/large. Default: base. |
+
+### v7 Safety Boundary
+
+All v6.5 guarantees are preserved. `openai-whisper` is a local Python library — no audio data leaves the machine. No external API keys, no network calls during transcription. The double gate (`TRANSCRIPT_PROVIDER=whisper` AND `TRANSCRIPT_LIVE_ENABLED=true`) ensures stub mode is the safe default for any misconfiguration. `simulation_only: true` and `outbound_actions_taken: 0` on all transcript runs, segments, and auto-scored snippets. No social API calls, no posting, no scheduling, no avatar/voice cloning.

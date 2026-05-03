@@ -1189,6 +1189,26 @@ function IngestPipelineSection({
                   </span>
                   {latestRun && (
                     <span>
+                      <span className="font-medium text-slate-600">Provider:</span>{" "}
+                      <span className={latestRun.provider === "whisper" ? "text-indigo-600 font-semibold" : "text-slate-500"}>
+                        {latestRun.provider ?? "stub"}
+                      </span>
+                    </span>
+                  )}
+                  {latestRun && (
+                    <span>
+                      <span className="font-medium text-slate-600">Status:</span>{" "}
+                      <span className={
+                        latestRun.status === "complete" ? "text-green-600" :
+                        latestRun.status === "failed" ? "text-red-600" :
+                        "text-amber-600"
+                      }>
+                        {latestRun.status ?? "unknown"}
+                      </span>
+                    </span>
+                  )}
+                  {latestRun && (
+                    <span>
                       <span className="font-medium text-slate-600">Segments:</span>{" "}
                       <span className="text-green-600">{segs.length}</span>
                     </span>
@@ -1198,6 +1218,11 @@ function IngestPipelineSection({
                     <span className={snippetCount > 0 ? "text-emerald-600" : "text-slate-400"}>{snippetCount}</span>
                   </span>
                 </div>
+                {latestRun?.error_message && (
+                  <div className="rounded bg-red-50 border border-red-200 px-3 py-2 text-xs text-red-700">
+                    <span className="font-semibold">Transcription error:</span> {latestRun.error_message}
+                  </div>
+                )}
               </div>
             );
           })}

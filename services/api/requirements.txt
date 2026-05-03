@@ -5,3 +5,7 @@ pymongo>=4.6,<5
 pytest>=8,<9
 httpx>=0.27,<1
 redis>=5,<6
+# v7: local Whisper transcription (runs entirely on-device, no external calls)
+# Requires ffmpeg on PATH (already installed in Docker image)
+# Gate: TRANSCRIPT_PROVIDER=whisper AND TRANSCRIPT_LIVE_ENABLED=true
+openai-whisper>=20231117

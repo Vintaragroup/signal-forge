@@ -289,6 +289,15 @@ v5 adds a rendering pipeline on top of the v4.5 prompt approval layer. An approv
 - Unscored snippets bypass the gate — fully backwards compatible with v6 and earlier.
 - `SNIPPET_SCORE_THRESHOLD` env var (default `6.0`) controls the quality gate.
 
+**v7 — Real Local Transcription:**
+- `transcript_provider.py`: opt-in real transcription via `openai-whisper` (fully on-device, no external calls).
+- Double gate: `TRANSCRIPT_PROVIDER=whisper` AND `TRANSCRIPT_LIVE_ENABLED=true` both required; defaults silently to stub.
+- `WhisperTranscriptProvider` validates the audio file path, loads the configured model (`WHISPER_MODEL`, default `base`), and returns typed segments with `start_ms`, `end_ms`, `text`, `speaker`, `confidence`, `index`, `provider`.
+- `POST /transcript-runs/v4` records `input_path`, `status` (`complete`/`failed`), `error_message`, and all segments in MongoDB.
+- `AUTO_SCORE_SNIPPETS=true` automatically runs v6.5 snippet scoring after snippet generation — no extra API call needed.
+- Frontend Ingest Pipeline tab: provider badge (whisper/stub), run status badge, segment count, inline error message panel.
+- FFmpeg is already installed in the Docker image from v5.5; `openai-whisper` is installed from `requirements.txt` — no new container needed.
+
 **Safety:**
 - Both snippet AND prompt_generation must be `status='approved'` before any render can start.
 - All renders start as `status: needs_review` — no auto-publish path exists.

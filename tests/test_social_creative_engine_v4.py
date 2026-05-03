@@ -838,12 +838,12 @@ def test_stub_extractor_returns_skipped():
 # ---------------------------------------------------------------------------
 
 
-def test_whisper_provider_raises_not_implemented():
-    """WhisperTranscriptProvider.transcribe() raises NotImplementedError."""
+def test_whisper_provider_requires_audio_path():
+    """WhisperTranscriptProvider.transcribe() raises ValueError when no audio_path given (v7)."""
     from transcript_provider import WhisperTranscriptProvider
 
     provider = WhisperTranscriptProvider()
-    with pytest.raises(NotImplementedError):
+    with pytest.raises(ValueError, match="audio_path is required"):
         provider.transcribe("content-1")
 
 

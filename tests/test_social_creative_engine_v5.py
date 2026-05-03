@@ -51,18 +51,18 @@ except ImportError:
     assemble_video = _vmod.assemble_video
     VideoAssemblyResult = _vmod.VideoAssemblyResult
 
-# Import comfyui_client directly for unit tests
+# Import comfyui_client directly for unit tests.
+# Load agents/comfyui_client.py via importlib to avoid polluting sys.modules["comfyui_client"]
+# (which must remain pointing to services/api/comfyui_client.py for other tests).
 try:
-    sys.path.insert(0, str(Path(__file__).parent.parent / "agents"))
-    from comfyui_client import ComfyUIClient
-except ImportError:
-    import importlib.util
-    spec = importlib.util.spec_from_file_location(
-        "comfyui_client", "/app/agents/comfyui_client.py"
-    )
-    _cmod = importlib.util.module_from_spec(spec)  # type: ignore[arg-type]
-    spec.loader.exec_module(_cmod)  # type: ignore[union-attr]
-    ComfyUIClient = _cmod.ComfyUIClient
+    import importlib.util as _ilu
+    _agents_comfyui_path = str(Path(__file__).parent.parent / "agents" / "comfyui_client.py")
+    _agents_spec = _ilu.spec_from_file_location("agents.comfyui_client", _agents_comfyui_path)
+    _agents_cmod = _ilu.module_from_spec(_agents_spec)  # type: ignore[arg-type]
+    _agents_spec.loader.exec_module(_agents_cmod)  # type: ignore[union-attr]
+    ComfyUIClient = _agents_cmod.ComfyUIClient
+except Exception:
+    ComfyUIClient = None  # type: ignore[assignment,misc]
 
 
 # ---------------------------------------------------------------------------

@@ -129,6 +129,44 @@ docker compose up -d
 
 > The api and worker containers share the same Dockerfile but produce separate images. Rebuilding `api` does not rebuild `worker`.
 
+## v7 Rebuild Requirements / Whisper Notes
+
+`openai-whisper` is installed from `requirements.txt` during the Docker build — no separate container or service is required. It runs inside the existing `signalforge-api` container. FFmpeg is already present from v5.5.
+
+When updating `transcript_provider.py`, `main.py`, or `requirements.txt`, rebuild both images:
+
+```bash
+docker compose build --no-cache api worker
+docker compose up -d
+```
+
+**Verify Whisper is importable:**
+```bash
+docker compose exec api python -c "import whisper; print(whisper.__version__)"
+```
+
+**First-use model download:** The Whisper `base` model (~140 MB) is downloaded from the internet on first transcription call. Pre-warm it in a running container to avoid latency on first request:
+```bash
+docker compose exec api python -c "import whisper; whisper.load_model('base')"
+```
+
+**Available model sizes** (trade-off: accuracy vs. RAM/speed):
+
+| WHISPER_MODEL | VRAM  | Relative speed |
+|---------------|-------|----------------|
+| tiny          | ~1 GB | fastest        |
+| base          | ~1 GB | fast (default) |
+| small         | ~2 GB | moderate       |
+| medium        | ~5 GB | slow           |
+| large         | ~10 GB| slowest        |
+
+**Enabling live transcription** (both env vars required):
+```bash
+TRANSCRIPT_PROVIDER=whisper
+TRANSCRIPT_LIVE_ENABLED=true
+```
+If either gate is absent, the provider silently falls back to stub mode. No rebuild is needed to change these env vars — a container restart (`docker compose up -d`) is sufficient.
+
 ## ComfyUI Integration (v6)
 
 ComfyUI generates the background image that is fed into FFmpeg assembly. It is **disabled by default** and runs behind a Docker profile.
