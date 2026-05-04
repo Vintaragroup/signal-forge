@@ -18,6 +18,8 @@ x-signalforge-env: &signalforge-env
   REDIS_URL: ${REDIS_URL:-redis://redis:6379}
   FFMPEG_ENABLED: ${FFMPEG_ENABLED:-true}
   FFMPEG_OUTPUT_DIR: ${FFMPEG_OUTPUT_DIR:-/tmp/signalforge_renders}
+  # E2E testing — lower snippet score threshold (restore to 6 after E2E)
+  SNIPPET_SCORE_THRESHOLD: ${SNIPPET_SCORE_THRESHOLD:-6}
 
 services:
   mongo:
