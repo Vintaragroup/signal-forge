@@ -75,8 +75,12 @@ class FakeCollection:
     def __init__(self, docs=None):
         self._docs = list(docs or [])
 
-    def find(self, *_, **__):
-        return FakeCursor(self._docs)
+    def find(self, query=None, *_, **__):
+        if not query:
+            return FakeCursor(self._docs)
+        # Simple equality filter (sufficient for unit tests)
+        results = [d for d in self._docs if all(d.get(k) == v for k, v in query.items())]
+        return FakeCursor(results)
 
     def find_one(self, *_, **__):
         return self._docs[0] if self._docs else None
@@ -95,6 +99,7 @@ class FakeDatabase:
         self.media_folder_scans = FakeCollection()
         self.media_intake_records = FakeCollection()
         self.approved_url_downloads = FakeCollection()
+        self.client_profiles = FakeCollection()
 
     def __getattr__(self, name):
         return FakeCollection()
@@ -668,3 +673,126 @@ def test_scan_result_no_external_calls(monkeypatch, tmp_path):
     for cmd in calls:
         cmd_str = " ".join(str(c) for c in (cmd if isinstance(cmd, list) else [cmd]))
         assert "http" not in cmd_str, f"Unexpected network call in scan: {cmd_str}"
+
+
+# ---------------------------------------------------------------------------
+# v10.4.1 — Client display tests (client_name in dropdowns)
+# These tests cover API-level behavior: client_profiles must expose client_name
+# ---------------------------------------------------------------------------
+
+
+def _make_client(name: str, ws: str = REAL_WS) -> dict:
+    return {"_id": ObjectId(), "client_name": name, "workspace_slug": ws, "created_at": NOW}
+
+
+def test_api_client_profiles_returns_client_name():
+    """GET /client-profiles returns client_name field (not just _id)."""
+    clients = [_make_client("John Maxwell"), _make_client("Test Client")]
+    db = FakeDatabase()
+    db.client_profiles = FakeCollection(clients)
+
+    with (
+        patch("main.get_client", return_value=MagicMock()),
+        patch("main.get_database", return_value=db),
+    ):
+        resp = client.get(f"/client-profiles?workspace_slug={REAL_WS}")
+
+    assert resp.status_code == 200
+    items = resp.json()["items"]
+    assert len(items) == 2
+    names = {i["client_name"] for i in items}
+    assert "John Maxwell" in names
+    assert "Test Client" in names
+
+
+def test_api_client_profiles_workspace_filtering():
+    """GET /client-profiles only returns clients for the requested workspace."""
+    clients = [
+        _make_client("John Maxwell", REAL_WS),
+        _make_client("Other Client", "other-ws"),
+    ]
+    db = FakeDatabase()
+    db.client_profiles = FakeCollection(clients)
+
+    with (
+        patch("main.get_client", return_value=MagicMock()),
+        patch("main.get_database", return_value=db),
+    ):
+        resp = client.get(f"/client-profiles?workspace_slug={REAL_WS}")
+
+    items = resp.json()["items"]
+    assert all(i["workspace_slug"] == REAL_WS for i in items)
+    assert len(items) == 1
+    assert items[0]["client_name"] == "John Maxwell"
+
+
+def test_api_client_profiles_no_clients_returns_empty_list():
+    """GET /client-profiles returns empty list when workspace has no clients."""
+    db = FakeDatabase()
+    db.client_profiles = FakeCollection([])
+
+    with (
+        patch("main.get_client", return_value=MagicMock()),
+        patch("main.get_database", return_value=db),
+    ):
+        resp = client.get(f"/client-profiles?workspace_slug={REAL_WS}")
+
+    assert resp.status_code == 200
+    assert resp.json()["items"] == []
+
+
+def test_api_folder_scan_uses_client_id_from_request():
+    """POST /media-folder-scans stores client_id (not client_name) on the scan record."""
+    client_doc = _make_client("John Maxwell")
+    client_id = str(client_doc["_id"])
+
+    db = FakeDatabase()
+    mongo_mock = MagicMock()
+
+    import tempfile, os
+    with tempfile.TemporaryDirectory() as tmp:
+        open(os.path.join(tmp, "test.mp4"), "wb").write(b"\x00" * 100)
+        with (
+            patch("main.get_client", return_value=mongo_mock),
+            patch("main.get_database", return_value=db),
+            patch("media_folder_scanner._safe_ffprobe_duration", return_value=None),
+        ):
+            resp = client.post("/media-folder-scans", json={
+                "workspace_slug": REAL_WS,
+                "client_id": client_id,
+                "folder_path": tmp,
+            })
+
+    assert resp.status_code == 200
+    # Verify client_id (not client_name) sent in request is stored
+    stored = db.media_folder_scans._docs
+    assert len(stored) == 1
+    assert stored[0]["client_id"] == client_id
+
+
+def test_api_url_download_sends_client_id_not_name(monkeypatch):
+    """POST /approved-url-downloads stores client_id (not client_name) on the record."""
+    monkeypatch.setenv("YTDLP_ENABLED", "false")
+    client_doc = _make_client("John Maxwell")
+    client_id = str(client_doc["_id"])
+
+    db = FakeDatabase()
+    mongo_mock = MagicMock()
+
+    with (
+        patch("main.get_client", return_value=mongo_mock),
+        patch("main.get_database", return_value=db),
+    ):
+        resp = client.post("/approved-url-downloads", json={
+            "workspace_slug": REAL_WS,
+            "client_id": client_id,
+            "url": "https://www.youtube.com/watch?v=test",
+            "permission_confirmed": True,
+            "requested_format": "video",
+            "notes": "",
+        })
+
+    assert resp.status_code == 200
+    stored = db.approved_url_downloads._docs
+    assert len(stored) == 1
+    assert stored[0]["client_id"] == client_id

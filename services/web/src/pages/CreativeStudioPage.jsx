@@ -2047,7 +2047,7 @@ function CampaignPacksSection({
             <select className="mt-0.5 w-full rounded border px-2 py-1 text-sm" value={packClient} onChange={(e) => setPackClient(e.target.value)}>
               <option value="">— No client —</option>
               {clientProfiles.map((c) => (
-                <option key={c.id} value={c.id}>{c.name || c.id}</option>
+                <option key={c._id} value={c._id}>{c.client_name || c._id}</option>
               ))}
             </select>
           </div>
@@ -3401,6 +3401,20 @@ function MediaIngestionSection({ mediaFolderScans, approvedUrlDownloads, mediaIn
   const [dlResult, setDlResult] = useState(null);
   const [dlError, setDlError] = useState("");
 
+  // Filter clients to the active workspace and auto-select when there's only one
+  const ws = wsParam();
+  const filteredClients = ws.workspace_slug
+    ? clientProfiles.filter((c) => c.workspace_slug === ws.workspace_slug)
+    : clientProfiles;
+
+  useEffect(() => {
+    if (filteredClients.length === 1) {
+      const id = filteredClients[0]._id;
+      setFolderClientId((prev) => prev || id);
+      setDlClientId((prev) => prev || id);
+    }
+  }, [filteredClients.length]);
+
   const ingestionIntakeRecords = mediaIntakeRecords.filter(
     (r) => r.intake_method === "local_folder_scan" || r.intake_method === "yt_dlp"
   );
@@ -3523,11 +3537,20 @@ function MediaIngestionSection({ mediaFolderScans, approvedUrlDownloads, mediaIn
                     onChange={(e) => setFolderClientId(e.target.value)}
                     className="w-full rounded-lg border border-slate-200 px-2 py-2 text-sm text-slate-700 outline-none focus:border-blue-300"
                   >
-                    <option value="">— Select client —</option>
-                    {clientProfiles.map((c) => (
-                      <option key={c._id} value={c._id}>{c.name || c._id}</option>
-                    ))}
+                    {filteredClients.length === 0 ? (
+                      <option value="" disabled>No clients in this workspace</option>
+                    ) : (
+                      <>
+                        <option value="">— Select client —</option>
+                        {filteredClients.map((c) => (
+                          <option key={c._id} value={c._id}>{c.client_name || c._id}</option>
+                        ))}
+                      </>
+                    )}
                   </select>
+                  {filteredClients.length === 0 && (
+                    <p className="mt-1 text-xs text-amber-600">No clients found in this workspace. Create a client profile first.</p>
+                  )}
                 </div>
                 <div>
                   <label className="block text-xs font-medium text-slate-700 mb-1">Ingestion Source</label>
@@ -3634,11 +3657,20 @@ function MediaIngestionSection({ mediaFolderScans, approvedUrlDownloads, mediaIn
                     onChange={(e) => setDlClientId(e.target.value)}
                     className="w-full rounded-lg border border-slate-200 px-2 py-2 text-sm text-slate-700 outline-none focus:border-blue-300"
                   >
-                    <option value="">— Select client —</option>
-                    {clientProfiles.map((c) => (
-                      <option key={c._id} value={c._id}>{c.name || c._id}</option>
-                    ))}
+                    {filteredClients.length === 0 ? (
+                      <option value="" disabled>No clients in this workspace</option>
+                    ) : (
+                      <>
+                        <option value="">— Select client —</option>
+                        {filteredClients.map((c) => (
+                          <option key={c._id} value={c._id}>{c.client_name || c._id}</option>
+                        ))}
+                      </>
+                    )}
                   </select>
+                  {filteredClients.length === 0 && (
+                    <p className="mt-1 text-xs text-amber-600">No clients found in this workspace. Create a client profile first.</p>
+                  )}
                 </div>
                 <div>
                   <label className="block text-xs font-medium text-slate-700 mb-1">Format</label>
