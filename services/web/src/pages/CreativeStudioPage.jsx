@@ -12,6 +12,7 @@ import {
 } from "lucide-react";
 import { api, getAppWorkspace } from "../api.js";
 import DemoPageBanner from "../components/DemoPageBanner.jsx";
+import PocDemoTab from "../components/PocDemoTab.jsx";
 import StatusBadge from "../components/StatusBadge.jsx";
 
 // ---------------------------------------------------------------------------
@@ -3601,6 +3602,7 @@ export default function CreativeStudioPage({ activeWorkspace, refreshTrigger = 0
           { id: "campaign-packs", label: `Campaign Packs (${campaignPacks.length})` },
           { id: "campaign-exports", label: `Exports (${campaignExports.length})` },
           { id: "client-intelligence", label: `Intelligence (${clientIntelligenceRecords.length})` },
+          { id: "poc-demo", label: demoMode ? "POC Demo ✦" : "POC Demo" },
         ].map(({ id, label }) => (
           <button
             key={id}
@@ -4093,6 +4095,14 @@ export default function CreativeStudioPage({ activeWorkspace, refreshTrigger = 0
           wsParam={wsParam}
           onRefresh={load}
           showNotice={showNotice}
+        />
+      )}
+
+      {/* v10: POC DEMO section */}
+      {activeSection === "poc-demo" && (
+        <PocDemoTab
+          demoMode={demoMode}
+          onNavigate={(section) => setActiveSection(section)}
         />
       )}
 

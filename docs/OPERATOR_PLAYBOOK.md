@@ -1585,3 +1585,54 @@ v9.5 introduces deterministic, advisory-only intelligence generation per client.
 - Insights and recommendations are text advisory output only. No automatic actions are triggered.
 - PATCH endpoints update metadata fields only — no outbound actions result from any PATCH.
 - Intelligence generation is deterministic: same inputs always produce the same outputs.
+
+---
+
+## v10 — POC Demo Mode (13-Step Walkthrough)
+
+### Overview
+
+The v10 POC Demo tab provides a guided, self-contained walkthrough of the full SignalForge pipeline. All data is seeded into browser localStorage — no backend writes occur at any step.
+
+### Running a Demo
+
+1. Switch to **Demo Mode** (purple button in top-right header).
+2. Open **Creative Studio** from the sidebar.
+3. Click the **POC Demo ✦** tab.
+4. Click **Start Demo** to begin Step 1.
+5. Use **Next Step**, **Previous Step**, or the step dots to navigate.
+6. Each step has a **CTA** button — click it to open the relevant section and inspect seeded records.
+7. After Step 13, click **Reset Demo** to restore seed data for a fresh run.
+
+### What each step proves
+
+| Step | Proves | Section |
+|------|--------|--------|
+| 1–2 | Client profile isolation + multi-client support | clients |
+| 3 | Source channel ingestion | source-channels |
+| 4 | Approved source content records | source-content |
+| 5 | Transcript ingest pipeline | ingest |
+| 6 | Snippet scoring + approval | snippets |
+| 7 | GPT prompt generation review | prompts |
+| 8 | Asset render pipeline | renders |
+| 9 | Publish log → performance record loop | performance-loop |
+| 10–11 | Campaign pack assembly + report approval | campaign-packs |
+| 12 | Local-only export delivery | campaign-exports |
+| 13 | AI-advisory client intelligence | client-intelligence |
+
+### Safety invariants
+
+- **No MongoDB writes** — all state lives in `localStorage` only.
+- **No outbound actions** — no publishing, scheduling, emailing, or API calls to social platforms.
+- **No fetch calls on read** — demo branches return localStorage data directly, never hitting the backend.
+- Every demo record: `simulation_only: true`, `outbound_actions_taken: 0`, `is_demo: true`.
+- Intelligence / correlation records additionally: `advisory_only: true`.
+- Real Mode endpoints never return `is_demo: true` records.
+
+### Transitioning to Real Mode
+
+After completing the POC demo with a prospect:
+1. Switch to Real Mode (click the purple header button).
+2. Import real contacts via the Contacts page.
+3. Follow the standard onboarding workflow in this playbook from the beginning.
+4. Demo data is invisible in Real Mode — no cleanup required.

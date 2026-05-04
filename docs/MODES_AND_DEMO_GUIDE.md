@@ -107,3 +107,51 @@ Items auto-check based on KPI counts from the current session state.
 ## Settings / Help Section
 
 The bottom of the Overview page contains a **Mode Reference** card that explains both modes side-by-side and links to this guide. It is always visible regardless of current mode.
+
+---
+
+## v10 POC Demo Mode — 13-Step Guided Walkthrough
+
+The **POC Demo** tab inside Creative Studio provides a guided, step-by-step walkthrough of the full SignalForge pipeline — designed for client demos, investor presentations, and operator onboarding.
+
+### How to access
+1. Switch to Demo Mode (purple header button).
+2. Open **Creative Studio** from the sidebar.
+3. Select the **POC Demo ✦** tab in the section tab bar.
+4. Click **Start Demo** to begin at Step 1.
+
+### The 13 steps
+
+| Step | Section | What it proves |
+|------|---------|----------------|
+| 1 | Client Profiles | Client workspace isolation + profile safety |
+| 2 | Client Profiles | Multi-client support |
+| 3 | Source Channels | Source channel tracking |
+| 4 | Source Content | Approved source content records |
+| 5 | Ingest Pipeline | Transcript extraction workflow |
+| 6 | Snippets | Snippet scoring + approval queue |
+| 7 | Prompt Library | GPT prompt generation review |
+| 8 | Rendered Assets | Asset render pipeline |
+| 9 | Performance Loop | Publish log → performance record |
+| 10 | Campaign Packs | Full pipeline pack assembly |
+| 11 | Campaign Packs | Report generation + approval |
+| 12 | Campaign Exports | Local-only export delivery |
+| 13 | Client Intelligence | AI-advisory intelligence layer |
+
+### Navigation controls
+- **Next Step** / **Previous Step** buttons advance or retreat through the walkthrough.
+- **Jump to Step** dropdown allows non-linear navigation.
+- Each step card shows a **CTA button** that opens the relevant section to inspect live demo data.
+- A **step dot bar** at the bottom shows progress across all 13 steps.
+
+### Reset
+- Click **Reset Demo** on the POC Demo tab to restore all seed data and return to Step 1.
+- Reset does not affect Real Mode data.
+
+### Safety
+- The POC Demo walkthrough **never calls any API write method**.
+- No MongoDB writes occur at any step.
+- No content is published, scheduled, emailed, or uploaded.
+- All demo records carry `simulation_only: true` and `outbound_actions_taken: 0`.
+- Intelligence and correlation records additionally carry `advisory_only: true`.
+- Switching to Real Mode hides all demo records — real data is never polluted.

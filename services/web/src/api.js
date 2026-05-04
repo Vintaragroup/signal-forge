@@ -396,22 +396,30 @@ export const api = {
 
   // --- Social Creative Engine v7.5 ---
   manualPublishLogs: (params = {}) =>
-    request(`/manual-publish-logs?${new URLSearchParams({ ...wsParam(), ...params })}`),
+    isDemoModeEnabled()
+      ? Promise.resolve({ items: demoItems("manual_publish_logs"), simulation_only: true })
+      : request(`/manual-publish-logs?${new URLSearchParams({ ...wsParam(), ...params })}`),
 
   createManualPublishLog: (payload) =>
-    request("/manual-publish-logs", {
-      method: "POST",
-      body: JSON.stringify({ ...wsParam(), ...payload }),
-    }),
+    isDemoModeEnabled()
+      ? Promise.resolve({ item: { ...payload, _id: "demo-publog-new", simulation_only: true, outbound_actions_taken: 0, is_demo: true }, message: "Demo publish log recorded. SignalForge did not publish or schedule anything.", simulation_only: true })
+      : request("/manual-publish-logs", {
+          method: "POST",
+          body: JSON.stringify({ ...wsParam(), ...payload }),
+        }),
 
   assetPerformanceRecords: (params = {}) =>
-    request(`/asset-performance-records?${new URLSearchParams({ ...wsParam(), ...params })}`),
+    isDemoModeEnabled()
+      ? Promise.resolve({ items: demoItems("asset_performance_records"), simulation_only: true })
+      : request(`/asset-performance-records?${new URLSearchParams({ ...wsParam(), ...params })}`),
 
   createAssetPerformanceRecord: (payload) =>
-    request("/asset-performance-records", {
-      method: "POST",
-      body: JSON.stringify({ ...wsParam(), ...payload }),
-    }),
+    isDemoModeEnabled()
+      ? Promise.resolve({ item: { ...payload, _id: "demo-perf-new", simulation_only: true, outbound_actions_taken: 0, is_demo: true }, message: "Demo performance record stored. Advisory only.", simulation_only: true })
+      : request("/asset-performance-records", {
+          method: "POST",
+          body: JSON.stringify({ ...wsParam(), ...payload }),
+        }),
 
   importPerformanceCSV: (payload) =>
     request("/asset-performance-records/import-csv", {
@@ -420,88 +428,126 @@ export const api = {
     }),
 
   creativePerformanceSummaries: (params = {}) =>
-    request(`/creative-performance-summaries?${new URLSearchParams({ ...wsParam(), ...params })}`),
+    isDemoModeEnabled()
+      ? Promise.resolve({ items: demoItems("creative_performance_summaries"), simulation_only: true })
+      : request(`/creative-performance-summaries?${new URLSearchParams({ ...wsParam(), ...params })}`),
 
   generateCreativePerformanceSummary: (payload) =>
-    request("/creative-performance-summaries/generate", {
-      method: "POST",
-      body: JSON.stringify({ ...wsParam(), ...payload }),
-    }),
+    isDemoModeEnabled()
+      ? Promise.resolve({ item: (demoItems("creative_performance_summaries")[0] || {}), message: "Demo summary generated. Recommendations are advisory only.", simulation_only: true })
+      : request("/creative-performance-summaries/generate", {
+          method: "POST",
+          body: JSON.stringify({ ...wsParam(), ...payload }),
+        }),
 
   performanceRecommendations: (params = {}) =>
-    request(`/creative-performance-summaries/recommendations?${new URLSearchParams({ ...wsParam(), ...params })}`),
+    isDemoModeEnabled()
+      ? Promise.resolve({ items: (demoItems("creative_performance_summaries")[0] || {}).recommendations || [], simulation_only: true })
+      : request(`/creative-performance-summaries/recommendations?${new URLSearchParams({ ...wsParam(), ...params })}`),
 
   // v8: Campaign Packs
   campaignPacks: (params = {}) =>
-    request(`/campaign-packs?${new URLSearchParams({ ...wsParam(), ...params })}`),
+    isDemoModeEnabled()
+      ? Promise.resolve({ items: demoItems("campaign_packs"), simulation_only: true })
+      : request(`/campaign-packs?${new URLSearchParams({ ...wsParam(), ...params })}`),
 
   createCampaignPack: (payload) =>
-    request("/campaign-packs", {
-      method: "POST",
-      body: JSON.stringify({ ...wsParam(), ...payload }),
-    }),
+    isDemoModeEnabled()
+      ? Promise.resolve({ item: { ...payload, _id: "demo-pack-new", status: "draft", simulation_only: true, outbound_actions_taken: 0, is_demo: true }, message: "Demo campaign pack created.", simulation_only: true })
+      : request("/campaign-packs", {
+          method: "POST",
+          body: JSON.stringify({ ...wsParam(), ...payload }),
+        }),
 
   getCampaignPack: (id) =>
-    request(`/campaign-packs/${id}`),
+    isDemoModeEnabled()
+      ? Promise.resolve({ item: demoItems("campaign_packs").find((p) => p._id === id) || {} })
+      : request(`/campaign-packs/${id}`),
 
   addCampaignPackItem: (packId, payload) =>
-    request(`/campaign-packs/${packId}/items`, {
-      method: "POST",
-      body: JSON.stringify({ ...wsParam(), ...payload }),
-    }),
+    isDemoModeEnabled()
+      ? Promise.resolve({ message: "Demo item added to pack. No external actions.", simulation_only: true })
+      : request(`/campaign-packs/${packId}/items`, {
+          method: "POST",
+          body: JSON.stringify({ ...wsParam(), ...payload }),
+        }),
 
   generateCampaignReport: (packId) =>
-    request(`/campaign-packs/${packId}/generate-report`, { method: "POST", body: "{}" }),
+    isDemoModeEnabled()
+      ? Promise.resolve({ item: (demoItems("campaign_reports")[0] || {}), message: "Demo report generated. Advisory only.", simulation_only: true })
+      : request(`/campaign-packs/${packId}/generate-report`, { method: "POST", body: "{}" }),
 
   campaignReports: (params = {}) =>
-    request(`/campaign-reports?${new URLSearchParams({ ...wsParam(), ...params })}`),
+    isDemoModeEnabled()
+      ? Promise.resolve({ items: demoItems("campaign_reports"), simulation_only: true })
+      : request(`/campaign-reports?${new URLSearchParams({ ...wsParam(), ...params })}`),
 
   reviewCampaignReport: (reportId, payload) =>
-    request(`/campaign-reports/${reportId}/review`, {
-      method: "POST",
-      body: JSON.stringify({ ...wsParam(), ...payload }),
-    }),
+    isDemoModeEnabled()
+      ? Promise.resolve({ item: { ...(demoItems("campaign_reports").find((r) => r._id === reportId) || {}), status: payload.decision === "approve" ? "approved" : "rejected", simulation_only: true }, message: "Demo report review saved.", simulation_only: true })
+      : request(`/campaign-reports/${reportId}/review`, {
+          method: "POST",
+          body: JSON.stringify({ ...wsParam(), ...payload }),
+        }),
 
   // v8.5: Campaign Exports
   campaignExports: (params = {}) =>
-    request(`/campaign-exports?${new URLSearchParams({ ...wsParam(), ...params })}`),
+    isDemoModeEnabled()
+      ? Promise.resolve({ items: demoItems("campaign_exports"), simulation_only: true })
+      : request(`/campaign-exports?${new URLSearchParams({ ...wsParam(), ...params })}`),
 
   createCampaignExport: (payload) =>
-    request("/campaign-exports", {
-      method: "POST",
-      body: JSON.stringify({ ...wsParam(), ...payload }),
-    }),
+    isDemoModeEnabled()
+      ? Promise.resolve({ item: { ...payload, _id: "demo-export-new", export_path: "/tmp/signalforge_exports/demo/export_demo.md", simulation_only: true, outbound_actions_taken: 0, is_demo: true }, message: "Demo export generated locally. No uploading or publishing.", simulation_only: true })
+      : request("/campaign-exports", {
+          method: "POST",
+          body: JSON.stringify({ ...wsParam(), ...payload }),
+        }),
 
   getCampaignExport: (id) =>
-    request(`/campaign-exports/${id}`),
+    isDemoModeEnabled()
+      ? Promise.resolve({ item: demoItems("campaign_exports").find((e) => e._id === id) || {} })
+      : request(`/campaign-exports/${id}`),
 
   reviewCampaignExport: (exportId, payload) =>
-    request(`/campaign-exports/${exportId}/review`, {
-      method: "POST",
-      body: JSON.stringify({ ...wsParam(), ...payload }),
-    }),
+    isDemoModeEnabled()
+      ? Promise.resolve({ item: { ...(demoItems("campaign_exports").find((e) => e._id === exportId) || {}), status: "reviewed", simulation_only: true }, message: "Demo export review saved.", simulation_only: true })
+      : request(`/campaign-exports/${exportId}/review`, {
+          method: "POST",
+          body: JSON.stringify({ ...wsParam(), ...payload }),
+        }),
 
   // v9.5: Client Intelligence Layer
   clientIntelligence: (params = {}) =>
-    request(`/client-intelligence?${new URLSearchParams({ ...wsParam(), ...params })}`),
+    isDemoModeEnabled()
+      ? Promise.resolve({ items: demoItems("client_intelligence"), simulation_only: true })
+      : request(`/client-intelligence?${new URLSearchParams({ ...wsParam(), ...params })}`),
 
   getClientIntelligence: (clientId) =>
-    request(`/client-intelligence/${clientId}?${new URLSearchParams({ ...wsParam() })}`),
+    isDemoModeEnabled()
+      ? Promise.resolve({ item: demoItems("client_intelligence").find((r) => r.client_id === clientId) || demoItems("client_intelligence")[0] || {}, simulation_only: true })
+      : request(`/client-intelligence/${clientId}?${new URLSearchParams({ ...wsParam() })}`),
 
   generateClientIntelligence: (clientId, payload = {}) =>
-    request(`/client-intelligence/${clientId}/generate`, {
-      method: "POST",
-      body: JSON.stringify({ ...wsParam(), ...payload }),
-    }),
+    isDemoModeEnabled()
+      ? Promise.resolve({ item: { ...(demoItems("client_intelligence")[0] || {}), simulation_only: true, advisory_only: true, outbound_actions_taken: 0 }, message: "Demo client intelligence generated. Advisory only. No external actions performed.", simulation_only: true })
+      : request(`/client-intelligence/${clientId}/generate`, {
+          method: "POST",
+          body: JSON.stringify({ ...wsParam(), ...payload }),
+        }),
 
   leadContentCorrelations: (params = {}) =>
-    request(`/lead-content-correlations?${new URLSearchParams({ ...wsParam(), ...params })}`),
+    isDemoModeEnabled()
+      ? Promise.resolve({ items: demoItems("lead_content_correlations"), simulation_only: true })
+      : request(`/lead-content-correlations?${new URLSearchParams({ ...wsParam(), ...params })}`),
 
   generateLeadContentCorrelations: (payload) =>
-    request("/lead-content-correlations/generate", {
-      method: "POST",
-      body: JSON.stringify({ ...wsParam(), ...payload }),
-    }),
+    isDemoModeEnabled()
+      ? Promise.resolve({ items: demoItems("lead_content_correlations"), message: "Demo correlations generated. Advisory only. No external actions performed.", simulation_only: true })
+      : request("/lead-content-correlations/generate", {
+          method: "POST",
+          body: JSON.stringify({ ...wsParam(), ...payload }),
+        }),
 
   patchClientProfileIntelligence: (clientId, payload) =>
     request(`/client-profiles/${clientId}/intelligence`, {

@@ -556,3 +556,39 @@ v9.5 introduces a structured **client intelligence layer** that links acquisitio
 - Generating intelligence never modifies existing records.
 - No external API calls, no posting, no scheduling, no DMs at any step.
 - Workspace and client isolation enforced at every endpoint.
+
+---
+
+### v10 — POC Demo Mode (13-Step Guided Walkthrough)
+
+v10 adds a fully self-contained **POC Demo Mode** for client demos, investor presentations, and operator onboarding. The entire pipeline is walkable without a backend connection, without MongoDB, and with zero outbound actions.
+
+**New capabilities:**
+- **`PocDemoTab.jsx`** — a 13-step guided walkthrough component inside Creative Studio with progress tracking, step-dot navigation, CTA buttons that open the relevant section, and a full safety card per step.
+- **Progress system** — `getDemoProgress`, `setDemoProgress`, `nextDemoStep`, `prevDemoStep`, `jumpDemoStep`, `resetDemoProgress` — all localStorage-only, no backend calls.
+- **8 new v10 seed collections** in `demoMode.js`: `manual_publish_logs`, `asset_performance_records`, `creative_performance_summaries`, `campaign_packs`, `campaign_reports`, `campaign_exports`, `client_intelligence`, `lead_content_correlations`.
+- **Full api.js demo branches** for all v10 collections — demo mode returns localStorage data, real mode calls the backend. Generate methods return synthetic success responses in demo mode without calling fetch.
+
+**The 13 walkthrough steps prove:**
+
+| Steps | Pipeline stage |
+|-------|---------------|
+| 1–2 | Client workspace setup |
+| 3 | Source channel ingestion |
+| 4 | Approved source content |
+| 5 | Transcript ingest pipeline |
+| 6 | Snippet scoring + approval |
+| 7 | GPT prompt generation review |
+| 8 | Asset render pipeline |
+| 9 | Publish log → performance record loop |
+| 10–11 | Campaign pack assembly + report approval |
+| 12 | Local-only export delivery |
+| 13 | AI-advisory client intelligence |
+
+**v10 Safety guarantees:**
+- The POC Demo walkthrough makes **zero backend calls** — all data from localStorage only.
+- All demo records carry `simulation_only: true`, `outbound_actions_taken: 0`, `is_demo: true`.
+- Intelligence and correlation records additionally carry `advisory_only: true`.
+- Real API endpoints never return `is_demo: true` records.
+- No content is published, scheduled, emailed, or distributed at any step.
+- Switching to Real Mode instantly hides all demo data — real MongoDB is never touched.

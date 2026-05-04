@@ -347,3 +347,47 @@ Exporting a campaign pack does not publish, schedule, upload, or email anything.
 ### v9.5 Safety Boundary
 
 All `client_intelligence_records` and `lead_content_correlations` records permanently carry `simulation_only: true`, `advisory_only: true`, and `outbound_actions_taken: 0`. No external API calls are made during intelligence generation. All intelligence is deterministic and rule-based — no ML, no randomness. Generating intelligence never modifies existing records. PATCH endpoints update metadata fields only and never trigger outbound actions.
+
+---
+
+## v10 — POC Demo Mode (13-Step Guided Walkthrough)
+
+| Capability | Status | Notes |
+|---|---|---|
+| `PocDemoTab.jsx` component | ✅ | 13-step guided walkthrough React component |
+| `getDemoProgress()` | ✅ | Returns `{step, started, completed}` from localStorage |
+| `setDemoProgress(n)` | ✅ | Sets step, auto-computes started/completed |
+| `nextDemoStep()` | ✅ | Increments step, caps at 13 |
+| `prevDemoStep()` | ✅ | Decrements step, floor at 1 |
+| `jumpDemoStep(n)` | ✅ | Non-linear jump with bounds checking |
+| `resetDemoProgress()` | ✅ | Resets to step 0, clears started/completed |
+| 8 new v10 seed collections | ✅ | manual_publish_logs, asset_performance_records, creative_performance_summaries, campaign_packs, campaign_reports, campaign_exports, client_intelligence, lead_content_correlations |
+| Demo 4th snippet (demo-snippet-4) | ✅ | score=0.88, positioning theme, approved |
+| Demo 3rd prompt generation (demo-prompt-gen-3) | ✅ | business_explainer type, approved |
+| Demo source_content[2] approved | ✅ | Updated to approved for full pipeline demo |
+| API demo branches: manualPublishLogs | ✅ | Returns demo seed, no fetch in demo mode |
+| API demo branches: assetPerformanceRecords | ✅ | Returns demo seed, no fetch in demo mode |
+| API demo branches: creativePerformanceSummaries | ✅ | Returns demo seed, no fetch in demo mode |
+| API demo branches: performanceRecommendations | ✅ | Returns from demo summary recommendations array |
+| API demo branches: campaignPacks | ✅ | Returns demo seed, no fetch in demo mode |
+| API demo branches: campaignReports | ✅ | Returns demo seed, no fetch in demo mode |
+| API demo branches: campaignExports | ✅ | Returns demo seed, no fetch in demo mode |
+| API demo branches: clientIntelligence | ✅ | Returns demo seed, no fetch in demo mode |
+| API demo branches: leadContentCorrelations | ✅ | Returns demo seed, no fetch in demo mode |
+| API demo branches: generateCreativePerformanceSummary | ✅ | Returns demo summary record in demo mode |
+| API demo branches: generateClientIntelligence | ✅ | Returns demo intel record in demo mode |
+| API demo branches: generateLeadContentCorrelations | ✅ | Returns demo correlations in demo mode |
+| POC Demo tab in Creative Studio | ✅ | "POC Demo ✦" tab in section tab bar |
+| `tests/test_poc_demo_v10.py` | ✅ | Backend safety invariant tests |
+| `__tests__/demoV10.test.js` | ✅ | Frontend unit tests (progress, collections, fetch isolation) |
+| simulation_only: true on all v10 seed records | ✅ | Enforced in seed + tested |
+| outbound_actions_taken: 0 on all v10 seed records | ✅ | Enforced in seed + tested |
+| advisory_only: true on intelligence/correlation records | ✅ | Enforced in seed + tested |
+| is_demo: true on all v10 seed records | ✅ | Enables real-mode isolation |
+| Real endpoints never return is_demo records | ✅ | Tested via parametrized pytest |
+| No fetch calls from POC Demo walkthrough | ✅ | Component uses only localStorage + demoMode.js |
+| Reset Demo restores all v10 seed collections | ✅ | Tested in demoV10.test.js |
+
+### v10 Safety Boundary
+
+The POC Demo Mode walkthrough (all 13 steps) makes zero backend calls for read operations. All demo data is served from browser localStorage. Demo write methods (generate*, create*) in demo mode return synthetic success responses without calling fetch. Real API endpoints are protected from demo record leakage — all demo records carry `is_demo: true` and are never inserted into MongoDB. Switching to Real Mode immediately hides all demo data. No content is published, scheduled, emailed, or distributed at any point during the demo walkthrough.

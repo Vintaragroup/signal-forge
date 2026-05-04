@@ -341,8 +341,8 @@ const seedState = {
       performance_metadata: { views: 3900, likes: 182, comments: 23 },
       discovery_score: 0.71,
       discovery_reason: "Good hook, moderate engagement.",
-      status: "needs_review",
-      review_events: [],
+      status: "approved",
+      review_events: [{ decision: "approve", note: "Demo approved.", reviewed_at: daysAgo(1) }],
       simulation_only: true,
       outbound_actions_taken: 0,
       is_demo: true,
@@ -433,6 +433,29 @@ const seedState = {
       demo_label: "Demo Mode",
       created_at: daysAgo(2),
       updated_at: daysAgo(2),
+    },
+    {
+      _id: "demo-snippet-4",
+      workspace_slug: "demo",
+      source_content_id: "demo-source-content-2",
+      transcript_id: "demo-transcript-1",
+      speaker: "Host",
+      start_time: 5.0,
+      end_time: 18.2,
+      transcript_text: "The biggest mistake new roofers make is trying to compete on price instead of speed and follow-through.",
+      score: 0.88,
+      score_reason: "Contrarian hook, high shareability, strong positioning angle.",
+      theme: "positioning",
+      hook_angle: "Contrarian insight that reframes the competition problem",
+      platform_fit: ["instagram", "tiktok", "linkedin"],
+      status: "approved",
+      review_events: [{ decision: "approve", note: "Demo approved — strong contrarian hook.", reviewed_at: daysAgo(1) }],
+      simulation_only: true,
+      outbound_actions_taken: 0,
+      is_demo: true,
+      demo_label: "Demo Mode",
+      created_at: daysAgo(2),
+      updated_at: daysAgo(1),
     },
   ],
   creative_assets: [
@@ -695,6 +718,45 @@ const seedState = {
       created_at: daysAgo(1),
       updated_at: daysAgo(1),
     },
+    {
+      _id: "demo-prompt-gen-3",
+      workspace_slug: "demo",
+      client_id: "demo-client-1",
+      snippet_id: "demo-snippet-4",
+      brief_id: "",
+      prompt_type: "business_explainer",
+      generation_engine_target: "comfyui",
+      positive_prompt:
+        "Business explainer animation, clean minimal style, text on screen, no faces, professional blue palette, contrarian framing with bold title card, 9:16 vertical",
+      negative_prompt:
+        "realistic human face, identifiable person, likeness, specific individual, nsfw, low quality, blurry, watermark",
+      visual_style: "minimal, corporate, bold typography",
+      camera_direction: "static frame with animated text elements",
+      lighting: "bright clean studio, flat design",
+      motion_notes: "text slides in on beat, minimal transitions",
+      scene_beats: [
+        "Problem statement: roofers competing on price",
+        "Reframe: speed and follow-through wins",
+        "CTA: discover your competitive edge",
+      ],
+      caption_overlay_suggestion: "Stop competing on price. Win on speed.",
+      safety_notes: "Faceless business explainer — no likeness or voice cloning. Operator review required.",
+      status: "approved",
+      review_events: [
+        { decision: "approve", note: "Demo approved — contrarian hook approved.", reviewed_at: daysAgo(0) },
+      ],
+      notes: "",
+      use_likeness: false,
+      simulation_only: true,
+      outbound_actions_taken: 0,
+      source_url: "https://youtube.com/watch?v=demodef456.invalid",
+      snippet_transcript: "The biggest mistake new roofers make is trying to compete on price instead of speed and follow-through.",
+      snippet_usage_status: "approved",
+      is_demo: true,
+      demo_label: "Demo Mode",
+      created_at: daysAgo(1),
+      updated_at: daysAgo(0),
+    },
   ],
   asset_renders: [
     {
@@ -749,6 +811,247 @@ const seedState = {
       resolution: "1080x1920",
       review_events: [],
       simulation_only: true,
+      outbound_actions_taken: 0,
+      is_demo: true,
+      demo_label: "Demo Mode",
+      created_at: daysAgo(0),
+      updated_at: daysAgo(0),
+    },
+  ],
+
+  // -------------------------------------------------------------------------
+  // v10 POC Demo — extra snippets (total 4), extra prompt generations (total 3)
+  // -------------------------------------------------------------------------
+  // (Snippet 4 — added to content_snippets seed above via patch below)
+
+  // -------------------------------------------------------------------------
+  // v10 POC Demo — Manual Publish Log
+  // -------------------------------------------------------------------------
+  manual_publish_logs: [
+    {
+      _id: "demo-publog-1",
+      workspace_slug: "demo",
+      client_id: "demo-client-1",
+      render_id: "demo-render-1",
+      platform: "instagram",
+      post_type: "reel",
+      caption: "[Demo] Every estimate got a next-day check-in text. Here's how we booked 10 jobs in one week. No real post was published.",
+      published_at: daysAgo(1),
+      notes: "Demo publish log. SignalForge did not publish or schedule anything.",
+      simulation_only: true,
+      outbound_actions_taken: 0,
+      is_demo: true,
+      demo_label: "Demo Mode",
+      created_at: daysAgo(1),
+      updated_at: daysAgo(1),
+    },
+  ],
+
+  // -------------------------------------------------------------------------
+  // v10 POC Demo — Asset Performance Records (2)
+  // -------------------------------------------------------------------------
+  asset_performance_records: [
+    {
+      _id: "demo-perf-1",
+      workspace_slug: "demo",
+      client_id: "demo-client-1",
+      render_id: "demo-render-1",
+      snippet_id: "demo-snippet-1",
+      publish_log_id: "demo-publog-1",
+      platform: "instagram",
+      views: 4800,
+      likes: 312,
+      comments: 48,
+      shares: 91,
+      saves: 127,
+      reach: 4200,
+      impressions: 5600,
+      watch_time_seconds: 22,
+      performance_score: 8.4,
+      score_reason: "High saves + share ratio. Strong hook retention.",
+      simulation_only: true,
+      outbound_actions_taken: 0,
+      is_demo: true,
+      demo_label: "Demo Mode",
+      created_at: daysAgo(1),
+      updated_at: daysAgo(1),
+    },
+    {
+      _id: "demo-perf-2",
+      workspace_slug: "demo",
+      client_id: "demo-client-1",
+      render_id: "demo-render-2",
+      snippet_id: "demo-snippet-2",
+      publish_log_id: "demo-publog-1",
+      platform: "instagram",
+      views: 2100,
+      likes: 145,
+      comments: 19,
+      shares: 33,
+      saves: 58,
+      reach: 1900,
+      impressions: 2400,
+      watch_time_seconds: 18,
+      performance_score: 6.2,
+      score_reason: "Solid mid-tier performance. Good saves, moderate reach.",
+      simulation_only: true,
+      outbound_actions_taken: 0,
+      is_demo: true,
+      demo_label: "Demo Mode",
+      created_at: daysAgo(1),
+      updated_at: daysAgo(1),
+    },
+  ],
+
+  // -------------------------------------------------------------------------
+  // v10 POC Demo — Creative Performance Summary (1)
+  // -------------------------------------------------------------------------
+  creative_performance_summaries: [
+    {
+      _id: "demo-perf-summary-1",
+      workspace_slug: "demo",
+      client_id: "demo-client-1",
+      total_records: 2,
+      avg_performance_score: 7.3,
+      top_platform: "instagram",
+      top_snippet_id: "demo-snippet-1",
+      top_render_id: "demo-render-1",
+      recommendations: [
+        "The follow-up system hook drives 2× saves vs. results hooks. Prioritize for next batch.",
+        "Reel format outperforms static image in all metrics. Allocate 80% of next sprint to reels.",
+        "Optimal post window appears to be Tuesday 7–9 AM based on demo engagement pattern.",
+      ],
+      simulation_only: true,
+      outbound_actions_taken: 0,
+      is_demo: true,
+      demo_label: "Demo Mode",
+      created_at: daysAgo(1),
+      updated_at: daysAgo(1),
+    },
+  ],
+
+  // -------------------------------------------------------------------------
+  // v10 POC Demo — Campaign Pack + Report + Export
+  // -------------------------------------------------------------------------
+  campaign_packs: [
+    {
+      _id: "demo-pack-1",
+      workspace_slug: "demo",
+      client_id: "demo-client-1",
+      campaign_name: "Demo: Apex Roofing — Summer Growth Pack",
+      description: "Full pipeline demo pack: source content → snippets → prompts → renders → performance.",
+      status: "active",
+      source_content_ids: ["demo-source-content-1"],
+      snippet_ids: ["demo-snippet-1", "demo-snippet-2"],
+      render_ids: ["demo-render-1", "demo-render-2"],
+      prompt_generation_ids: ["demo-prompt-gen-1", "demo-prompt-gen-2"],
+      linked_at: daysAgo(1),
+      simulation_only: true,
+      outbound_actions_taken: 0,
+      is_demo: true,
+      demo_label: "Demo Mode",
+      created_at: daysAgo(2),
+      updated_at: daysAgo(1),
+    },
+  ],
+  campaign_reports: [
+    {
+      _id: "demo-report-1",
+      workspace_slug: "demo",
+      client_id: "demo-client-1",
+      campaign_pack_id: "demo-pack-1",
+      status: "approved",
+      summary: "Demo campaign delivered 2 renders across Instagram. Avg performance score 7.3. Top hook: follow-up system. Recommended next step: produce 3 additional reel variations using approved snippets.",
+      top_performers: [{ render_id: "demo-render-1", score: 8.4, platform: "instagram" }],
+      total_views: 6900,
+      total_saves: 185,
+      avg_score: 7.3,
+      review_events: [
+        { decision: "approve", note: "Demo report approved for client review.", reviewed_at: daysAgo(0) },
+      ],
+      simulation_only: true,
+      outbound_actions_taken: 0,
+      is_demo: true,
+      demo_label: "Demo Mode",
+      created_at: daysAgo(1),
+      updated_at: daysAgo(0),
+    },
+  ],
+  campaign_exports: [
+    {
+      _id: "demo-export-1",
+      workspace_slug: "demo",
+      client_id: "demo-client-1",
+      campaign_pack_id: "demo-pack-1",
+      campaign_report_id: "demo-report-1",
+      export_path: "/tmp/signalforge_exports/demo/demo-pack-1/export_demo_v10.md",
+      status: "complete",
+      notes: "Demo client export package. No file was uploaded or emailed.",
+      simulation_only: true,
+      outbound_actions_taken: 0,
+      is_demo: true,
+      demo_label: "Demo Mode",
+      created_at: daysAgo(0),
+      updated_at: daysAgo(0),
+    },
+  ],
+
+  // -------------------------------------------------------------------------
+  // v10 POC Demo — Client Intelligence + Lead-Content Correlations
+  // -------------------------------------------------------------------------
+  client_intelligence: [
+    {
+      _id: "demo-intel-1",
+      workspace_slug: "demo",
+      client_id: "demo-client-1",
+      estimated_roi: 112.5,
+      top_hook_themes: ["follow_up_system", "results", "reputation"],
+      top_platforms: ["instagram", "youtube_shorts"],
+      content_velocity: "2 renders / sprint",
+      engagement_trend: "upward",
+      recommendations: [
+        "Double down on follow-up system hook angle — highest saves and shares.",
+        "Build a 5-part reel series from approved transcript segments.",
+        "Test LinkedIn carousel format for B2B contractor audience segment.",
+      ],
+      simulation_only: true,
+      advisory_only: true,
+      outbound_actions_taken: 0,
+      is_demo: true,
+      demo_label: "Demo Mode",
+      created_at: daysAgo(0),
+      updated_at: daysAgo(0),
+    },
+  ],
+  lead_content_correlations: [
+    {
+      _id: "demo-corr-1",
+      workspace_slug: "demo",
+      client_id: "demo-client-1",
+      lead_id: "demo-lead-1",
+      content_snippet_id: "demo-snippet-1",
+      correlation_score: 0.91,
+      correlation_reason: "Demo lead (Apex Roofing) matches the follow-up system hook angle with high confidence. Top performer in same niche.",
+      recommended_content_angle: "follow_up_system",
+      simulation_only: true,
+      advisory_only: true,
+      outbound_actions_taken: 0,
+      is_demo: true,
+      demo_label: "Demo Mode",
+      created_at: daysAgo(0),
+      updated_at: daysAgo(0),
+    },
+    {
+      _id: "demo-corr-2",
+      workspace_slug: "demo",
+      client_id: "demo-client-1",
+      lead_id: "demo-lead-2",
+      content_snippet_id: "demo-snippet-3",
+      correlation_score: 0.74,
+      correlation_reason: "Demo lead (Northline HVAC) aligns with reputation-building hook. Seasonal demand angle is secondary fit.",
+      recommended_content_angle: "reputation",
+      simulation_only: true,
+      advisory_only: true,
       outbound_actions_taken: 0,
       is_demo: true,
       demo_label: "Demo Mode",
@@ -1085,6 +1388,56 @@ export function generateDemoSnippets(sourceContentId) {
   state.content_snippets = [...(state.content_snippets || []), ...newSnippets];
   writeState(state);
   return newSnippets;
+}
+
+// =============================================================================
+// v10 POC Demo Progress — localStorage key separate from demo state
+// =============================================================================
+
+const DEMO_PROGRESS_KEY = "signalforge.demo.progress";
+const DEMO_PROGRESS_TOTAL = 13;
+
+export function getDemoProgress() {
+  try {
+    const raw = window.localStorage.getItem(DEMO_PROGRESS_KEY);
+    if (!raw) return { step: 0, started: false, completed: false };
+    return JSON.parse(raw);
+  } catch {
+    return { step: 0, started: false, completed: false };
+  }
+}
+
+export function setDemoProgress(step) {
+  const clamped = Math.max(0, Math.min(DEMO_PROGRESS_TOTAL, step));
+  const progress = {
+    step: clamped,
+    started: clamped > 0,
+    completed: clamped >= DEMO_PROGRESS_TOTAL,
+    updated_at: new Date().toISOString(),
+  };
+  window.localStorage.setItem(DEMO_PROGRESS_KEY, JSON.stringify(progress));
+  window.dispatchEvent(new Event("signalforge-demo-change"));
+  return progress;
+}
+
+export function nextDemoStep() {
+  const current = getDemoProgress();
+  return setDemoProgress((current.step || 0) + 1);
+}
+
+export function prevDemoStep() {
+  const current = getDemoProgress();
+  return setDemoProgress(Math.max(1, (current.step || 1) - 1));
+}
+
+export function jumpDemoStep(n) {
+  return setDemoProgress(n);
+}
+
+export function resetDemoProgress() {
+  window.localStorage.removeItem(DEMO_PROGRESS_KEY);
+  window.dispatchEvent(new Event("signalforge-demo-change"));
+  return { step: 0, started: false, completed: false };
 }
 
 export function demoItems(collection) {
