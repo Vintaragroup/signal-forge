@@ -65,6 +65,7 @@ PROMPT_TYPES: frozenset[str] = frozenset(
         "educational_breakdown",
         "luxury_brand_story",
         "product_service_ad",
+        "inspirational_short_form",
     }
 )
 
@@ -184,6 +185,10 @@ class PromptGenerationResult:
 
     # Hook (v6.5)
     hook_text: str = ""
+
+    # Duration preference (v10.3 — pilot readiness)
+    # 0 = unspecified.  Set by inspirational_short_form preset to 75 (60-90s midpoint).
+    preferred_duration_seconds: int = 0
 
     # Operator-facing safety context
     safety_notes: str = ""
@@ -409,6 +414,44 @@ def _build_product_service_ad(snippet_text: str, brief: dict) -> dict:
     }
 
 
+def _build_inspirational_short_form(snippet_text: str, brief: dict) -> dict:
+    """60-90 second faceless inspirational format.
+
+    Designed for motivational/thought-leadership content using original source
+    audio unchanged.  No likeness, no avatar, no voice cloning, no audio rewriting.
+    Target duration: 60–90 seconds.  Visual: cinematic B-roll storytelling.
+    """
+    goal = _safe_str(brief.get("goal") or "inspire and motivate")
+    audience = _safe_str(brief.get("audience") or "growth-minded professionals")
+    return {
+        "positive_prompt": (
+            f"Inspirational short-form video, cinematic B-roll visual storytelling, "
+            f"no faces visible, no identifiable people, faceless environment and "
+            f"detail shots, natural and authentic atmosphere, theme: {goal}, "
+            f"audience: {audience}, 60-90 seconds, 9:16 vertical format, "
+            f"original audio preserved unchanged, no AI voice, no audio rewriting"
+        ),
+        "visual_style": "cinematic, warm natural tones, authentic, high contrast",
+        "camera_direction": "slow push-in B-roll cuts, handheld drift, rack focus on details",
+        "lighting": "natural golden-hour or window light, authentic ambient",
+        "motion_notes": (
+            "Original source audio used unchanged — no rewriting or cloning. "
+            "B-roll cuts every 4-8 seconds to match audio rhythm. "
+            "Subtle fade in/out at start and end only. "
+            "Target 60-90 seconds total duration."
+        ),
+        "scene_beats": [
+            "0-10s: Establishing environment detail shot — no face shown",
+            "10-25s: Action or process B-roll underscoring the audio hook",
+            "25-50s: Narrative build — environment cuts matching audio pacing",
+            "50-70s: Emotional peak — close detail shot, natural light",
+            "70-90s: Resolution — wide environment, natural fade to end card",
+        ],
+        "caption_overlay_suggestion": _truncate(snippet_text, 120),
+        "preferred_duration_seconds": 75,  # midpoint of 60-90s target range
+    }
+
+
 _BUILDERS: dict[str, object] = {
     "faceless_motivational": _build_faceless_motivational,
     "cinematic_broll": _build_cinematic_broll,
@@ -418,6 +461,7 @@ _BUILDERS: dict[str, object] = {
     "podcast_clip_visual": _build_podcast_clip_visual,
     "educational_breakdown": _build_educational_breakdown,
     "luxury_brand_story": _build_luxury_brand_story,
+    "inspirational_short_form": _build_inspirational_short_form,
     "product_service_ad": _build_product_service_ad,
 }
 
@@ -547,6 +591,7 @@ def generate_prompt(
         scene_beats=list(built.get("scene_beats", [])),
         caption_overlay_suggestion=built.get("caption_overlay_suggestion", ""),
         hook_text=hook_text,
+        preferred_duration_seconds=int(built.get("preferred_duration_seconds", 0)),
         safety_notes=safety_notes,
         status="draft",
         simulation_only=True,

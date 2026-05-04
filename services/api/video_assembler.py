@@ -106,6 +106,7 @@ def assemble_video(
     fade_duration: float = 0.5,
     generation_engine: str = "comfyui",
     asset_render_id: str = "",
+    preserve_original_audio: bool = True,
 ) -> VideoAssemblyResult:
     """
     Assemble a vertical short-form video from image + audio.
@@ -113,6 +114,15 @@ def assemble_video(
     Returns a VideoAssemblyResult.  When FFMPEG_ENABLED is false (default),
     returns a mock result immediately without writing files or spawning
     any subprocesses.
+
+    Audio behaviour
+    ---------------
+    * ``audio_path`` non-empty  → source audio is used unchanged (original
+      audio preserved; no cloning, no rewriting).
+    * ``audio_path`` empty AND ``FFMPEG_ENABLED=true``  → ``generate_test_tone()``
+      creates a safe local sine-wave WAV as a demo/test fallback only.
+    * ``preserve_original_audio=True`` (default) — informational flag confirming
+      the operator's intent; the function already preserves audio by default.
     """
     ffmpeg_enabled = _env_enabled(os.getenv("FFMPEG_ENABLED", "false"))
 

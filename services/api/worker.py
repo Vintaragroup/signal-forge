@@ -231,6 +231,7 @@ def process_render_job(job: dict, db: Any) -> dict:
 
         add_captions = record.get("add_captions", False)
         source_audio_path = record.get("source_audio_path", "")
+        preserve_original_audio = record.get("preserve_original_audio", True)
         generation_engine = record.get("generation_engine", "comfyui")
         resolution = record.get("resolution", "1080x1920")
 
@@ -250,6 +251,7 @@ def process_render_job(job: dict, db: Any) -> dict:
             va_result = assemble_video(
                 image_path=generated_image_path,
                 audio_path=source_audio_path,
+                preserve_original_audio=preserve_original_audio,
                 duration_seconds=duration_seconds,
                 add_captions=add_captions,
                 caption_text=caption_text,

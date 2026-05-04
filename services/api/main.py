@@ -4428,11 +4428,15 @@ class PromptGenerationCreateRequest(BaseModel):
         "educational_breakdown",
         "luxury_brand_story",
         "product_service_ad",
+        "inspirational_short_form",
     ] = "faceless_motivational"
     generation_engine_target: Literal[
         "comfyui", "seedance", "higgsfield", "runway", "manual"
     ] = "comfyui"
     use_likeness: bool = False
+    # Operator-supplied preferred duration in seconds (0 = unspecified).
+    # Preset inspirational_short_form sets this to 75 automatically.
+    preferred_duration_seconds: int = 0
     notes: str = ""
 
 
@@ -4594,6 +4598,8 @@ def create_prompt_generation(payload: PromptGenerationCreateRequest):
             "scene_beats": result.scene_beats,
             "caption_overlay_suggestion": result.caption_overlay_suggestion,
             "safety_notes": result.safety_notes,
+            "preferred_duration_seconds": result.preferred_duration_seconds
+            or payload.preferred_duration_seconds,
             "status": "draft",
             "review_events": [],
             "notes": payload.notes,
@@ -4760,6 +4766,10 @@ class AssetRenderRequest(BaseModel):
     asset_type: str = "video"
     generation_engine: str = "comfyui"
     source_audio_path: str = ""
+    # When True (default), source_audio_path is used unchanged.
+    # Test-tone is ONLY generated as a safe fallback when source_audio_path=""
+    # AND FFMPEG_ENABLED=true.  Never clone, rewrite, or replace original audio.
+    preserve_original_audio: bool = True
     add_captions: bool = False
     notes: str = ""
 
@@ -4845,6 +4855,7 @@ def render_asset(payload: AssetRenderRequest) -> dict:
             "asset_type": payload.asset_type,
             "generation_engine": clean_text(payload.generation_engine),
             "source_audio_path": clean_text(payload.source_audio_path),
+            "preserve_original_audio": payload.preserve_original_audio,
             "add_captions": payload.add_captions,
             "notes": clean_text(payload.notes),
             "status": "queued",
