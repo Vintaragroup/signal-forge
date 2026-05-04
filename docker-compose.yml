@@ -25,6 +25,11 @@ x-signalforge-env: &signalforge-env
   YTDLP_OUTPUT_DIR: ${YTDLP_OUTPUT_DIR:-/tmp/signalforge_downloads}
   YTDLP_MAX_DURATION_SECONDS: ${YTDLP_MAX_DURATION_SECONDS:-7200}
   YTDLP_ALLOWED_DOMAINS: ${YTDLP_ALLOWED_DOMAINS:-youtube.com,youtu.be}
+  # v10.5 — Whisper local transcription (no external calls)
+  TRANSCRIPT_PROVIDER: ${TRANSCRIPT_PROVIDER:-stub}
+  TRANSCRIPT_LIVE_ENABLED: ${TRANSCRIPT_LIVE_ENABLED:-false}
+  WHISPER_MODEL: ${WHISPER_MODEL:-base}
+  AUTO_SCORE_SNIPPETS: ${AUTO_SCORE_SNIPPETS:-false}
 
 services:
   mongo:
@@ -124,6 +129,7 @@ services:
       - ./vault:/vault
       - ./data:/data
       - render-output:/tmp/signalforge_renders
+      - ytdlp-downloads:/tmp/signalforge_downloads
     depends_on:
       mongo:
         condition: service_healthy
@@ -248,3 +254,4 @@ services:
 volumes:
   mongo-data:
   render-output:
+  ytdlp-downloads:

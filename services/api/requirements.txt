@@ -9,3 +9,5 @@ redis>=5,<6
 # Requires ffmpeg on PATH (already installed in Docker image)
 # Gate: TRANSCRIPT_PROVIDER=whisper AND TRANSCRIPT_LIVE_ENABLED=true
 openai-whisper>=20231117
+# v10.4: Approved URL downloader — installs yt-dlp binary on PATH
+yt-dlp>=2024.1.0

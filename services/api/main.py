@@ -3452,6 +3452,7 @@ class TranscriptRunCreateRequest(BaseModel):
     workspace_slug: str = ""
     source_content_id: str = ""
     audio_extraction_run_id: str = ""
+    audio_path: str = ""  # v7.1: direct path to local audio — skips extraction run lookup
     provider: str = "stub"
     language: str = "en"
     text_hint: str = ""
@@ -4111,6 +4112,41 @@ def list_media_intake_records(
         client.close()
 
 
+class MediaIntakeRecordPatchRequest(BaseModel):
+    source_content_id: str = ""
+    status: str = ""
+    notes: str = ""
+
+
+@app.patch("/media-intake-records/{record_id}")
+def patch_media_intake_record(record_id: str, payload: MediaIntakeRecordPatchRequest) -> dict:
+    """Update linkage fields on a media intake record (e.g. source_content_id)."""
+    now = utc_now()
+    client = get_client()
+    try:
+        db = get_database(client)
+        try:
+            from bson import ObjectId
+            oid = ObjectId(record_id)
+        except Exception:
+            raise HTTPException(status_code=400, detail="Invalid record_id.")
+        doc = db.media_intake_records.find_one({"_id": oid})
+        if not doc:
+            raise HTTPException(status_code=404, detail="Media intake record not found.")
+        update: dict[str, Any] = {"updated_at": now}
+        if payload.source_content_id:
+            update["source_content_id"] = clean_text(payload.source_content_id)
+        if payload.status:
+            update["status"] = clean_text(payload.status)
+        if payload.notes:
+            update["notes"] = clean_text(payload.notes)
+        db.media_intake_records.update_one({"_id": oid}, {"$set": update})
+        updated = db.media_intake_records.find_one({"_id": oid})
+        return {"item": serialize(updated), "simulation_only": True}
+    finally:
+        client.close()
+
+
 # ---------------------------------------------------------------------------
 # v4 — Part 3: Audio Extraction with approval gate + media_path support
 # ---------------------------------------------------------------------------
@@ -4253,6 +4289,9 @@ def create_transcript_run_v4(payload: TranscriptRunCreateRequest) -> dict:
             audio_run = find_audio_extraction_run(db, audio_run_id)
             if audio_run:
                 audio_path = audio_run.get("output_path", "")
+        # v7.1: direct audio_path override — used for yt_dlp-ingested media
+        if clean_text(payload.audio_path):
+            audio_path = clean_text(payload.audio_path)
 
         # v7: wrap transcription in try/except — errors stored on the run record
         transcript_error = ""

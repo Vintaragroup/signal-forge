@@ -287,7 +287,7 @@ def download_approved_url(
         "--no-post-overwrites",
         "--restrict-filenames",
         "-o", output_template,
-        "--print", "filename",
+        "--print", "after_move:filepath",  # reports actual path after post-processing (e.g. mp3 conversion)
         "--",         # separator — ensures url is treated as positional, not a flag
         url,
     ]
@@ -317,7 +317,7 @@ def download_approved_url(
         result.error_message = raw_err[:500] if raw_err else f"yt-dlp exited {proc.returncode}"
         return result
 
-    # Parse output path from stdout (yt-dlp --print filename outputs the path)
+    # Parse output path from stdout (yt-dlp --print after_move:filepath outputs actual path)
     stdout_lines = [line.strip() for line in (proc.stdout or "").splitlines() if line.strip()]
     output_path = ""
     for line in stdout_lines:
@@ -325,6 +325,12 @@ def download_approved_url(
         if candidate.is_file():
             output_path = str(candidate)
             break
+
+    # Fallback: scan output dir for newest file created since we started the subprocess
+    if not output_path and out_dir.exists():
+        candidates = sorted(out_dir.iterdir(), key=lambda p: p.stat().st_mtime, reverse=True)
+        if candidates and candidates[0].is_file():
+            output_path = str(candidates[0])
 
     if not output_path:
         result.status = "failed"
