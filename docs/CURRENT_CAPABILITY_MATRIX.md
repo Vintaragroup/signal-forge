@@ -391,3 +391,21 @@ All `client_intelligence_records` and `lead_content_correlations` records perman
 ### v10 Safety Boundary
 
 The POC Demo Mode walkthrough (all 13 steps) makes zero backend calls for read operations. All demo data is served from browser localStorage. Demo write methods (generate*, create*) in demo mode return synthetic success responses without calling fetch. Real API endpoints are protected from demo record leakage — all demo records carry `is_demo: true` and are never inserted into MongoDB. Switching to Real Mode immediately hides all demo data. No content is published, scheduled, emailed, or distributed at any point during the demo walkthrough.
+
+---
+
+## v10.1 — Architecture and Production Readiness Docs
+
+| Capability | Status | Notes |
+|---|---|---|
+| ARCHITECTURE.md complete rewrite | ✅ | Reflects real v10 stack: FastAPI, React, MongoDB, Redis, Worker, ComfyUI, FFmpeg |
+| Service maturity table in ARCHITECTURE.md | ✅ | Core / optional / one-off / placeholder clearly labeled |
+| docs/PRODUCTION_READINESS.md | ✅ | Strengths, limitations, security gaps, pre-production checklist |
+| docs/SERVICE_BOUNDARIES.md | ✅ | Per-service type, dependencies, E2E validation requirements |
+| README.md "What it is / isn't" framing | ✅ | Top-of-file section with runtime stack table and safety summary |
+| CURRENT_CAPABILITY_MATRIX.md v10 verified | ✅ | All v10 entries confirmed accurate; no changes required |
+
+### v10.1 Scope
+
+v10.1 is documentation-only. No runtime code, tests, or API endpoints were added or modified. All 678 backend tests and 88 frontend tests remain passing with no changes.
+

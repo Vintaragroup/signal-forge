@@ -1,4 +1,56 @@
-# signalForge
+# SignalForge
+
+> **Current version:** v10 (POC Demo Mode)  
+> **Architecture:** [ARCHITECTURE.md](ARCHITECTURE.md) | **Production readiness:** [docs/PRODUCTION_READINESS.md](docs/PRODUCTION_READINESS.md) | **Service boundaries:** [docs/SERVICE_BOUNDARIES.md](docs/SERVICE_BOUNDARIES.md)
+
+## What SignalForge Is
+
+SignalForge is a **local-first, single-operator AI-assisted content production and CRM-lite system**. It helps one operator manage client outreach, content creation, and pipeline analytics without any automated outbound actions.
+
+- Leads and contacts are imported, scored, and tracked locally in MongoDB.
+- Message drafts go through an approval queue before any manual send.
+- The Creative Studio pipeline covers source content ingestion, transcript-based snippet scoring, visual prompt generation, local FFmpeg/ComfyUI rendering, campaign packs, performance analytics, and client intelligence — all on the operator's machine.
+- A GPT agent runtime (disabled by default) adds review-only planning assistance.
+- A POC Demo Mode (v10) lets operators walk prospects and clients through the full pipeline without touching MongoDB.
+
+## What SignalForge Is Not
+
+- **Not a social media automation tool.** It never sends messages, posts content, books meetings, or schedules anything.
+- **Not an autonomous agent.** Every pipeline stage requires explicit operator approval before proceeding. Agents are simulation-only and produce review-only artifacts.
+- **Not a multi-user SaaS.** No authentication, no RBAC, no tenant isolation. Designed for one operator on one machine.
+- **Not connected to external platforms.** No CRM integrations, no social APIs, no email/SMS providers, no live enrichment sources. `SERPAPI_KEY` is reserved but not connected; web search is mock-only.
+- **Not production-hardened for client-hosted deployment** without additional work. See [docs/PRODUCTION_READINESS.md](docs/PRODUCTION_READINESS.md).
+
+## Current Runtime Stack
+
+| Container | Role | Status |
+|---|---|---|
+| `signalforge-api` | FastAPI control plane (Python 3.11) — 104 endpoints | Core |
+| `signalforge-web` | React 19 + Vite 6 dashboard (Nginx) | Core |
+| `signalforge-mongo` | MongoDB 8 — structured data store | Core |
+| `signalforge-redis` | Redis 7 — async render job queue | Core |
+| `signalforge-worker` | FFmpeg render worker | Core |
+| `comfyui` | Local image generation (Docker profile) | Optional |
+
+One-off / CLI services (not continuously running): `lead_scraper`, `lead_enricher`  
+Placeholder / scaffold services (not implemented): `social_processor`, `post_generator`
+
+## Safety Boundary Summary
+
+SignalForge **never** sends email, SMS, DMs, social posts, or calendar events. It never calls external CRM, enrichment, or publishing APIs. Every agent, GPT, and pipeline output requires operator review before any real-world action. Demo Mode is browser-localStorage-only with zero MongoDB writes. Real endpoints never return `is_demo: true` records.
+
+## Demo Mode (v10)
+
+A 13-step guided walkthrough of the full pipeline — runs entirely in browser localStorage with no backend connection required. Start from the Creative Studio → **POC Demo ✦** tab or from the Overview page.
+
+- Browser-local state only (no MongoDB writes, no API calls for reads)
+- 8 seed collections with ~40+ synthetic records labeled `is_demo: true`
+- All demo records are permanently isolated from real-mode endpoints
+- "Reset Demo Data" restores seeds without touching live data
+
+See [docs/MODES_AND_DEMO_GUIDE.md](docs/MODES_AND_DEMO_GUIDE.md) for the full guide.
+
+---
 
 signalForge is a local-first AI-powered growth operating system for collecting leads, enriching company and contact data, processing social signals, generating outreach and content, and writing human-readable outputs into an Obsidian vault.
 
