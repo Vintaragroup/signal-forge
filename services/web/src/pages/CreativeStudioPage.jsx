@@ -3379,6 +3379,399 @@ function PromptLibrarySection({
 }
 
 // ---------------------------------------------------------------------------
+// v10.4 — Media Ingestion Section
+// ---------------------------------------------------------------------------
+
+function MediaIngestionSection({ mediaFolderScans, approvedUrlDownloads, mediaIntakeRecords, clientProfiles, wsParam, onRefresh, showNotice }) {
+  const [activeTab, setActiveTab] = useState("folder");
+  const [folderPath, setFolderPath] = useState("");
+  const [folderClientId, setFolderClientId] = useState("");
+  const [folderLabel, setFolderLabel] = useState("");
+  const [folderIngestionSource, setFolderIngestionSource] = useState("local_folder");
+  const [folderScanning, setFolderScanning] = useState(false);
+  const [folderResult, setFolderResult] = useState(null);
+  const [folderError, setFolderError] = useState("");
+
+  const [dlUrl, setDlUrl] = useState("");
+  const [dlClientId, setDlClientId] = useState("");
+  const [dlPermission, setDlPermission] = useState(false);
+  const [dlFormat, setDlFormat] = useState("video");
+  const [dlNotes, setDlNotes] = useState("");
+  const [dlSubmitting, setDlSubmitting] = useState(false);
+  const [dlResult, setDlResult] = useState(null);
+  const [dlError, setDlError] = useState("");
+
+  const ingestionIntakeRecords = mediaIntakeRecords.filter(
+    (r) => r.intake_method === "local_folder_scan" || r.intake_method === "yt_dlp"
+  );
+
+  async function handleFolderScan(e) {
+    e.preventDefault();
+    if (!folderPath.trim()) { setFolderError("Folder path is required"); return; }
+    setFolderScanning(true);
+    setFolderError("");
+    setFolderResult(null);
+    try {
+      const result = await api.createMediaFolderScan({
+        folder_path: folderPath.trim(),
+        client_id: folderClientId,
+        source_label: folderLabel,
+        ingestion_source: folderIngestionSource,
+      });
+      setFolderResult(result);
+      showNotice(`Scan complete: ${result.discovered_count} file(s) discovered.`);
+      onRefresh();
+    } catch (err) {
+      setFolderError(err.message || "Scan failed");
+    } finally {
+      setFolderScanning(false);
+    }
+  }
+
+  async function handleUrlDownload(e) {
+    e.preventDefault();
+    if (!dlUrl.trim()) { setDlError("URL is required"); return; }
+    if (!dlPermission) { setDlError("You must confirm you have permission to download this content"); return; }
+    setDlSubmitting(true);
+    setDlError("");
+    setDlResult(null);
+    try {
+      const result = await api.createApprovedUrlDownload({
+        url: dlUrl.trim(),
+        client_id: dlClientId,
+        permission_confirmed: dlPermission,
+        requested_format: dlFormat,
+        notes: dlNotes,
+      });
+      setDlResult(result);
+      if (result.status === "skipped") {
+        showNotice(`Download skipped: ${result.skip_reason}`);
+      } else if (result.status === "completed") {
+        showNotice("Download complete. File saved locally.");
+        onRefresh();
+      } else {
+        showNotice(`Download ${result.status}.`);
+      }
+    } catch (err) {
+      setDlError(err.message || "Download request failed");
+    } finally {
+      setDlSubmitting(false);
+    }
+  }
+
+  return (
+    <section className="space-y-5">
+      <div>
+        <h2 className="text-base font-semibold text-slate-950">Media Ingestion</h2>
+        <p className="mt-1 text-xs text-slate-500">
+          Ingest approved client media from local synced folders or approved URL downloads. All media is stored locally and requires review before use.
+        </p>
+      </div>
+
+      {/* Safety notice */}
+      <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+        <strong>Permission required:</strong> Only use media you own or have explicit permission to process.
+        SignalForge stores files locally and does <strong>not</strong> publish, upload, or transmit media to any third party.
+        No likeness, avatar, or voice cloning is performed.
+      </div>
+
+      {/* Sub-tabs */}
+      <div className="flex gap-2 border-b border-slate-200 pb-1">
+        {[
+          { id: "folder", label: `Folder Scan (${mediaFolderScans.length})` },
+          { id: "url", label: `URL Download (${approvedUrlDownloads.length})` },
+          { id: "ingested", label: `Ingested Media (${ingestionIntakeRecords.length})` },
+        ].map(({ id, label }) => (
+          <button
+            key={id}
+            type="button"
+            onClick={() => setActiveTab(id)}
+            className={[
+              "rounded-t px-3 py-1.5 text-sm font-medium transition",
+              activeTab === id ? "border-b-2 border-blue-600 text-blue-700" : "text-slate-500 hover:text-slate-800",
+            ].join(" ")}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+
+      {/* Folder Scan */}
+      {activeTab === "folder" && (
+        <div className="space-y-4">
+          <div className="rounded-lg border border-slate-200 bg-white p-5 space-y-4">
+            <h3 className="text-sm font-semibold text-slate-800">Shared Folder / Drive Scan</h3>
+            <p className="text-xs text-slate-500">
+              Scan a local folder, Google Drive synced folder, or Dropbox synced folder for supported media files
+              (.mp4, .mov, .m4v, .mp3, .wav, .m4a).
+            </p>
+            <form onSubmit={handleFolderScan} className="space-y-3">
+              <div>
+                <label className="block text-xs font-medium text-slate-700 mb-1">Folder Path <span className="text-red-500">*</span></label>
+                <input
+                  value={folderPath}
+                  onChange={(e) => setFolderPath(e.target.value)}
+                  placeholder="/Users/you/Google Drive/My Drive/ClientMedia"
+                  className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-900 outline-none focus:border-blue-300 focus:ring-2 focus:ring-blue-100"
+                />
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-medium text-slate-700 mb-1">Client</label>
+                  <select
+                    value={folderClientId}
+                    onChange={(e) => setFolderClientId(e.target.value)}
+                    className="w-full rounded-lg border border-slate-200 px-2 py-2 text-sm text-slate-700 outline-none focus:border-blue-300"
+                  >
+                    <option value="">— Select client —</option>
+                    {clientProfiles.map((c) => (
+                      <option key={c._id} value={c._id}>{c.name || c._id}</option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-slate-700 mb-1">Ingestion Source</label>
+                  <select
+                    value={folderIngestionSource}
+                    onChange={(e) => setFolderIngestionSource(e.target.value)}
+                    className="w-full rounded-lg border border-slate-200 px-2 py-2 text-sm text-slate-700 outline-none focus:border-blue-300"
+                  >
+                    <option value="local_folder">Local Folder</option>
+                    <option value="google_drive_sync">Google Drive Sync</option>
+                    <option value="dropbox_sync">Dropbox Sync</option>
+                  </select>
+                </div>
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-slate-700 mb-1">Source Label (optional)</label>
+                <input
+                  value={folderLabel}
+                  onChange={(e) => setFolderLabel(e.target.value)}
+                  placeholder="e.g. John Maxwell – YouTube Recordings"
+                  className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-900 outline-none focus:border-blue-300 focus:ring-2 focus:ring-blue-100"
+                />
+              </div>
+              {folderError && <p className="text-xs text-red-600">{folderError}</p>}
+              <button
+                type="submit"
+                disabled={folderScanning}
+                className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50"
+              >
+                {folderScanning ? "Scanning…" : "Scan Folder"}
+              </button>
+            </form>
+
+            {folderResult && (
+              <div className="rounded-lg border border-green-200 bg-green-50 p-3 text-sm space-y-1">
+                <div className="font-semibold text-green-800">Scan complete</div>
+                <div className="text-xs text-green-700">
+                  Discovered: {folderResult.discovered_count} · Registered: {folderResult.registered_count} · Skipped: {folderResult.skipped_count} · Failed: {folderResult.failed_count}
+                </div>
+                {folderResult.errors?.length > 0 && (
+                  <div className="text-xs text-red-600">{folderResult.errors.join("; ")}</div>
+                )}
+              </div>
+            )}
+          </div>
+
+          {/* Past scans table */}
+          {mediaFolderScans.length > 0 && (
+            <div className="rounded-lg border border-slate-200 bg-white overflow-hidden">
+              <div className="px-4 py-2 border-b border-slate-100 bg-slate-50">
+                <span className="text-xs font-semibold text-slate-600">Previous Scans</span>
+              </div>
+              <table className="w-full text-xs">
+                <thead>
+                  <tr className="border-b border-slate-100 text-left text-slate-500">
+                    <th className="px-4 py-2">Folder</th>
+                    <th className="px-4 py-2">Source</th>
+                    <th className="px-4 py-2">Found</th>
+                    <th className="px-4 py-2">Registered</th>
+                    <th className="px-4 py-2">Date</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {mediaFolderScans.map((scan) => (
+                    <tr key={scan._id} className="border-b border-slate-50 hover:bg-slate-50">
+                      <td className="px-4 py-2 font-mono text-xs text-slate-700 max-w-xs truncate">{scan.folder_path}</td>
+                      <td className="px-4 py-2 text-slate-500">{scan.ingestion_source?.replace("_", " ")}</td>
+                      <td className="px-4 py-2">{scan.discovered_count}</td>
+                      <td className="px-4 py-2">{scan.registered_count}</td>
+                      <td className="px-4 py-2 text-slate-400">{formatDate(scan.created_at)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* URL Download */}
+      {activeTab === "url" && (
+        <div className="space-y-4">
+          <div className="rounded-lg border border-slate-200 bg-white p-5 space-y-4">
+            <h3 className="text-sm font-semibold text-slate-800">Approved URL Download</h3>
+            <p className="text-xs text-slate-500">
+              Download media from an approved URL using yt-dlp. Requires <code className="bg-slate-100 px-1 rounded">YTDLP_ENABLED=true</code> in environment
+              and operator permission confirmation. Downloaded files are stored locally only.
+            </p>
+            <form onSubmit={handleUrlDownload} className="space-y-3">
+              <div>
+                <label className="block text-xs font-medium text-slate-700 mb-1">URL <span className="text-red-500">*</span></label>
+                <input
+                  value={dlUrl}
+                  onChange={(e) => setDlUrl(e.target.value)}
+                  placeholder="https://www.youtube.com/watch?v=..."
+                  className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-900 outline-none focus:border-blue-300 focus:ring-2 focus:ring-blue-100"
+                />
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-medium text-slate-700 mb-1">Client</label>
+                  <select
+                    value={dlClientId}
+                    onChange={(e) => setDlClientId(e.target.value)}
+                    className="w-full rounded-lg border border-slate-200 px-2 py-2 text-sm text-slate-700 outline-none focus:border-blue-300"
+                  >
+                    <option value="">— Select client —</option>
+                    {clientProfiles.map((c) => (
+                      <option key={c._id} value={c._id}>{c.name || c._id}</option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-slate-700 mb-1">Format</label>
+                  <select
+                    value={dlFormat}
+                    onChange={(e) => setDlFormat(e.target.value)}
+                    className="w-full rounded-lg border border-slate-200 px-2 py-2 text-sm text-slate-700 outline-none focus:border-blue-300"
+                  >
+                    <option value="video">Video</option>
+                    <option value="audio">Audio only</option>
+                  </select>
+                </div>
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-slate-700 mb-1">Notes</label>
+                <input
+                  value={dlNotes}
+                  onChange={(e) => setDlNotes(e.target.value)}
+                  placeholder="e.g. Approved by client on 2026-05-01"
+                  className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-900 outline-none focus:border-blue-300 focus:ring-2 focus:ring-blue-100"
+                />
+              </div>
+              <label className="flex items-start gap-2 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={dlPermission}
+                  onChange={(e) => setDlPermission(e.target.checked)}
+                  className="mt-0.5 h-4 w-4 rounded border-slate-300 accent-blue-600"
+                />
+                <span className="text-xs text-slate-700">
+                  I confirm the operator has permission from the content owner to download and process this media.
+                </span>
+              </label>
+              {dlError && <p className="text-xs text-red-600">{dlError}</p>}
+              <button
+                type="submit"
+                disabled={dlSubmitting}
+                className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50"
+              >
+                {dlSubmitting ? "Downloading…" : "Download"}
+              </button>
+            </form>
+
+            {dlResult && (
+              <div className={`rounded-lg border p-3 text-sm space-y-1 ${dlResult.status === "completed" ? "border-green-200 bg-green-50" : dlResult.status === "skipped" ? "border-amber-200 bg-amber-50" : "border-red-200 bg-red-50"}`}>
+                <div className={`font-semibold ${dlResult.status === "completed" ? "text-green-800" : dlResult.status === "skipped" ? "text-amber-800" : "text-red-800"}`}>
+                  {dlResult.status === "completed" ? "Download complete" : dlResult.status === "skipped" ? "Skipped" : "Failed"}
+                </div>
+                {dlResult.skip_reason && <div className="text-xs text-amber-700">{dlResult.skip_reason}</div>}
+                {dlResult.error_message && <div className="text-xs text-red-700">{dlResult.error_message}</div>}
+                {dlResult.item?.output_path && <div className="text-xs text-green-700 font-mono">{dlResult.item.output_path}</div>}
+              </div>
+            )}
+          </div>
+
+          {/* Past downloads table */}
+          {approvedUrlDownloads.length > 0 && (
+            <div className="rounded-lg border border-slate-200 bg-white overflow-hidden">
+              <div className="px-4 py-2 border-b border-slate-100 bg-slate-50">
+                <span className="text-xs font-semibold text-slate-600">Download History</span>
+              </div>
+              <table className="w-full text-xs">
+                <thead>
+                  <tr className="border-b border-slate-100 text-left text-slate-500">
+                    <th className="px-4 py-2">URL</th>
+                    <th className="px-4 py-2">Format</th>
+                    <th className="px-4 py-2">Status</th>
+                    <th className="px-4 py-2">Date</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {approvedUrlDownloads.map((dl) => (
+                    <tr key={dl._id} className="border-b border-slate-50 hover:bg-slate-50">
+                      <td className="px-4 py-2 max-w-xs truncate font-mono text-slate-600">{dl.url}</td>
+                      <td className="px-4 py-2 text-slate-500">{dl.requested_format}</td>
+                      <td className="px-4 py-2">
+                        <span className={`rounded px-1.5 py-0.5 text-xs font-medium ${dl.status === "completed" ? "bg-green-100 text-green-700" : dl.status === "skipped" ? "bg-amber-100 text-amber-700" : dl.status === "failed" ? "bg-red-100 text-red-700" : "bg-slate-100 text-slate-600"}`}>
+                          {dl.status}
+                        </span>
+                      </td>
+                      <td className="px-4 py-2 text-slate-400">{formatDate(dl.created_at)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Ingested Media */}
+      {activeTab === "ingested" && (
+        <div className="space-y-3">
+          {ingestionIntakeRecords.length === 0 ? (
+            <div className="rounded-lg border border-dashed border-slate-200 bg-slate-50 p-6 text-center text-sm text-slate-500">
+              No ingested media yet. Use Folder Scan or URL Download to ingest approved client media.
+            </div>
+          ) : (
+            ingestionIntakeRecords.map((rec) => (
+              <div key={rec._id} className="rounded-lg border border-slate-200 bg-white p-4 space-y-2">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <span className="rounded bg-slate-100 px-2 py-0.5 text-xs font-mono text-slate-600">{rec.extension}</span>
+                    <span className={`rounded px-2 py-0.5 text-xs font-medium ${rec.media_type === "video" ? "bg-blue-100 text-blue-700" : "bg-purple-100 text-purple-700"}`}>{rec.media_type}</span>
+                    <span className="text-sm font-medium text-slate-800 truncate max-w-xs">{rec.filename || rec.media_path}</span>
+                  </div>
+                  <span className={`rounded px-2 py-0.5 text-xs font-medium ${rec.ingestion_status === "discovered" ? "bg-amber-100 text-amber-700" : rec.ingestion_status === "registered" ? "bg-green-100 text-green-700" : "bg-red-100 text-red-700"}`}>
+                    {rec.ingestion_status || rec.status}
+                  </span>
+                </div>
+                <div className="text-xs text-slate-400 font-mono truncate">{rec.original_file_path || rec.media_path}</div>
+                <div className="flex flex-wrap gap-3 text-xs text-slate-500">
+                  {rec.size_bytes > 0 && <span>{(rec.size_bytes / 1024 / 1024).toFixed(1)} MB</span>}
+                  {rec.duration_seconds && <span>{Math.round(rec.duration_seconds)}s</span>}
+                  <span>{rec.ingestion_source?.replace(/_/g, " ")}</span>
+                  {rec.source_label && <span>{rec.source_label}</span>}
+                </div>
+                {rec.source_content_id && (
+                  <div className="text-xs text-slate-400">Linked source content: <code className="bg-slate-100 px-1 rounded">{rec.source_content_id}</code></div>
+                )}
+                <div className="flex gap-2 mt-1">
+                  <span className="text-xs text-slate-400 italic">Next steps: extract audio → transcript → generate snippets</span>
+                </div>
+              </div>
+            ))
+          )}
+        </div>
+      )}
+    </section>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Main page
 // ---------------------------------------------------------------------------
 
@@ -3432,10 +3825,14 @@ export default function CreativeStudioPage({ activeWorkspace, refreshTrigger = 0
   const [clientIntelligenceRecords, setClientIntelligenceRecords] = useState([]);
   const [leadCorrelations, setLeadCorrelations] = useState([]);
 
+  // v10.4: Media Ingestion Layer
+  const [mediaFolderScans, setMediaFolderScans] = useState([]);
+  const [approvedUrlDownloads, setApprovedUrlDownloads] = useState([]);
+
   async function load() {
     setLoading(true);
     try {
-      const [briefData, draftData, profilesData, channelsData, contentData, snippetsData, assetsData, audioRunsData, transcriptRunsData, segmentsData, intakeData, promptGenData, assetRendersData, publishLogsData, perfRecordsData, perfSummariesData, campaignPacksData, campaignReportsData, campaignExportsData, clientIntelligenceData, leadCorrelationsData] = await Promise.all([
+      const [briefData, draftData, profilesData, channelsData, contentData, snippetsData, assetsData, audioRunsData, transcriptRunsData, segmentsData, intakeData, promptGenData, assetRendersData, publishLogsData, perfRecordsData, perfSummariesData, campaignPacksData, campaignReportsData, campaignExportsData, clientIntelligenceData, leadCorrelationsData, mediaFolderScansData, approvedUrlDownloadsData] = await Promise.all([
         api.contentBriefs({ ...wsParam() }),
         api.contentDrafts({ ...wsParam() }),
         api.clientProfiles({ ...wsParam() }),
@@ -3457,6 +3854,8 @@ export default function CreativeStudioPage({ activeWorkspace, refreshTrigger = 0
         api.campaignExports({ ...wsParam() }),
         api.clientIntelligence({ ...wsParam() }),
         api.leadContentCorrelations({ ...wsParam() }),
+        api.mediaFolderScans({ ...wsParam() }),
+        api.approvedUrlDownloads({ ...wsParam() }),
       ]);
       setBriefs(briefData.items || []);
       setDrafts(draftData.items || []);
@@ -3479,6 +3878,8 @@ export default function CreativeStudioPage({ activeWorkspace, refreshTrigger = 0
       setCampaignExports(campaignExportsData.items || []);
       setClientIntelligenceRecords(clientIntelligenceData.items || []);
       setLeadCorrelations(leadCorrelationsData.items || []);
+      setMediaFolderScans(mediaFolderScansData.items || []);
+      setApprovedUrlDownloads(approvedUrlDownloadsData.items || []);
     } catch {
       // fail silently
     } finally {
@@ -3627,6 +4028,7 @@ export default function CreativeStudioPage({ activeWorkspace, refreshTrigger = 0
           { id: "campaign-packs", label: `Campaign Packs (${campaignPacks.length})` },
           { id: "campaign-exports", label: `Exports (${campaignExports.length})` },
           { id: "client-intelligence", label: `Intelligence (${clientIntelligenceRecords.length})` },
+          { id: "media-ingestion", label: `Media Ingestion (${mediaFolderScans.length + approvedUrlDownloads.length})` },
           { id: "poc-demo", label: demoMode ? "POC Demo ✦" : "POC Demo" },
         ].map(({ id, label }) => (
           <button
@@ -4142,6 +4544,19 @@ export default function CreativeStudioPage({ activeWorkspace, refreshTrigger = 0
           assetRenders={assetRenders}
           manualPublishLogs={manualPublishLogs}
           assetPerformanceRecords={assetPerformanceRecords}
+          clientProfiles={clientProfiles}
+          wsParam={wsParam}
+          onRefresh={load}
+          showNotice={showNotice}
+        />
+      )}
+
+      {/* v10.4: MEDIA INGESTION section */}
+      {activeSection === "media-ingestion" && (
+        <MediaIngestionSection
+          mediaFolderScans={mediaFolderScans}
+          approvedUrlDownloads={approvedUrlDownloads}
+          mediaIntakeRecords={mediaIntakeRecords}
           clientProfiles={clientProfiles}
           wsParam={wsParam}
           onRefresh={load}

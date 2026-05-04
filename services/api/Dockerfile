@@ -21,6 +21,8 @@ COPY services/api/worker.py .
 COPY services/api/comfyui_client.py .
 COPY services/api/snippet_scorer.py .
 COPY services/api/client_intelligence.py .
+COPY services/api/media_folder_scanner.py .
+COPY services/api/approved_url_downloader.py .
 COPY agents ./agents
 COPY tools ./tools
 COPY modules ./modules

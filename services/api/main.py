@@ -48,6 +48,15 @@ except Exception:
     FanEngagementAgent = None
     FollowupAgent = None
 
+try:
+    from media_folder_scanner import scan_media_folder as _scan_media_folder, SUPPORTED_EXTENSIONS as _SCANNER_EXTENSIONS
+    from approved_url_downloader import download_approved_url as _download_approved_url, get_diagnostics as _ytdlp_diagnostics
+except Exception:  # pragma: no cover
+    _scan_media_folder = None  # type: ignore[assignment]
+    _SCANNER_EXTENSIONS = frozenset()
+    _download_approved_url = None  # type: ignore[assignment]
+    _ytdlp_diagnostics = None  # type: ignore[assignment]
+
 
 SERVICE_NAME = "api"
 SERVICE_DESCRIPTION = "Local-first SignalForge dashboard API."
@@ -3902,6 +3911,29 @@ class MediaIntakeCreateRequest(BaseModel):
     notes: str = ""
 
 
+# ---------------------------------------------------------------------------
+# v10.4 — Media Folder Scan + Approved URL Download models
+# ---------------------------------------------------------------------------
+
+class MediaFolderScanRequest(BaseModel):
+    workspace_slug: str = ""
+    client_id: str = ""
+    folder_path: str = ""
+    source_label: str = ""
+    ingestion_source: str = "local_folder"   # local_folder | google_drive_sync | dropbox_sync
+    compute_hashes: bool = False
+
+
+class ApprovedUrlDownloadRequest(BaseModel):
+    workspace_slug: str = ""
+    client_id: str = ""
+    source_content_id: str = ""
+    url: str = ""
+    permission_confirmed: bool = False
+    requested_format: str = "video"    # video | audio
+    notes: str = ""
+
+
 class SourceContentStatusUpdateRequest(BaseModel):
     status: Literal["needs_review", "approved", "rejected"]
     note: str = ""
@@ -7183,3 +7215,408 @@ def list_lead_content_correlations(
         }
     finally:
         client.close()
+
+
+# ---------------------------------------------------------------------------
+# v10.4 — Media Ingestion Layer
+# ---------------------------------------------------------------------------
+# Part 1: Shared Folder / Drive Ingestion
+# Part 2: Approved URL Download (yt-dlp)
+# Part 3: Diagnostics
+#
+# Safety: simulation_only=True, outbound_actions_taken=0 on all records.
+# No publishing, no uploading, no social API calls.
+# ---------------------------------------------------------------------------
+
+
+@app.post("/media-folder-scans")
+def create_media_folder_scan(payload: MediaFolderScanRequest) -> dict:
+    """
+    Scan a local folder (or synced Google Drive / Dropbox folder) for
+    supported media files and register each as a media_intake_record.
+
+    No files are uploaded, deleted, or transmitted externally.
+    All discovered media starts review-gated (ingestion_status=discovered).
+    """
+    if _scan_media_folder is None:
+        raise HTTPException(status_code=503, detail="media_folder_scanner module not available")
+
+    now = utc_now()
+    workspace_slug = clean_text(payload.workspace_slug)
+    client_id = clean_text(payload.client_id)
+    folder_path = clean_text(payload.folder_path)
+    source_label = clean_text(payload.source_label)
+    ingestion_source = clean_text(payload.ingestion_source) or "local_folder"
+
+    mongo_client = get_client()
+    try:
+        db = get_database(mongo_client)
+
+        # Collect existing paths and hashes to skip duplicates
+        existing_paths: set[str] = set()
+        existing_hashes: set[str] = set()
+        if workspace_slug:
+            for rec in db.media_intake_records.find(
+                {"workspace_slug": workspace_slug, "original_file_path": {"$exists": True, "$ne": ""}},
+                {"original_file_path": 1, "file_hash": 1},
+            ):
+                if rec.get("original_file_path"):
+                    existing_paths.add(rec["original_file_path"])
+                if rec.get("file_hash"):
+                    existing_hashes.add(rec["file_hash"])
+
+        scan_result = _scan_media_folder(
+            workspace_slug=workspace_slug,
+            client_id=client_id,
+            folder_path=folder_path,
+            source_label=source_label,
+            ingestion_source=ingestion_source,
+            compute_hashes=payload.compute_hashes,
+            existing_paths=existing_paths,
+            existing_hashes=existing_hashes,
+        )
+
+        # Persist scan record
+        scan_doc: dict[str, Any] = {
+            "workspace_slug": workspace_slug,
+            "client_id": client_id,
+            "folder_path": folder_path,
+            "source_label": source_label,
+            "ingestion_source": ingestion_source,
+            "discovered_count": scan_result.discovered_count,
+            "registered_count": 0,
+            "skipped_count": scan_result.skipped_count,
+            "failed_count": scan_result.failed_count,
+            "errors": scan_result.errors,
+            "simulation_only": True,
+            "outbound_actions_taken": 0,
+            "created_at": now,
+            "updated_at": now,
+        }
+        scan_res = db.media_folder_scans.insert_one(scan_doc)
+        scan_id = str(scan_res.inserted_id)
+
+        # Persist a media_intake_record for each discovered file
+        registered_count = 0
+        intake_ids: list[str] = []
+        for sf in scan_result.items:
+            if sf.ingestion_status != "discovered":
+                continue
+            intake_doc: dict[str, Any] = {
+                "workspace_slug": workspace_slug,
+                "client_id": client_id,
+                "source_content_id": "",
+                "scan_id": scan_id,
+                "intake_method": "local_folder_scan",
+                "ingestion_source": sf.ingestion_source,
+                "original_file_path": sf.absolute_path,
+                "media_path": sf.absolute_path,
+                "filename": sf.filename,
+                "extension": sf.extension,
+                "media_type": sf.media_type,
+                "size_bytes": sf.size_bytes,
+                "modified_at": sf.modified_at,
+                "duration_seconds": sf.duration_seconds,
+                "file_hash": sf.file_hash,
+                "source_label": source_label,
+                "ingestion_status": "discovered",
+                "ingestion_notes": sf.ingestion_notes,
+                "status": "registered",
+                "approved_for_download": False,
+                "source_url": "",
+                "error": "",
+                "skip_reason": "",
+                "notes": "",
+                "simulation_only": True,
+                "outbound_actions_taken": 0,
+                "created_at": now,
+                "updated_at": now,
+            }
+            r = db.media_intake_records.insert_one(intake_doc)
+            intake_ids.append(str(r.inserted_id))
+            registered_count += 1
+
+        # Update scan record with actual registered_count
+        db.media_folder_scans.update_one(
+            {"_id": scan_res.inserted_id},
+            {"$set": {"registered_count": registered_count, "updated_at": utc_now()}},
+        )
+
+        created_scan = serialize(db.media_folder_scans.find_one({"_id": scan_res.inserted_id}))
+        return {
+            "scan_id": scan_id,
+            "item": created_scan,
+            "discovered_count": scan_result.discovered_count,
+            "registered_count": registered_count,
+            "skipped_count": scan_result.skipped_count,
+            "failed_count": scan_result.failed_count,
+            "intake_ids": intake_ids,
+            "errors": scan_result.errors,
+            "message": (
+                f"Folder scan complete. {scan_result.discovered_count} file(s) discovered, "
+                f"{registered_count} registered, {scan_result.skipped_count} skipped. "
+                "No uploads or external calls performed."
+            ),
+            "simulation_only": True,
+            "outbound_actions_taken": 0,
+        }
+    finally:
+        mongo_client.close()
+
+
+@app.get("/media-folder-scans")
+def list_media_folder_scans(
+    workspace_slug: str = Query(""),
+    client_id: str = Query(""),
+    limit: int = Query(50, ge=1, le=200),
+) -> dict:
+    mongo_client = get_client()
+    try:
+        db = get_database(mongo_client)
+        query: dict[str, Any] = {}
+        if workspace_slug:
+            query["workspace_slug"] = workspace_slug
+        if client_id:
+            query["client_id"] = client_id
+        items = list(db.media_folder_scans.find(query).sort([("created_at", -1)]).limit(limit))
+        return {"items": serialize(items), "total": len(items), "simulation_only": True, "outbound_actions_taken": 0}
+    finally:
+        mongo_client.close()
+
+
+@app.get("/media-folder-scans/{scan_id}")
+def get_media_folder_scan(scan_id: str) -> dict:
+    mongo_client = get_client()
+    try:
+        db = get_database(mongo_client)
+        query: dict[str, Any] = {}
+        if ObjectId.is_valid(scan_id):
+            query = {"$or": [{"_id": ObjectId(scan_id)}, {"_id": scan_id}]}
+        else:
+            query = {"_id": scan_id}
+        doc = db.media_folder_scans.find_one(query)
+        if not doc:
+            raise HTTPException(status_code=404, detail="Media folder scan not found")
+        return {"item": serialize(doc), "simulation_only": True, "outbound_actions_taken": 0}
+    finally:
+        mongo_client.close()
+
+
+# ---------------------------------------------------------------------------
+# v10.4 — Approved URL Download (yt-dlp)
+# ---------------------------------------------------------------------------
+
+
+@app.post("/approved-url-downloads")
+def create_approved_url_download(payload: ApprovedUrlDownloadRequest) -> dict:
+    """
+    Download media from an approved URL using yt-dlp.
+
+    Guards:
+    - YTDLP_ENABLED must be true
+    - permission_confirmed must be true
+    - domain must be in YTDLP_ALLOWED_DOMAINS
+    - yt-dlp binary must be available
+
+    Downloaded files are stored locally only. Nothing is published.
+    """
+    if _download_approved_url is None:
+        raise HTTPException(status_code=503, detail="approved_url_downloader module not available")
+
+    now = utc_now()
+    workspace_slug = clean_text(payload.workspace_slug)
+    client_id = clean_text(payload.client_id)
+    source_content_id = clean_text(payload.source_content_id)
+    url = clean_text(payload.url)
+    notes = clean_text(payload.notes)
+    requested_format = clean_text(payload.requested_format) or "video"
+
+    mongo_client = get_client()
+    try:
+        db = get_database(mongo_client)
+
+        # Create download record (status: queued initially)
+        download_doc: dict[str, Any] = {
+            "workspace_slug": workspace_slug,
+            "client_id": client_id,
+            "source_content_id": source_content_id,
+            "url": url,
+            "permission_confirmed": payload.permission_confirmed,
+            "requested_format": requested_format,
+            "notes": notes,
+            "output_path": "",
+            "filename": "",
+            "duration_seconds": None,
+            "status": "queued",
+            "error_message": "",
+            "skip_reason": "",
+            "simulation_only": True,
+            "outbound_actions_taken": 0,
+            "created_at": now,
+            "updated_at": now,
+        }
+        doc_res = db.approved_url_downloads.insert_one(download_doc)
+        download_id = str(doc_res.inserted_id)
+
+        # Attempt download
+        result = _download_approved_url(
+            workspace_slug=workspace_slug,
+            client_id=client_id,
+            url=url,
+            permission_confirmed=payload.permission_confirmed,
+            requested_format=requested_format,
+            notes=notes,
+            source_content_id=source_content_id,
+        )
+
+        # Update record with result
+        update: dict[str, Any] = {
+            "status": result.status,
+            "output_path": result.output_path,
+            "filename": result.filename,
+            "duration_seconds": result.duration_seconds,
+            "error_message": result.error_message,
+            "skip_reason": result.skip_reason,
+            "updated_at": utc_now(),
+        }
+        db.approved_url_downloads.update_one({"_id": doc_res.inserted_id}, {"$set": update})
+
+        # If completed, create a media_intake_record
+        intake_id = ""
+        if result.status == "completed" and result.output_path:
+            from pathlib import Path as _Path
+            ext = _Path(result.output_path).suffix.lower()
+            intake_doc: dict[str, Any] = {
+                "workspace_slug": workspace_slug,
+                "client_id": client_id,
+                "source_content_id": source_content_id,
+                "download_id": download_id,
+                "intake_method": "yt_dlp",
+                "ingestion_source": "yt_dlp",
+                "original_file_path": result.output_path,
+                "media_path": result.output_path,
+                "filename": result.filename,
+                "extension": ext,
+                "media_type": "audio" if requested_format == "audio" else "video",
+                "size_bytes": 0,
+                "duration_seconds": result.duration_seconds,
+                "file_hash": None,
+                "source_url": url,
+                "ingestion_status": "discovered",
+                "ingestion_notes": f"Downloaded via yt-dlp. notes: {notes}",
+                "status": "registered",
+                "approved_for_download": True,
+                "error": "",
+                "skip_reason": "",
+                "notes": notes,
+                "simulation_only": True,
+                "outbound_actions_taken": 0,
+                "created_at": utc_now(),
+                "updated_at": utc_now(),
+            }
+            ir = db.media_intake_records.insert_one(intake_doc)
+            intake_id = str(ir.inserted_id)
+            db.approved_url_downloads.update_one(
+                {"_id": doc_res.inserted_id},
+                {"$set": {"intake_id": intake_id, "updated_at": utc_now()}},
+            )
+
+        created = serialize(db.approved_url_downloads.find_one({"_id": doc_res.inserted_id}))
+        return {
+            "download_id": download_id,
+            "item": created,
+            "intake_id": intake_id,
+            "status": result.status,
+            "skip_reason": result.skip_reason,
+            "error_message": result.error_message,
+            "message": _download_status_message(result),
+            "simulation_only": True,
+            "outbound_actions_taken": 0,
+        }
+    finally:
+        mongo_client.close()
+
+
+def _download_status_message(result: Any) -> str:
+    if result.status == "completed":
+        return f"Download complete. File saved to {result.output_path}. No content published."
+    if result.status == "skipped":
+        return f"Download skipped: {result.skip_reason}"
+    return f"Download failed: {result.error_message}"
+
+
+@app.get("/approved-url-downloads")
+def list_approved_url_downloads(
+    workspace_slug: str = Query(""),
+    client_id: str = Query(""),
+    status: str = Query(""),
+    limit: int = Query(50, ge=1, le=200),
+) -> dict:
+    mongo_client = get_client()
+    try:
+        db = get_database(mongo_client)
+        query: dict[str, Any] = {}
+        if workspace_slug:
+            query["workspace_slug"] = workspace_slug
+        if client_id:
+            query["client_id"] = client_id
+        if status:
+            query["status"] = status
+        items = list(
+            db.approved_url_downloads.find(query).sort([("created_at", -1)]).limit(limit)
+        )
+        return {"items": serialize(items), "total": len(items), "simulation_only": True, "outbound_actions_taken": 0}
+    finally:
+        mongo_client.close()
+
+
+@app.get("/approved-url-downloads/{download_id}")
+def get_approved_url_download(download_id: str) -> dict:
+    mongo_client = get_client()
+    try:
+        db = get_database(mongo_client)
+        query: dict[str, Any] = {}
+        if ObjectId.is_valid(download_id):
+            query = {"$or": [{"_id": ObjectId(download_id)}, {"_id": download_id}]}
+        else:
+            query = {"_id": download_id}
+        doc = db.approved_url_downloads.find_one(query)
+        if not doc:
+            raise HTTPException(status_code=404, detail="Approved URL download not found")
+        return {"item": serialize(doc), "simulation_only": True, "outbound_actions_taken": 0}
+    finally:
+        mongo_client.close()
+
+
+@app.get("/media-ingestion/diagnostics")
+def media_ingestion_diagnostics() -> dict:
+    """
+    Health check for the media ingestion layer.
+    Returns scanner extension list and yt-dlp availability/configuration.
+    No external calls are made.
+    """
+    ytdlp_diag: dict[str, Any] = {}
+    if _ytdlp_diagnostics is not None:
+        d = _ytdlp_diagnostics()
+        ytdlp_diag = {
+            "yt_dlp_enabled": d.yt_dlp_enabled,
+            "yt_dlp_available": d.yt_dlp_available,
+            "yt_dlp_path": d.yt_dlp_path,
+            "yt_dlp_version": d.yt_dlp_version,
+            "output_dir": d.output_dir,
+            "output_dir_exists": d.output_dir_exists,
+            "allowed_domains": d.allowed_domains,
+            "max_duration_seconds": d.max_duration_seconds,
+        }
+    else:
+        ytdlp_diag = {"error": "approved_url_downloader module not available"}
+
+    return {
+        "scanner": {
+            "available": _scan_media_folder is not None,
+            "supported_extensions": sorted(_SCANNER_EXTENSIONS),
+        },
+        "yt_dlp": ytdlp_diag,
+        "simulation_only": True,
+        "outbound_actions_taken": 0,
+    }

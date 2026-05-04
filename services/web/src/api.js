@@ -320,6 +320,32 @@ export const api = {
       body: JSON.stringify({ ...wsParam(), ...payload }),
     }),
 
+  // v10.4 — Media Folder Scans
+  mediaFolderScans: (params = {}) =>
+    request(`/media-folder-scans?${new URLSearchParams({ ...wsParam(), ...params })}`),
+  createMediaFolderScan: (payload) =>
+    request("/media-folder-scans", {
+      method: "POST",
+      body: JSON.stringify({ ...wsParam(), ...payload }),
+    }),
+  getMediaFolderScan: (id) =>
+    request(`/media-folder-scans/${id}`),
+
+  // v10.4 — Approved URL Downloads
+  approvedUrlDownloads: (params = {}) =>
+    request(`/approved-url-downloads?${new URLSearchParams({ ...wsParam(), ...params })}`),
+  createApprovedUrlDownload: (payload) =>
+    request("/approved-url-downloads", {
+      method: "POST",
+      body: JSON.stringify({ ...wsParam(), ...payload }),
+    }),
+  getApprovedUrlDownload: (id) =>
+    request(`/approved-url-downloads/${id}`),
+
+  // v10.4 — Diagnostics
+  mediaIngestionDiagnostics: () =>
+    request("/media-ingestion/diagnostics"),
+
   createAudioExtractionRunV4: (payload) =>
     request("/audio-extraction-runs/v4", {
       method: "POST",

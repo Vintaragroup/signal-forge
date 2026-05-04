@@ -20,6 +20,11 @@ x-signalforge-env: &signalforge-env
   FFMPEG_OUTPUT_DIR: ${FFMPEG_OUTPUT_DIR:-/tmp/signalforge_renders}
   # E2E testing — lower snippet score threshold (restore to 6 after E2E)
   SNIPPET_SCORE_THRESHOLD: ${SNIPPET_SCORE_THRESHOLD:-6}
+  # v10.4 — Media Ingestion Layer
+  YTDLP_ENABLED: ${YTDLP_ENABLED:-false}
+  YTDLP_OUTPUT_DIR: ${YTDLP_OUTPUT_DIR:-/tmp/signalforge_downloads}
+  YTDLP_MAX_DURATION_SECONDS: ${YTDLP_MAX_DURATION_SECONDS:-7200}
+  YTDLP_ALLOWED_DOMAINS: ${YTDLP_ALLOWED_DOMAINS:-youtube.com,youtu.be}
 
 services:
   mongo:
