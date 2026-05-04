@@ -681,11 +681,36 @@ function SnippetRow({ snippet, onRefresh }) {
             </div>
           )}
 
+          {/* v10.3 cleaned hook display (shown when cleanup has been run) */}
+          {snippet.display_title && (
+            <div className="rounded-lg border border-violet-100 bg-violet-50 p-3 space-y-1">
+              <div className="text-xs font-semibold text-violet-800">Display Title</div>
+              <div className="text-sm font-semibold text-violet-900">{snippet.display_title}</div>
+              {snippet.cleaned_hook_text && snippet.cleaned_hook_text !== snippet.display_title && (
+                <>
+                  <div className="text-xs font-semibold text-violet-700 mt-1">Clean Hook</div>
+                  <div className="text-sm text-violet-800">{snippet.cleaned_hook_text}</div>
+                </>
+              )}
+              {snippet.caption_hook_suggestions && snippet.caption_hook_suggestions.length > 0 && (
+                <div className="mt-2 space-y-1">
+                  <div className="text-xs font-medium text-violet-700">Caption suggestions:</div>
+                  {snippet.caption_hook_suggestions.map((s, i) => (
+                    <div key={i} className="text-xs text-slate-600 pl-2 border-l-2 border-violet-200">{s}</div>
+                  ))}
+                </div>
+              )}
+              {snippet.hook_cleanup_notes && (
+                <div className="text-xs text-violet-500 italic mt-1">{snippet.hook_cleanup_notes}</div>
+              )}
+            </div>
+          )}
+
           {/* v6.5 hook display */}
           {snippet.hook_text && (
             <div className="rounded-lg border border-sky-100 bg-sky-50 p-3 space-y-1">
-              <div className="text-xs font-semibold text-sky-800">Extracted Hook</div>
-              <div className="text-sm text-sky-900">"{snippet.hook_text}"</div>
+              <div className="text-xs font-semibold text-sky-800">{snippet.display_title ? "Raw Extracted Hook" : "Extracted Hook"}</div>
+              <div className="text-sm text-sky-900 italic">"{snippet.hook_text}"</div>
               {snippet.hook_type && (
                 <span className="inline-block rounded-full bg-sky-100 px-2 py-0.5 text-xs text-sky-700 mt-1">{snippet.hook_type.replaceAll("_", " ")}</span>
               )}

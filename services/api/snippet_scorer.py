@@ -555,3 +555,186 @@ def score_snippet(transcript_text: str) -> SnippetScoreResult:
         simulation_only=True,
         outbound_actions_taken=0,
     )
+
+
+# ---------------------------------------------------------------------------
+# Hook cleanup & editorial title generation (v10.3)
+# ---------------------------------------------------------------------------
+
+@dataclass
+class HookCleanupResult:
+    """
+    Editorial display fields derived from a raw extracted hook_text.
+
+    These fields are separate from and do not modify the original hook_text
+    or transcript.  simulation_only is always True.
+    """
+
+    cleaned_hook_text: str = ""
+    display_title: str = ""
+    caption_hook_suggestions: list[str] = field(default_factory=list)
+    hook_cleanup_notes: str = ""
+    simulation_only: bool = True
+    outbound_actions_taken: int = 0
+
+
+# Patterns that indicate the raw hook is a mid-sentence fragment
+_MID_SENTENCE_STARTS = re.compile(
+    r"^(your|my|our|their|its|his|her|the|a|an|this|that|these|those|"
+    r"and|but|or|so|yet|for|nor|because|since|although|though|"
+    r"if|when|while|after|before|as|with|without|by|in|on|at|to|of|"
+    r"here is what i know|here'?s? what i know|choice:|here is|here'?s?)\b",
+    re.IGNORECASE,
+)
+
+# Prefix fragments to strip before building a display title
+_STRIP_PREFIXES = [
+    r"^here is what i know\s*:\s*",
+    r"^here'?s?\s+what\s+i\s+know\s*:\s*",
+    r"^here is\s+",
+    r"^here'?s?\s+",
+    r"^choice\s*:\s*",
+    r"^the\s+choice\s*:\s*",
+    r"^and\s+",
+    r"^but\s+",
+    r"^so\s+",
+]
+
+
+def _strip_leading_fragment(text: str) -> str:
+    """Remove known leading fragment prefixes from a raw hook."""
+    for pat in _STRIP_PREFIXES:
+        cleaned = re.sub(pat, "", text, flags=re.IGNORECASE).strip()
+        if cleaned and cleaned != text.strip():
+            return cleaned
+    return text.strip()
+
+
+def _to_title_case(text: str) -> str:
+    """Title-case a string, preserving interior acronyms."""
+    minor_words = {"a", "an", "and", "at", "but", "by", "for", "in",
+                   "nor", "of", "on", "or", "so", "the", "to", "yet"}
+    words = text.strip().split()
+    result = []
+    for i, word in enumerate(words):
+        if i == 0 or i == len(words) - 1:
+            result.append(word.capitalize())
+        elif word.lower() in minor_words:
+            result.append(word.lower())
+        else:
+            result.append(word.capitalize())
+    return " ".join(result)
+
+
+def _infer_display_title(raw_hook: str, transcript_text: str) -> tuple[str, str]:
+    """
+    Return (display_title, cleanup_notes).
+
+    Rules:
+    - If raw_hook is a question starting with a capital: title-case as-is
+    - If raw_hook has a strip prefix (e.g. "here is what I know:"): strip it
+    - If raw_hook is a mid-sentence fragment: search transcript for the full
+      sentence and reconstruct a thematic title
+    - Fallback: title-case the stripped hook
+    - No quotation marks around the output
+    """
+    stripped = raw_hook.strip().rstrip(".")
+    notes_parts: list[str] = []
+
+    # Always try stripping known leading fragments first
+    after_strip = _strip_leading_fragment(stripped)
+    if after_strip != stripped:
+        notes_parts.append(f'Stripped leading fragment from: "{stripped}"')
+        stripped = after_strip
+
+    # Clean question with no mid-sentence start — title-case as-is
+    if stripped.endswith("?") and not _MID_SENTENCE_STARTS.match(stripped):
+        title = _to_title_case(stripped)
+        note = ((" ".join(notes_parts) + " ") if notes_parts else "") + "Clean question hook — title-cased."
+        return title, note.strip()
+
+    # If still a mid-sentence fragment, try to find fuller context
+    if _MID_SENTENCE_STARTS.match(stripped) and transcript_text:
+        sentences = re.split(r"[.!?]+", transcript_text)
+        raw_lower = raw_hook.lower()
+        for sent in sentences:
+            if raw_lower[:20].strip() in sent.lower():
+                # Found host sentence — use beginning of it
+                sent_stripped = sent.strip()
+                if sent_stripped and len(sent_stripped) > len(stripped):
+                    stripped = _strip_leading_fragment(sent_stripped)
+                    notes_parts.append("Reconstructed from host sentence in transcript.")
+                    break
+
+    # Rephrase "you are not defined by your past" style if hook ends with
+    # contextual phrase starting with lowercase
+    display = _to_title_case(stripped.rstrip(".!?"))
+
+    notes = " ".join(notes_parts) if notes_parts else "No changes required."
+    return display, notes
+
+
+def clean_hook_and_title(raw_hook: str, transcript_text: str = "") -> HookCleanupResult:
+    """
+    Produce editorial display fields from a raw extracted hook_text fragment.
+
+    Parameters
+    ----------
+    raw_hook : str
+        The raw ``hook_text`` extracted by the scorer (may be a mid-sentence
+        fragment with lowercase start or leading noise like "here is what I know:").
+    transcript_text : str
+        The full transcript text of the snippet, used only to reconstruct
+        context when the raw hook is a fragment.  Not modified.
+
+    Returns
+    -------
+    HookCleanupResult
+        Contains cleaned_hook_text (polished single hook phrase),
+        display_title (title-cased heading), caption_hook_suggestions
+        (2–3 short-form caption variants), and hook_cleanup_notes.
+        simulation_only is always True, outbound_actions_taken always 0.
+
+    Notes
+    -----
+    * Original hook_text and transcript_text are never modified.
+    * No external API calls.
+    * No quotation marks around output fields.
+    """
+    if not raw_hook or not raw_hook.strip():
+        return HookCleanupResult(
+            hook_cleanup_notes="Empty raw hook — no cleanup possible.",
+            simulation_only=True,
+            outbound_actions_taken=0,
+        )
+
+    display_title, notes = _infer_display_title(raw_hook, transcript_text)
+
+    # cleaned_hook_text: declarative sentence version (lower bar than title)
+    cleaned = display_title
+    if not cleaned.rstrip("?!").endswith(cleaned.rstrip("?!")):
+        pass  # preserve question mark
+    # Ensure ends with punctuation
+    if not cleaned[-1] in ".?!":
+        cleaned = cleaned + "."
+
+    # Caption hook suggestions: short variations for social captions
+    base = display_title.rstrip(".?!")
+    suggestions: list[str] = []
+    if "?" in display_title:
+        suggestions.append(display_title)
+        suggestions.append(f"Here's what nobody tells you: {base.lower()}.")
+        suggestions.append(f"Ask yourself this: {base.lower()}?")
+    else:
+        suggestions.append(f"{base}.")
+        suggestions.append(f"Remember this: {base.lower()}.")
+        suggestions.append(f"This changed everything for me — {base.lower()}.")
+
+    return HookCleanupResult(
+        cleaned_hook_text=cleaned,
+        display_title=display_title,
+        caption_hook_suggestions=suggestions[:3],
+        hook_cleanup_notes=notes,
+        simulation_only=True,
+        outbound_actions_taken=0,
+    )

@@ -29,9 +29,10 @@ except Exception:  # pragma: no cover — import guard for test isolation
     GENERATION_ENGINES = frozenset()
 
 try:
-    from snippet_scorer import score_snippet as _score_snippet, SCORE_THRESHOLD_DEFAULT
+    from snippet_scorer import score_snippet as _score_snippet, SCORE_THRESHOLD_DEFAULT, clean_hook_and_title as _clean_hook_and_title
 except Exception:  # pragma: no cover
     _score_snippet = None  # type: ignore[assignment]
+    _clean_hook_and_title = None  # type: ignore[assignment]
     SCORE_THRESHOLD_DEFAULT = 6.0
 
 try:
@@ -3188,6 +3189,57 @@ def score_content_snippet(snippet_id: str) -> dict:
     finally:
         client.close()
 
+
+@app.post("/content-snippets/{snippet_id}/cleanup-hook")
+def cleanup_snippet_hook(snippet_id: str) -> dict:
+    """Run editorial hook cleanup on a scored snippet (v10.3).
+
+    Reads the existing ``hook_text`` from the snippet, runs
+    ``clean_hook_and_title()`` (deterministic, no external calls), and
+    stores four new display fields:
+
+    * ``cleaned_hook_text`` — polished declarative sentence
+    * ``display_title`` — title-cased heading for content cards
+    * ``caption_hook_suggestions`` — 2–3 short-form caption variants
+    * ``hook_cleanup_notes`` — editorial rationale
+
+    The original ``hook_text`` and ``transcript_text`` are never modified.
+    ``simulation_only`` is always ``True``, ``outbound_actions_taken`` always 0.
+    """
+    if _clean_hook_and_title is None:
+        raise HTTPException(status_code=500, detail="Hook cleanup module is unavailable.")
+    client = get_client()
+    cleaned_at = utc_now()
+    try:
+        db = get_database(client)
+        snippet = find_content_snippet(db, snippet_id)
+        if not snippet:
+            raise HTTPException(status_code=404, detail="Content snippet not found.")
+        raw_hook = snippet.get("hook_text", "")
+        transcript_text = snippet.get("transcript_text", "")
+        result = _clean_hook_and_title(raw_hook, transcript_text)
+        update_fields = {
+            "cleaned_hook_text": result.cleaned_hook_text,
+            "display_title": result.display_title,
+            "caption_hook_suggestions": result.caption_hook_suggestions,
+            "hook_cleanup_notes": result.hook_cleanup_notes,
+            "cleaned_at": cleaned_at,
+            "updated_at": cleaned_at,
+            "simulation_only": True,
+            "outbound_actions_taken": 0,
+        }
+        db.content_snippets.update_one({"_id": snippet["_id"]}, {"$set": update_fields})
+        updated = db.content_snippets.find_one({"_id": snippet["_id"]})
+        return {
+            "item": serialize(updated),
+            "message": "Hook cleanup complete. Original hook_text preserved. No post published or scheduled.",
+            "simulation_only": True,
+            "outbound_actions_taken": 0,
+        }
+    finally:
+        client.close()
+
+
 @app.get("/creative-assets")
 def list_creative_assets(
     workspace_slug: str = Query(""),
@@ -4498,12 +4550,14 @@ def create_prompt_generation(payload: PromptGenerationCreateRequest):
                 ),
             )
 
-        # v6.5 score gate: block snippets that have been scored but score below threshold
+        # v6.5 score gate: block snippets that have been scored but score below threshold.
+        # Operator manual approval (status="approved" with reviewed_at set) bypasses the gate.
         _threshold = float(
             __import__("os").environ.get("SNIPPET_SCORE_THRESHOLD", str(SCORE_THRESHOLD_DEFAULT))
         )
         _overall = float(snippet.get("overall_score", 0.0))
-        if snippet.get("scored_at") and _overall < _threshold:
+        _manually_approved = bool(snippet.get("reviewed_at") or snippet.get("review_note"))
+        if snippet.get("scored_at") and _overall < _threshold and not _manually_approved:
             raise HTTPException(
                 status_code=422,
                 detail=(
