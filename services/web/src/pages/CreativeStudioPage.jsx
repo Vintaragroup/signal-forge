@@ -10,7 +10,7 @@ import {
   Sparkles,
   X,
 } from "lucide-react";
-import { api, getAppWorkspace } from "../api.js";
+import { api, getAppWorkspace, API_BASE_URL } from "../api.js";
 import DemoPageBanner from "../components/DemoPageBanner.jsx";
 import PocDemoTab from "../components/PocDemoTab.jsx";
 import StatusBadge from "../components/StatusBadge.jsx";
@@ -2865,6 +2865,8 @@ function AssetRenderSection({
   const [reviewNote, setReviewNote] = useState("");
   const [renderingId, setRenderingId] = useState(null);
   const [busy, setBusy] = useState(false);
+  // track which video players reported a load error (file missing on disk)
+  const [videoErrors, setVideoErrors] = useState({});
 
   const approvedPrompts = (promptGenerations || []).filter((pg) => pg.status === "approved");
 
@@ -2872,6 +2874,9 @@ function AssetRenderSection({
     if (filterStatus && r.status !== filterStatus) return false;
     return true;
   });
+
+  // derive current workspace label from wsParam helper
+  const wsSlug = (wsParam() || {}).workspace_slug || "";
 
   async function handleRender(promptGen) {
     if (renderingId) return;
@@ -2913,6 +2918,10 @@ function AssetRenderSection({
     }
   }
 
+  function handleVideoError(renderId) {
+    setVideoErrors((prev) => ({ ...prev, [renderId]: true }));
+  }
+
   return (
     <section className="space-y-6">
       <div className="flex flex-wrap items-center gap-3">
@@ -2925,6 +2934,10 @@ function AssetRenderSection({
             Demo Mode
           </span>
         )}
+        {/* Workspace context banner */}
+        <span className="rounded-full bg-indigo-50 px-2 py-0.5 text-xs text-indigo-700 font-medium">
+          {wsSlug ? `Viewing: ${wsSlug}` : "Viewing: All Workspaces"}
+        </span>
         <div className="ml-auto">
           <select
             value={filterStatus}
@@ -2972,7 +2985,9 @@ function AssetRenderSection({
 
       {filtered.length === 0 && (
         <p className="text-sm text-slate-400">
-          No renders yet. Approve a prompt generation above to render an asset.
+          {wsSlug
+            ? `No renders yet for workspace "${wsSlug}". Approve a prompt generation above to render an asset.`
+            : "No renders yet. Select a workspace or approve a prompt generation above."}
         </p>
       )}
 
@@ -2982,9 +2997,21 @@ function AssetRenderSection({
           const snippet = (contentSnippets || []).find((s) => s._id === render.snippet_id);
           const isReviewing = reviewingId === render._id;
           const statusColor = RENDER_STATUS_COLORS[render.status] || "bg-slate-100 text-slate-700";
+          const hasMp4 = render.file_path && render.file_path.endsWith(".mp4");
+          const isRealRender = render.assembly_status === "success";
+          const streamUrl = hasMp4 && isRealRender
+            ? `${API_BASE_URL}/asset-renders/${encodeURIComponent(render._id)}/stream`
+            : null;
+          const videoMissing = videoErrors[render._id];
+
+          // derive display title: use snippet display_title or cleaned hook or transcript
+          const hookText = snippet
+            ? (snippet.display_title || snippet.cleaned_hook_text || snippet.hook_text || snippet.transcript_text || "")
+            : "";
 
           return (
             <div key={render._id} className="rounded-lg border border-slate-200 bg-white p-4 space-y-3">
+              {/* Status badges row */}
               <div className="flex flex-wrap items-center gap-2">
                 <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${statusColor}`}>
                   {render.status}
@@ -2998,8 +3025,7 @@ function AssetRenderSection({
                 {render.is_demo && (
                   <span className="rounded-full bg-amber-100 px-2 py-0.5 text-xs text-amber-700">Demo</span>
                 )}
-                {/* Assembly status badge */}
-                {render.assembly_status === "success" && (
+                {isRealRender && (
                   <span className="rounded-full bg-green-100 px-2 py-0.5 text-xs text-green-700 font-medium">Real Render</span>
                 )}
                 {render.assembly_status === "failed" && (
@@ -3008,11 +3034,9 @@ function AssetRenderSection({
                 {(render.assembly_status === "mock" || (!render.assembly_status && render.assembly_result?.mock)) && (
                   <span className="rounded-full bg-slate-200 px-2 py-0.5 text-xs text-slate-500">Mock Render</span>
                 )}
-                {/* Assembly engine badge */}
                 {render.assembly_engine === "ffmpeg" && (
                   <span className="rounded-full bg-violet-100 px-2 py-0.5 text-xs text-violet-700">FFmpeg</span>
                 )}
-                {/* Image source badge */}
                 {render.image_source === "comfyui" && (
                   <span className="rounded-full bg-sky-100 px-2 py-0.5 text-xs text-sky-700 font-medium">ComfyUI Image</span>
                 )}
@@ -3021,7 +3045,14 @@ function AssetRenderSection({
                 )}
               </div>
 
-              {snippet && (
+              {/* Display title / hook */}
+              {hookText && (
+                <p className="text-sm font-medium text-slate-800 leading-snug">
+                  &ldquo;{hookText.length > 120 ? hookText.slice(0, 120) + "…" : hookText}&rdquo;
+                </p>
+              )}
+
+              {snippet && !hookText && (
                 <p className="text-xs text-slate-500">
                   <span className="font-medium text-slate-700">Snippet: </span>
                   {(snippet.transcript_text || "").slice(0, 120)}
@@ -3036,21 +3067,46 @@ function AssetRenderSection({
                 </p>
               )}
 
-              {/* Preview */}
-              {(render.preview_url || render.file_path) && (
-                <div className="rounded-lg border border-slate-100 bg-slate-50 p-3">
-                  {render.preview_url ? (
-                    <img
-                      src={render.preview_url}
-                      alt="Asset preview"
-                      className="mx-auto max-h-48 rounded object-contain"
-                    />
-                  ) : (
-                    <p className="text-xs text-slate-400 italic">
-                      {render.assembly_status === "success" ? "Local render — " : "Mock path — "}
-                      {render.file_path}
-                    </p>
+              {/* Audio source */}
+              {render.source_audio_path && (
+                <p className="text-xs text-slate-400 truncate">
+                  <span className="font-medium text-slate-600">Audio: </span>
+                  {render.source_audio_path.split("/").pop()}
+                  {render.preserve_original_audio && (
+                    <span className="ml-1 text-green-600">(original preserved)</span>
                   )}
+                </p>
+              )}
+
+              {/* Video player */}
+              {streamUrl && !videoMissing && (
+                <div className="rounded-lg overflow-hidden border border-slate-200 bg-black">
+                  <video
+                    controls
+                    preload="metadata"
+                    className="w-full max-h-[480px]"
+                    onError={() => handleVideoError(render._id)}
+                  >
+                    <source src={streamUrl} type="video/mp4" />
+                    Your browser does not support video playback.
+                  </video>
+                </div>
+              )}
+
+              {/* Video missing warning */}
+              {(videoMissing || (hasMp4 && !isRealRender && !streamUrl)) && (
+                <p className="rounded bg-red-50 px-2 py-1 text-xs text-red-600 font-medium">
+                  Video file missing — cannot review.
+                </p>
+              )}
+
+              {/* Mock / no-video path info */}
+              {!streamUrl && hasMp4 && !videoMissing && (
+                <div className="rounded-lg border border-slate-100 bg-slate-50 p-3">
+                  <p className="text-xs text-slate-400 italic">
+                    {render.assembly_status === "success" ? "Local render — " : "Mock path — "}
+                    {render.file_path}
+                  </p>
                 </div>
               )}
 
@@ -3074,6 +3130,7 @@ function AssetRenderSection({
                 Duration: {render.duration_seconds || 0}s · {render.resolution || "1080x1920"} ·{" "}
                 {render.add_captions ? "Captions ON" : "No captions"}{" "}
                 {render.assembly_engine ? `· Engine: ${render.assembly_engine}` : ""}
+                {render.image_source ? ` · Image: ${render.image_source}` : ""}
               </p>
 
               {/* Safety notice */}
@@ -3083,7 +3140,9 @@ function AssetRenderSection({
 
               {/* Review controls */}
               {render.status === "needs_review" && (
-                isReviewing ? (
+                videoMissing ? (
+                  <p className="text-xs text-red-500 italic">Video file missing — cannot review.</p>
+                ) : isReviewing ? (
                   <div className="space-y-2">
                     <textarea
                       className="w-full rounded border border-slate-200 p-2 text-xs"

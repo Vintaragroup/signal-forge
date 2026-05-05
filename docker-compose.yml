@@ -163,6 +163,7 @@ services:
       - ./vault:/vault
       - ./data:/data
       - render-output:/tmp/signalforge_renders
+      - ytdlp-downloads:/tmp/signalforge_downloads
     depends_on:
       mongo:
         condition: service_healthy

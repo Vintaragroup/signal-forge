@@ -12,6 +12,7 @@ from typing import Any, Literal
 from bson import ObjectId
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 from pymongo import MongoClient
 
@@ -5226,8 +5227,62 @@ def review_asset_render(render_id: str, payload: AssetRenderReviewRequest) -> di
         client.close()
 
 
-# ===========================================================================
-# Social Creative Engine v7.5 — Performance Feedback & Learning Loop
+@app.get("/asset-renders/{render_id}/stream")
+def stream_asset_render(render_id: str) -> FileResponse:
+    """
+    Stream a locally rendered MP4 for in-browser preview.
+
+    Security guarantees
+    -------------------
+    - Only serves files whose path is stored on a known asset_render record.
+    - The resolved absolute path must be inside one of the allowed render
+      directories (FFMPEG_OUTPUT_DIR or /tmp/signalforge_renders).
+    - Raw file paths are never accepted from the frontend; only the render_id
+      is accepted and the path is looked up server-side.
+    - Returns 403 if the resolved path escapes the allowed directory (path
+      traversal guard).
+    - Returns 404 if the render record does not exist or the file is absent.
+    """
+    # Determine allowed render directories
+    allowed_dirs = set()
+    ffmpeg_out = os.getenv("FFMPEG_OUTPUT_DIR", "").strip()
+    if ffmpeg_out:
+        allowed_dirs.add(os.path.realpath(ffmpeg_out))
+    allowed_dirs.add(os.path.realpath("/tmp/signalforge_renders"))
+
+    db_client = get_client()
+    try:
+        db = get_database(db_client)
+        record = find_asset_render(db, clean_text(render_id))
+        if not record:
+            raise HTTPException(status_code=404, detail="Asset render not found.")
+
+        file_path = record.get("file_path", "")
+        if not file_path or not file_path.endswith(".mp4"):
+            raise HTTPException(status_code=404, detail="No MP4 file path on this render record.")
+
+        real_path = os.path.realpath(file_path)
+
+        # Path traversal guard: resolved path must be inside an allowed dir
+        if not any(real_path.startswith(d + os.sep) or real_path == d for d in allowed_dirs):
+            raise HTTPException(
+                status_code=403,
+                detail="File is outside the allowed render directory.",
+            )
+
+        if not os.path.isfile(real_path):
+            raise HTTPException(
+                status_code=404,
+                detail="Render file not found on disk. It may have been cleaned up.",
+            )
+
+        return FileResponse(
+            path=real_path,
+            media_type="video/mp4",
+            filename=os.path.basename(real_path),
+        )
+    finally:
+        db_client.close()
 # ===========================================================================
 #
 # v7.5 adds:
