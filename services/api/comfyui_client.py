@@ -1,25 +1,53 @@
 """
-comfyui_client.py — SignalForge ComfyUI integration client (v6)
+comfyui_client.py — SignalForge ComfyUI integration client (v7 — Phase 10)
 
-Connects to a local ComfyUI instance:
-  1. Builds a minimal KSampler workflow from prompt_generation fields
-  2. Submits via POST /prompt
-  3. Polls GET /history/{prompt_id} until completed
-  4. Downloads the output image via GET /view?filename=...&type=output
-  5. Saves to shared render-output volume
+Renderer backend abstraction
+-----------------------------
+renderer_type is resolved at runtime from environment / config:
+
+  comfyui_stub      — built-in Pillow test stub (never production-ready)
+  comfyui_real      — real ComfyUI instance with COMFYUI_WORKFLOW_PATH set
+  external_manual   — placeholder for operator-supplied frames (no HTTP calls)
+
+Resolution order:
+  1. COMFYUI_RENDERER_TYPE env var (explicit override)
+  2. COMFYUI_WORKFLOW_PATH set + COMFYUI_ENABLED=true → comfyui_real
+  3. COMFYUI_ENABLED=true but no workflow path → comfyui_stub (with warning)
+  4. COMFYUI_ENABLED=false → skipped entirely (comfyui_stub label, mock result)
+
+Real workflow support (comfyui_real)
+--------------------------------------
+COMFYUI_WORKFLOW_PATH   Path to a ComfyUI API-format workflow JSON.
+                        Prompt injection points (CLIPTextEncode nodes with
+                        "{{positive_prompt}}" / "{{negative_prompt}}" in
+                        their text inputs) are substituted per scene beat.
+                        Width/height EmptyLatentImage nodes are patched to
+                        1080×1920 if COMFYUI_FORCE_PORTRAIT=true (default).
+
+Validation
+----------
+- COMFYUI_ENABLED=true + workflow path missing → error, never falls back to
+  stub silently (unless COMFYUI_FALLBACK_ALLOWED=true)
+- Stub output is always labelled renderer_type=comfyui_stub, never "real"
+- metadata dict includes: renderer_type, workflow_path, model_name,
+  fallback_used, fallback_reason
 
 Safety guarantees
 -----------------
 - No external calls — only talks to COMFYUI_BASE_URL (local network)
-- Graceful failure: always returns a dict (never raises to caller)
 - simulation_only: True on all results
 - outbound_actions_taken: 0 always
 - No likeness generation, no voice cloning, no external publishing
+- Faceless: negative_prompt always contains "face, likeness, person, avatar"
 
 Environment variables
 ---------------------
 COMFYUI_BASE_URL             http://comfyui:8188 (default)
 COMFYUI_MODEL_CHECKPOINT     v1-5-pruned-emaonly.safetensors (default)
+COMFYUI_WORKFLOW_PATH        (empty) path to real workflow JSON
+COMFYUI_RENDERER_TYPE        (auto-detected) comfyui_stub | comfyui_real | external_manual
+COMFYUI_FORCE_PORTRAIT       true — patch EmptyLatentImage to 1080×1920
+COMFYUI_FALLBACK_ALLOWED     false — allow stub fallback when real workflow fails
 FFMPEG_OUTPUT_DIR            /tmp/signalforge_renders (default)
 """
 
@@ -40,6 +68,198 @@ _POLL_INTERVAL_S = 1.0       # seconds between history polls
 _POLL_MAX_WAIT_S = 120       # seconds max to wait for generation
 _CONNECT_TIMEOUT_S = 5       # seconds for health / quick checks
 _DOWNLOAD_TIMEOUT_S = 30     # seconds to download output image
+
+# Faceless cinematic suffix appended to every scene-beat positive prompt
+_FACELESS_SUFFIX = (
+    "no faces, no identifiable people, no avatars, faceless, "
+    "cinematic B-roll, symbolic leadership imagery, vertical 9:16"
+)
+
+# Negative prompt additions always enforced for safety
+_SAFETY_NEGATIVE = (
+    "realistic face, recognizable likeness, identifiable person, avatar, "
+    "voice cloning, nsfw, explicit, watermark, text overlay, low quality, blurry"
+)
+
+
+# ---------------------------------------------------------------------------
+# Renderer backend resolution
+# ---------------------------------------------------------------------------
+
+def resolve_renderer_type() -> str:
+    """
+    Determine which renderer backend will be used.
+
+    Returns one of: "comfyui_stub", "comfyui_real", "external_manual"
+
+    Resolution order:
+    1. COMFYUI_RENDERER_TYPE env var (explicit override)
+    2. COMFYUI_WORKFLOW_PATH set + COMFYUI_ENABLED=true → comfyui_real
+    3. COMFYUI_ENABLED=true but no workflow path → comfyui_stub
+    4. Default → comfyui_stub
+    """
+    explicit = os.getenv("COMFYUI_RENDERER_TYPE", "").strip().lower()
+    if explicit in ("comfyui_stub", "comfyui_real", "external_manual"):
+        return explicit
+
+    enabled = str(os.getenv("COMFYUI_ENABLED", "false")).strip().lower() in (
+        "1", "true", "yes", "on"
+    )
+    workflow_path = os.getenv("COMFYUI_WORKFLOW_PATH", "").strip()
+
+    if enabled and workflow_path:
+        return "comfyui_real"
+    return "comfyui_stub"
+
+
+def validate_renderer(renderer_type: str | None = None) -> dict[str, Any]:
+    """
+    Validate that the resolved renderer is ready to use.
+
+    Returns a dict with:
+        valid           bool
+        renderer_type   str
+        workflow_path   str
+        model_name      str
+        errors          list[str]
+        warnings        list[str]
+
+    Raises ValueError if COMFYUI_ENABLED=true and workflow path is missing
+    and COMFYUI_FALLBACK_ALLOWED is not true.
+    """
+    rt = renderer_type or resolve_renderer_type()
+    workflow_path = os.getenv("COMFYUI_WORKFLOW_PATH", "").strip()
+    model_name = os.getenv(
+        "COMFYUI_MODEL_CHECKPOINT", "v1-5-pruned-emaonly.safetensors"
+    )
+    enabled = str(os.getenv("COMFYUI_ENABLED", "false")).strip().lower() in (
+        "1", "true", "yes", "on"
+    )
+    fallback_allowed = str(os.getenv("COMFYUI_FALLBACK_ALLOWED", "false")).strip().lower() in (
+        "1", "true", "yes", "on"
+    )
+
+    errors: list[str] = []
+    warnings: list[str] = []
+
+    if rt == "comfyui_real":
+        if not workflow_path:
+            msg = (
+                "COMFYUI_ENABLED=true and renderer_type=comfyui_real but "
+                "COMFYUI_WORKFLOW_PATH is not set. Set COMFYUI_WORKFLOW_PATH "
+                "or set COMFYUI_FALLBACK_ALLOWED=true to use the stub."
+            )
+            if not fallback_allowed:
+                errors.append(msg)
+            else:
+                warnings.append(msg + " Falling back to comfyui_stub.")
+                rt = "comfyui_stub"
+        elif not os.path.isfile(workflow_path):
+            msg = f"COMFYUI_WORKFLOW_PATH={workflow_path!r} does not exist or is not a file."
+            if not fallback_allowed:
+                errors.append(msg)
+            else:
+                warnings.append(msg + " Falling back to comfyui_stub.")
+                rt = "comfyui_stub"
+
+    if rt == "comfyui_stub":
+        warnings.append(
+            "renderer_type=comfyui_stub — output images are generated by the "
+            "built-in Pillow test stub and are NOT production-ready visuals."
+        )
+
+    if enabled and rt == "comfyui_stub" and not workflow_path:
+        warnings.append(
+            "COMFYUI_ENABLED=true but COMFYUI_WORKFLOW_PATH is not configured. "
+            "To use real ComfyUI rendering, set COMFYUI_WORKFLOW_PATH to a valid "
+            "ComfyUI API-format workflow JSON file."
+        )
+
+    return {
+        "valid": len(errors) == 0,
+        "renderer_type": rt,
+        "workflow_path": workflow_path,
+        "model_name": model_name,
+        "errors": errors,
+        "warnings": warnings,
+    }
+
+
+def load_real_workflow(
+    pg: dict[str, Any],
+    workflow_path: str,
+    positive_override: str = "",
+    negative_override: str = "",
+    force_portrait: bool = True,
+) -> dict[str, Any]:
+    """
+    Load a ComfyUI API-format workflow JSON and inject prompt fields.
+
+    Injection strategy:
+    - Nodes with class_type "CLIPTextEncode" whose text contains
+      "{{positive_prompt}}" are replaced with positive_override or
+      _build_positive_text(pg).
+    - Nodes with class_type "CLIPTextEncode" whose text contains
+      "{{negative_prompt}}" are replaced with negative_override or pg.negative_prompt.
+    - If force_portrait=True, any EmptyLatentImage node has width/height
+      patched to 1080×1920.
+    - If no injection markers found, falls back to patching the first two
+      CLIPTextEncode nodes (positive then negative).
+
+    Returns the modified workflow dict.
+    Raises ValueError on load failure.
+    """
+    try:
+        with open(workflow_path) as fh:
+            workflow: dict[str, Any] = json.load(fh)
+    except Exception as exc:
+        raise ValueError(f"Failed to load workflow from {workflow_path!r}: {exc}") from exc
+
+    positive_text = positive_override or _build_positive_text(pg)
+    negative_text = (
+        negative_override
+        or pg.get("negative_prompt")
+        or ""
+    )
+    # Always enforce safety negatives
+    if _SAFETY_NEGATIVE not in negative_text:
+        negative_text = f"{negative_text}, {_SAFETY_NEGATIVE}" if negative_text else _SAFETY_NEGATIVE
+
+    clip_nodes = [
+        (node_id, node)
+        for node_id, node in workflow.items()
+        if isinstance(node, dict) and node.get("class_type") == "CLIPTextEncode"
+    ]
+
+    positive_injected = False
+    negative_injected = False
+
+    # Pass 1: look for template markers
+    for node_id, node in clip_nodes:
+        text = str(node.get("inputs", {}).get("text", ""))
+        if "{{positive_prompt}}" in text:
+            workflow[node_id]["inputs"]["text"] = positive_text
+            positive_injected = True
+        elif "{{negative_prompt}}" in text:
+            workflow[node_id]["inputs"]["text"] = negative_text
+            negative_injected = True
+
+    # Pass 2: fallback — first two CLIP nodes if markers not found
+    if not positive_injected and clip_nodes:
+        workflow[clip_nodes[0][0]]["inputs"]["text"] = positive_text
+        positive_injected = True
+    if not negative_injected and len(clip_nodes) > 1:
+        workflow[clip_nodes[1][0]]["inputs"]["text"] = negative_text
+        negative_injected = True
+
+    # Patch portrait dimensions
+    if force_portrait:
+        for node_id, node in workflow.items():
+            if isinstance(node, dict) and node.get("class_type") == "EmptyLatentImage":
+                workflow[node_id]["inputs"]["width"] = 1080
+                workflow[node_id]["inputs"]["height"] = 1920
+
+    return workflow
 
 
 class ComfyUIClient:
@@ -96,11 +316,14 @@ class ComfyUIClient:
             "v1-5-pruned-emaonly.safetensors",
         )
         positive = _build_positive_text(pg)
-        negative = (
-            pg.get("negative_prompt")
-            or "nsfw, explicit, realistic face, recognizable likeness, "
-               "watermark, text overlay, low quality, blurry, distorted"
+        raw_negative = (
+            pg.get("negative_prompt") or ""
         )
+        # Always enforce faceless / safety negatives
+        if _SAFETY_NEGATIVE not in raw_negative:
+            negative = f"{raw_negative}, {_SAFETY_NEGATIVE}" if raw_negative else _SAFETY_NEGATIVE
+        else:
+            negative = raw_negative
         seed = int(pg.get("seed") or 0) or (uuid.uuid4().int & 0xFFFF_FFFF)
 
         return {
@@ -118,7 +341,7 @@ class ComfyUIClient:
             },
             "4": {
                 "class_type": "EmptyLatentImage",
-                "inputs": {"width": 576, "height": 1024, "batch_size": 1},
+                "inputs": {"width": 1080, "height": 1920, "batch_size": 1},
             },
             "5": {
                 "class_type": "KSampler",
@@ -252,10 +475,15 @@ class ComfyUIClient:
         }
 
         # --- Load or build workflow ---
-        if workflow_path and os.path.isfile(workflow_path):
+        if workflow_path:
             try:
-                with open(workflow_path) as fh:
-                    workflow = json.load(fh)
+                workflow = load_real_workflow(
+                    pg,
+                    workflow_path,
+                    force_portrait=str(os.getenv("COMFYUI_FORCE_PORTRAIT", "true")).strip().lower() in (
+                        "1", "true", "yes", "on"
+                    ),
+                )
             except Exception as exc:
                 base["error"] = f"workflow_load_failed: {exc}"
                 return base
@@ -322,6 +550,7 @@ class ComfyUIClient:
         pg: dict[str, Any],
         render_id: str,
         output_dir: str = "",
+        renderer_type: str | None = None,
     ) -> dict[str, Any]:
         """
         Submit one ComfyUI prompt per scene beat and collect all output images.
@@ -336,6 +565,9 @@ class ComfyUIClient:
             Used to build unique per-frame filenames.
         output_dir : str
             Directory where images are saved.
+        renderer_type : str | None
+            Override for the resolved renderer type.  Defaults to
+            resolve_renderer_type().
 
         Returns
         -------
@@ -344,6 +576,11 @@ class ComfyUIClient:
             output_image_path       str  — first image path (backward compat)
             prompt_ids              list[str]
             errors                  list[str]
+            renderer_type           str — comfyui_stub | comfyui_real | external_manual
+            workflow_path           str — path to workflow JSON (empty for stub)
+            model_name              str — checkpoint name
+            fallback_used           bool
+            fallback_reason         str
             simulation_only         bool — always True
             outbound_actions_taken  int  — always 0
         """
@@ -352,15 +589,49 @@ class ComfyUIClient:
         )
         os.makedirs(out_dir, exist_ok=True)
 
+        # --- Validate / resolve renderer ---
+        original_rt = renderer_type or resolve_renderer_type()
+        validation = validate_renderer(renderer_type)
+        rt = validation["renderer_type"]
+        workflow_path = validation["workflow_path"]
+        model_name = validation["model_name"]
+        # Fallback was used if the validated type differs from originally requested
+        fallback_used = rt != original_rt and bool(validation["warnings"])
+        fallback_reason = validation["warnings"][0] if fallback_used else ""
+
+        # If validation errors and fallback not allowed, fail immediately
+        if not validation["valid"]:
+            return {
+                "output_image_paths": [],
+                "output_image_path": "",
+                "prompt_ids": [],
+                "errors": validation["errors"],
+                "renderer_type": rt,
+                "workflow_path": workflow_path,
+                "model_name": model_name,
+                "fallback_used": False,
+                "fallback_reason": "; ".join(validation["errors"]),
+                "simulation_only": True,
+                "outbound_actions_taken": 0,
+            }
+
         scene_beats: list[str] = pg.get("scene_beats") or []
         # Fallback: one image from main prompt when no beats defined
         if not scene_beats:
-            result = self.run_from_prompt_generation(pg, output_dir=out_dir)
+            result = self.run_from_prompt_generation(
+                pg, output_dir=out_dir,
+                workflow_path=workflow_path if rt == "comfyui_real" else "",
+            )
             return {
                 "output_image_paths": [result["output_image_path"]] if result.get("output_image_path") else [],
                 "output_image_path": result.get("output_image_path", ""),
                 "prompt_ids": [result.get("prompt_id", "")],
                 "errors": [result.get("error", "")] if result.get("error") else [],
+                "renderer_type": rt,
+                "workflow_path": workflow_path,
+                "model_name": model_name,
+                "fallback_used": fallback_used,
+                "fallback_reason": fallback_reason,
                 "simulation_only": True,
                 "outbound_actions_taken": 0,
             }
@@ -371,13 +642,41 @@ class ComfyUIClient:
 
         for idx, beat_text in enumerate(scene_beats):
             beat_pg = dict(pg)
-            beat_pg["positive_prompt"] = (
+            # Build per-beat positive prompt with faceless safety suffix
+            base_positive = (
                 f"{beat_text.strip()}, "
                 f"{pg.get('visual_style', '').strip()}, "
-                f"{pg.get('lighting', '').strip()}, "
-                f"no faces, no identifiable people, cinematic B-roll"
-            )
-            workflow = self.build_txt2img_workflow(beat_pg)
+                f"{pg.get('lighting', '').strip()}"
+            ).strip(", ")
+            beat_pg["positive_prompt"] = f"{base_positive}, {_FACELESS_SUFFIX}"
+
+            # Load real workflow or build stub workflow
+            if rt == "comfyui_real" and workflow_path:
+                try:
+                    workflow = load_real_workflow(
+                        beat_pg,
+                        workflow_path,
+                        positive_override=beat_pg["positive_prompt"],
+                        force_portrait=str(os.getenv("COMFYUI_FORCE_PORTRAIT", "true")).strip().lower() in (
+                            "1", "true", "yes", "on"
+                        ),
+                    )
+                except ValueError as exc:
+                    # Workflow load failed — check fallback policy
+                    fallback_allowed = str(os.getenv("COMFYUI_FALLBACK_ALLOWED", "false")).strip().lower() in (
+                        "1", "true", "yes", "on"
+                    )
+                    if not fallback_allowed:
+                        errors.append(f"beat[{idx}] workflow_load_failed: {exc}")
+                        continue
+                    # Fall back to stub workflow
+                    fallback_used = True
+                    fallback_reason = f"workflow_load_failed: {exc}"
+                    workflow = self.build_txt2img_workflow(beat_pg)
+                    rt = "comfyui_stub"
+            else:
+                workflow = self.build_txt2img_workflow(beat_pg)
+
             image_output_path = os.path.join(
                 out_dir, f"{render_id}_frame_{idx:03d}.png"
             )
@@ -434,6 +733,11 @@ class ComfyUIClient:
             "output_image_path": first_path,
             "prompt_ids": prompt_ids,
             "errors": errors,
+            "renderer_type": rt,
+            "workflow_path": workflow_path,
+            "model_name": model_name,
+            "fallback_used": fallback_used,
+            "fallback_reason": fallback_reason,
             "simulation_only": True,
             "outbound_actions_taken": 0,
         }
@@ -450,7 +754,11 @@ def _build_positive_text(pg: dict[str, Any]) -> str:
         val = (pg.get(field) or "").strip()
         if val:
             parts.append(val)
-    return ", ".join(parts) or "abstract digital art, cinematic, high contrast"
+    base = ", ".join(parts) or "abstract digital art, cinematic, high contrast"
+    # Append faceless suffix if not already present
+    if "no faces" not in base and _FACELESS_SUFFIX not in base:
+        return f"{base}, {_FACELESS_SUFFIX}"
+    return base
 
 
 def _extract_first_image(
@@ -472,10 +780,17 @@ def comfyui_diagnostics() -> dict[str, Any]:
     """Return ComfyUI availability diagnostics (used by /health/comfyui)."""
     client = ComfyUIClient()
     health = client.health_check()
+    validation = validate_renderer()
     return {
         "comfyui_enabled": _env_enabled(os.getenv("COMFYUI_ENABLED", "false")),
         "comfyui_base_url": client.base_url,
         "comfyui_reachable": health.get("reachable", False),
         "comfyui_error": health.get("error", ""),
         "system_stats": health.get("system_stats"),
+        "renderer_type": validation["renderer_type"],
+        "workflow_path": validation["workflow_path"],
+        "model_name": validation["model_name"],
+        "renderer_valid": validation["valid"],
+        "renderer_warnings": validation["warnings"],
+        "renderer_errors": validation["errors"],
     }

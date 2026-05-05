@@ -3025,8 +3025,31 @@ function AssetRenderSection({
                 {render.is_demo && (
                   <span className="rounded-full bg-amber-100 px-2 py-0.5 text-xs text-amber-700">Demo</span>
                 )}
+
+                {/* Renderer type badges — Phase 10 */}
+                {render.renderer_type === "comfyui_real" && (
+                  <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-xs text-emerald-800 font-semibold border border-emerald-300">
+                    ✓ Real ComfyUI
+                  </span>
+                )}
+                {render.renderer_type === "comfyui_stub" && (
+                  <span className="rounded-full bg-amber-100 px-2 py-0.5 text-xs text-amber-700 border border-amber-200">
+                    ⚠ Stub Render
+                  </span>
+                )}
+                {render.renderer_type === "external_manual" && (
+                  <span className="rounded-full bg-cyan-100 px-2 py-0.5 text-xs text-cyan-700 border border-cyan-200">
+                    Manual External
+                  </span>
+                )}
+                {!render.renderer_type && (
+                  <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs text-slate-500">
+                    renderer unknown
+                  </span>
+                )}
+
                 {isRealRender && (
-                  <span className="rounded-full bg-green-100 px-2 py-0.5 text-xs text-green-700 font-medium">Real Render</span>
+                  <span className="rounded-full bg-green-100 px-2 py-0.5 text-xs text-green-700 font-medium">Assembled</span>
                 )}
                 {render.assembly_status === "failed" && (
                   <span className="rounded-full bg-red-100 px-2 py-0.5 text-xs text-red-700 font-medium">Render Failed</span>
@@ -3037,11 +3060,19 @@ function AssetRenderSection({
                 {render.assembly_engine === "ffmpeg" && (
                   <span className="rounded-full bg-violet-100 px-2 py-0.5 text-xs text-violet-700">FFmpeg</span>
                 )}
-                {render.image_source === "comfyui" && (
-                  <span className="rounded-full bg-sky-100 px-2 py-0.5 text-xs text-sky-700 font-medium">ComfyUI Image</span>
+                {render.image_source === "real_comfyui" && (
+                  <span className="rounded-full bg-emerald-50 px-2 py-0.5 text-xs text-emerald-700 font-medium">Real Image</span>
+                )}
+                {render.image_source === "comfyui" && render.image_source !== "real_comfyui" && (
+                  <span className="rounded-full bg-sky-100 px-2 py-0.5 text-xs text-sky-700 font-medium">Stub Image</span>
                 )}
                 {render.image_source === "placeholder" && (
                   <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs text-slate-500">Placeholder</span>
+                )}
+                {render.fallback_used && (
+                  <span className="rounded-full bg-orange-100 px-2 py-0.5 text-xs text-orange-700 border border-orange-200">
+                    Fallback Used
+                  </span>
                 )}
               </div>
 
@@ -3126,11 +3157,19 @@ function AssetRenderSection({
                 </p>
               )}
 
+              {render.fallback_used && render.fallback_reason && (
+                <p className="text-xs text-orange-600 italic">
+                  Fallback reason: {render.fallback_reason}
+                </p>
+              )}
+
               <p className="text-xs text-slate-400">
                 Duration: {render.duration_seconds || 0}s · {render.resolution || "1080x1920"} ·{" "}
                 {render.add_captions ? "Captions ON" : "No captions"}{" "}
                 {render.assembly_engine ? `· Engine: ${render.assembly_engine}` : ""}
                 {render.image_source ? ` · Image: ${render.image_source}` : ""}
+                {render.model_name ? ` · Model: ${render.model_name}` : ""}
+                {render.workflow_path ? ` · Workflow: ${render.workflow_path.split("/").pop()}` : ""}
               </p>
 
               {/* Safety notice */}

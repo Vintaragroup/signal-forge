@@ -136,6 +136,11 @@ def process_render_job(job: dict, db: Any) -> dict:
         generated_image_paths: list[str] = []
         image_source = "placeholder"
         comfyui_partial_failure = False
+        renderer_type = "comfyui_stub"
+        workflow_path = ""
+        model_name = ""
+        fallback_used = False
+        fallback_reason = ""
 
         if comfyui_enabled:
             try:
@@ -161,18 +166,24 @@ def process_render_job(job: dict, db: Any) -> dict:
                     )
                     img_paths = comfyui_result.get("output_image_paths", [])
                     img_path = comfyui_result.get("output_image_path", "")
+                    renderer_type = comfyui_result.get("renderer_type", "comfyui_stub")
+                    workflow_path = comfyui_result.get("workflow_path", "")
+                    model_name = comfyui_result.get("model_name", "")
+                    fallback_used = bool(comfyui_result.get("fallback_used", False))
+                    fallback_reason = comfyui_result.get("fallback_reason", "")
                     if img_paths:
                         generated_image_paths = [p for p in img_paths if os.path.isfile(p)]
                         generated_image_path = generated_image_paths[0] if generated_image_paths else ""
-                        image_source = "comfyui" if generated_image_paths else "placeholder"
-                        if not generated_image_paths:
+                        if generated_image_paths:
+                            image_source = "real_comfyui" if renderer_type == "comfyui_real" else "comfyui"
+                        else:
                             comfyui_result["partial_failure"] = True
                             comfyui_result["fallback_reason"] = "no_valid_image_paths"
                             comfyui_partial_failure = True
                     elif img_path and os.path.isfile(img_path):
                         generated_image_path = img_path
                         generated_image_paths = [img_path]
-                        image_source = "comfyui"
+                        image_source = "real_comfyui" if renderer_type == "comfyui_real" else "comfyui"
                     else:
                         comfyui_result["partial_failure"] = True
                         comfyui_result["fallback_reason"] = (
@@ -313,6 +324,11 @@ def process_render_job(job: dict, db: Any) -> dict:
                     "assembly_status": assembly_status,
                     "assembly_engine": assembly_engine,
                     "image_source": image_source,
+                    "renderer_type": renderer_type,
+                    "workflow_path": workflow_path,
+                    "model_name": model_name,
+                    "fallback_used": fallback_used,
+                    "fallback_reason": fallback_reason,
                     "comfyui_partial_failure": comfyui_partial_failure,
                     "simulation_only": True,
                     "outbound_actions_taken": 0,
@@ -322,9 +338,9 @@ def process_render_job(job: dict, db: Any) -> dict:
         )
         logger.info(
             "render_id=%s status=needs_review assembly_status=%s assembly_engine=%s "
-            "image_source=%s partial_failure=%s file_path=%s",
+            "image_source=%s renderer_type=%s fallback_used=%s partial_failure=%s file_path=%s",
             render_id_str, assembly_status, assembly_engine,
-            image_source, comfyui_partial_failure, final_file_path,
+            image_source, renderer_type, fallback_used, comfyui_partial_failure, final_file_path,
         )
 
         return {
@@ -335,6 +351,11 @@ def process_render_job(job: dict, db: Any) -> dict:
             "assembly_status": assembly_status,
             "assembly_engine": assembly_engine,
             "image_source": image_source,
+            "renderer_type": renderer_type,
+            "workflow_path": workflow_path,
+            "model_name": model_name,
+            "fallback_used": fallback_used,
+            "fallback_reason": fallback_reason,
             "comfyui_partial_failure": comfyui_partial_failure,
             "file_path": final_file_path,
             "simulation_only": True,
