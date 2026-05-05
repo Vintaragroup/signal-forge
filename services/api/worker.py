@@ -133,6 +133,7 @@ def process_render_job(job: dict, db: Any) -> dict:
         # --------------------------------------------------------------
         comfyui_result: dict[str, Any] = {}
         generated_image_path = ""
+        generated_image_paths: list[str] = []
         image_source = "placeholder"
         comfyui_partial_failure = False
 
@@ -153,20 +154,29 @@ def process_render_job(job: dict, db: Any) -> dict:
 
                 pg = _find_by_id(db.prompt_generations, record.get("prompt_generation_id", ""))
                 if pg:
-                    comfyui_result = comfyui.run_from_prompt_generation(
+                    comfyui_result = comfyui.run_scene_beats(
                         _serialize_doc(pg),
+                        render_id=render_id_str,
                         output_dir=out_dir,
-                        workflow_path=os.getenv("COMFYUI_WORKFLOW_PATH", ""),
                     )
+                    img_paths = comfyui_result.get("output_image_paths", [])
                     img_path = comfyui_result.get("output_image_path", "")
-                    if img_path and os.path.isfile(img_path):
+                    if img_paths:
+                        generated_image_paths = [p for p in img_paths if os.path.isfile(p)]
+                        generated_image_path = generated_image_paths[0] if generated_image_paths else ""
+                        image_source = "comfyui" if generated_image_paths else "placeholder"
+                        if not generated_image_paths:
+                            comfyui_result["partial_failure"] = True
+                            comfyui_result["fallback_reason"] = "no_valid_image_paths"
+                            comfyui_partial_failure = True
+                    elif img_path and os.path.isfile(img_path):
                         generated_image_path = img_path
+                        generated_image_paths = [img_path]
                         image_source = "comfyui"
                     else:
-                        # ComfyUI ran but produced no usable image — fall back to placeholder
                         comfyui_result["partial_failure"] = True
                         comfyui_result["fallback_reason"] = (
-                            comfyui_result.get("error") or "output_image_not_found"
+                            str(comfyui_result.get("errors") or "") or "output_image_not_found"
                         )
                         comfyui_partial_failure = True
                         image_source = "placeholder"
@@ -200,6 +210,7 @@ def process_render_job(job: dict, db: Any) -> dict:
                 "outbound_actions_taken": 0,
             }
             generated_image_path = comfyui_result["mock_image_path"]
+            generated_image_paths = [generated_image_path]
             image_source = "placeholder"
 
         db.asset_renders.update_one(
@@ -236,7 +247,7 @@ def process_render_job(job: dict, db: Any) -> dict:
         resolution = record.get("resolution", "1080x1920")
 
         try:
-            from video_assembler import assemble_video  # type: ignore
+            from video_assembler import assemble_video, assemble_video_sequence  # type: ignore
 
             caption_text = ""
             if add_captions:
@@ -248,17 +259,30 @@ def process_render_job(job: dict, db: Any) -> dict:
                         or ""
                     )
 
-            va_result = assemble_video(
-                image_path=generated_image_path,
-                audio_path=source_audio_path,
-                preserve_original_audio=preserve_original_audio,
-                duration_seconds=duration_seconds,
-                add_captions=add_captions,
-                caption_text=caption_text,
-                resolution=resolution,
-                generation_engine=generation_engine,
-                asset_render_id=render_id_str,
-            )
+            if len(generated_image_paths) > 1:
+                va_result = assemble_video_sequence(
+                    image_paths=generated_image_paths,
+                    audio_path=source_audio_path,
+                    preserve_original_audio=preserve_original_audio,
+                    duration_seconds=duration_seconds,
+                    add_captions=add_captions,
+                    caption_text=caption_text,
+                    resolution=resolution,
+                    generation_engine=generation_engine,
+                    asset_render_id=render_id_str,
+                )
+            else:
+                va_result = assemble_video(
+                    image_path=generated_image_path,
+                    audio_path=source_audio_path,
+                    preserve_original_audio=preserve_original_audio,
+                    duration_seconds=duration_seconds,
+                    add_captions=add_captions,
+                    caption_text=caption_text,
+                    resolution=resolution,
+                    generation_engine=generation_engine,
+                    asset_render_id=render_id_str,
+                )
             assembly_result = va_result.to_dict()
             final_file_path = va_result.file_path
 

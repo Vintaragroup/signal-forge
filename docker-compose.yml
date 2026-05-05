@@ -181,37 +181,143 @@ services:
       - sh
       - -c
       - |
-        pip install -q fastapi uvicorn
+        pip install -q fastapi uvicorn Pillow
         python - <<'PYEOF'
-        import uvicorn, uuid, struct, zlib
+        import uvicorn, uuid, io, hashlib, textwrap, math
         from fastapi import FastAPI, Request
         from fastapi.responses import Response
+        from PIL import Image, ImageDraw, ImageFont
 
         app = FastAPI()
         _store = {}    # prompt_id -> filename
         _images = {}   # filename  -> png bytes
 
-        def _make_png(w=64, h=64, r=30, g=27, b=75):
-            """Generate a minimal valid RGB PNG in pure Python (no Pillow needed)."""
-            def chunk(name, data):
-                crc = zlib.crc32(name + data) & 0xffffffff
-                return struct.pack('>I', len(data)) + name + data + struct.pack('>I', crc)
-            ihdr = struct.pack('>IIBBBBB', w, h, 8, 2, 0, 0, 0)
-            raw = b''.join(b'\x00' + bytes([r, g, b] * w) for _ in range(h))
-            return (b'\x89PNG\r\n\x1a\n'
-                    + chunk(b'IHDR', ihdr)
-                    + chunk(b'IDAT', zlib.compress(raw))
-                    + chunk(b'IEND', b''))
+        # Cinematic colour palettes (dark, faceless, no identifiable faces)
+        _PALETTES = [
+            ((10, 8, 30), (40, 25, 80)),    # deep indigo
+            ((8, 20, 12), (20, 60, 30)),    # forest deep
+            ((30, 12, 5), (80, 35, 10)),    # ember/sunset
+            ((5, 20, 35), (10, 50, 80)),    # ocean deep
+            ((25, 8, 25), (70, 20, 60)),    # violet dusk
+            ((5, 25, 25), (10, 65, 55)),    # teal dark
+        ]
+
+        def _lerp_color(c1, c2, t):
+            return tuple(int(a + (b - a) * t) for a, b in zip(c1, c2))
+
+        def _make_cinematic_png(prompt_text: str, palette_idx: int = 0, w: int = 1080, h: int = 1920) -> bytes:
+            """
+            Generate a 1080x1920 cinematic gradient PNG with scene text.
+            Uses Pillow. No faces, no identifiable people.
+            """
+            dark, light = _PALETTES[palette_idx % len(_PALETTES)]
+            img = Image.new('RGB', (w, h))
+            draw = ImageDraw.Draw(img)
+
+            # Vertical gradient background
+            for y in range(h):
+                t = y / h
+                # add subtle vignette: brightest near center, darkest at edges
+                vignette = 1.0 - 0.4 * abs(2 * t - 1)
+                c = _lerp_color(dark, light, t * 0.6)
+                c = tuple(min(255, int(v * vignette)) for v in c)
+                draw.line([(0, y), (w, y)], fill=c)
+
+            # Subtle diagonal light ray from top-left
+            for i in range(0, w + h, 3):
+                alpha = max(0, 40 - abs(i - w // 3) // 8)
+                if alpha > 0:
+                    x1 = max(0, i - h)
+                    y1 = max(0, h - i)
+                    x2 = min(w, i)
+                    y2 = max(0, 0 - (i - w))
+                    draw.line([(x1, 0), (0, y1)], fill=tuple(min(255, v + alpha) for v in _lerp_color(dark, light, 0.8)), width=1)
+
+            # Horizontal divider lines (cinematic letterbox feel)
+            bar_h = int(h * 0.08)
+            draw.rectangle([(0, 0), (w, bar_h)], fill=tuple(max(0, v - 10) for v in dark))
+            draw.rectangle([(0, h - bar_h), (w, h)], fill=tuple(max(0, v - 10) for v in dark))
+
+            # SignalForge watermark (small, top-left inside bar)
+            try:
+                font_sm = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 24)
+                font_md = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 38)
+            except Exception:
+                font_sm = ImageFont.load_default()
+                font_md = font_sm
+
+            draw.text((40, 18), "SIGNALFORGE  ·  PREVIEW", font=font_sm, fill=(200, 200, 200, 180))
+
+            # Scene label (beat description) — wrapped, centered, lower-middle
+            label = prompt_text[:120].strip()
+            if len(prompt_text) > 120:
+                label += "…"
+            lines = textwrap.wrap(label, width=28)
+            line_h = 48
+            block_h = len(lines) * line_h + 24
+            text_y = int(h * 0.62)
+            # semi-transparent box
+            pad = 30
+            box_w = w - 120
+            box_x = 60
+            overlay = Image.new('RGBA', img.size, (0, 0, 0, 0))
+            od = ImageDraw.Draw(overlay)
+            od.rectangle(
+                [(box_x - pad, text_y - pad), (box_x + box_w + pad, text_y + block_h + pad)],
+                fill=(0, 0, 0, 140)
+            )
+            img = Image.alpha_composite(img.convert('RGBA'), overlay).convert('RGB')
+            draw = ImageDraw.Draw(img)
+
+            for i, line in enumerate(lines):
+                bbox = draw.textbbox((0, 0), line, font=font_md)
+                lw = bbox[2] - bbox[0]
+                draw.text(((w - lw) // 2, text_y + i * line_h), line, font=font_md, fill=(240, 230, 210))
+
+            # Subtle grain texture overlay
+            import random
+            rng = random.Random(hashlib.md5(prompt_text.encode()).hexdigest())
+            pixels = img.load()
+            for _ in range(w * h // 80):
+                gx = rng.randint(0, w - 1)
+                gy = rng.randint(0, h - 1)
+                gr = rng.randint(-12, 12)
+                r2, g2, b2 = pixels[gx, gy]
+                pixels[gx, gy] = (
+                    max(0, min(255, r2 + gr)),
+                    max(0, min(255, g2 + gr)),
+                    max(0, min(255, b2 + gr)),
+                )
+
+            buf = io.BytesIO()
+            img.save(buf, format='PNG', optimize=False)
+            return buf.getvalue()
+
+        def _extract_prompt_text(workflow: dict) -> str:
+            """Extract positive prompt text from ComfyUI API-format workflow."""
+            for node_id, node in workflow.items():
+                if node.get('class_type') == 'CLIPTextEncode':
+                    text = node.get('inputs', {}).get('text', '')
+                    if text and 'nsfw' not in text.lower() and 'negative' not in text.lower():
+                        return text
+            return 'cinematic B-roll, faceless, no identifiable people'
+
+        def _palette_for_text(text: str) -> int:
+            return int(hashlib.md5(text.encode()).hexdigest(), 16) % len(_PALETTES)
 
         @app.get('/system_stats')
         def system_stats():
-            return {'cuda': False, 'devices': [{'name': 'stub-cpu', 'type': 'cpu', 'vram_total': 0}]}
+            return {'cuda': False, 'devices': [{'name': 'stub-cpu-pillow', 'type': 'cpu', 'vram_total': 0}]}
 
         @app.post('/prompt')
         async def run_prompt(request: Request):
+            body = await request.json()
+            workflow = body.get('prompt', {})
+            prompt_text = _extract_prompt_text(workflow)
+            palette = _palette_for_text(prompt_text)
             pid = str(uuid.uuid4())
             fname = f'ComfyUI_{pid[:8]}_00001_.png'
-            _images[fname] = _make_png()
+            _images[fname] = _make_cinematic_png(prompt_text, palette)
             _store[pid] = fname
             return {'prompt_id': pid, 'number': 1, 'node_errors': {}}
 
@@ -227,7 +333,7 @@ services:
 
         @app.get('/view')
         def view(filename: str = '', subfolder: str = '', type: str = 'output'):
-            data = _images.get(filename, _make_png())
+            data = _images.get(filename, _make_cinematic_png('fallback', 0))
             return Response(content=data, media_type='image/png')
 
         uvicorn.run(app, host='0.0.0.0', port=8188)

@@ -313,6 +313,131 @@ class ComfyUIClient:
         base["error"] = f"ComfyUI generation timed out after {_POLL_MAX_WAIT_S}s"
         return base
 
+    # ------------------------------------------------------------------
+    # Scene-beat multi-image entry point
+    # ------------------------------------------------------------------
+
+    def run_scene_beats(
+        self,
+        pg: dict[str, Any],
+        render_id: str,
+        output_dir: str = "",
+    ) -> dict[str, Any]:
+        """
+        Submit one ComfyUI prompt per scene beat and collect all output images.
+
+        Parameters
+        ----------
+        pg : dict
+            Serialized prompt_generation document.  Must contain a
+            ``scene_beats`` list of strings (falls back to one image from
+            the main prompt when absent or empty).
+        render_id : str
+            Used to build unique per-frame filenames.
+        output_dir : str
+            Directory where images are saved.
+
+        Returns
+        -------
+        dict with keys:
+            output_image_paths      list[str] — paths to all saved images
+            output_image_path       str  — first image path (backward compat)
+            prompt_ids              list[str]
+            errors                  list[str]
+            simulation_only         bool — always True
+            outbound_actions_taken  int  — always 0
+        """
+        out_dir = output_dir or os.getenv(
+            "FFMPEG_OUTPUT_DIR", "/tmp/signalforge_renders"
+        )
+        os.makedirs(out_dir, exist_ok=True)
+
+        scene_beats: list[str] = pg.get("scene_beats") or []
+        # Fallback: one image from main prompt when no beats defined
+        if not scene_beats:
+            result = self.run_from_prompt_generation(pg, output_dir=out_dir)
+            return {
+                "output_image_paths": [result["output_image_path"]] if result.get("output_image_path") else [],
+                "output_image_path": result.get("output_image_path", ""),
+                "prompt_ids": [result.get("prompt_id", "")],
+                "errors": [result.get("error", "")] if result.get("error") else [],
+                "simulation_only": True,
+                "outbound_actions_taken": 0,
+            }
+
+        image_paths: list[str] = []
+        prompt_ids: list[str] = []
+        errors: list[str] = []
+
+        for idx, beat_text in enumerate(scene_beats):
+            beat_pg = dict(pg)
+            beat_pg["positive_prompt"] = (
+                f"{beat_text.strip()}, "
+                f"{pg.get('visual_style', '').strip()}, "
+                f"{pg.get('lighting', '').strip()}, "
+                f"no faces, no identifiable people, cinematic B-roll"
+            )
+            workflow = self.build_txt2img_workflow(beat_pg)
+            image_output_path = os.path.join(
+                out_dir, f"{render_id}_frame_{idx:03d}.png"
+            )
+
+            # Submit
+            try:
+                submit_resp = self._queue_prompt(workflow)
+            except Exception as exc:
+                errors.append(f"beat[{idx}] POST /prompt failed: {exc}")
+                continue
+
+            prompt_id = submit_resp.get("prompt_id", "")
+            if not prompt_id:
+                errors.append(f"beat[{idx}] no prompt_id in response")
+                continue
+            prompt_ids.append(prompt_id)
+
+            # Poll
+            saved = ""
+            deadline = time.monotonic() + _POLL_MAX_WAIT_S
+            while time.monotonic() < deadline:
+                time.sleep(_POLL_INTERVAL_S)
+                try:
+                    history = self._get_history(prompt_id)
+                except Exception as exc:
+                    errors.append(f"beat[{idx}] GET /history failed: {exc}")
+                    break
+
+                entry = history.get(prompt_id, {})
+                if not entry.get("status", {}).get("completed"):
+                    continue
+
+                image_info = _extract_first_image(entry.get("outputs", {}))
+                if not image_info:
+                    errors.append(f"beat[{idx}] no output image in history")
+                    break
+
+                fname = image_info["filename"]
+                subfolder = image_info.get("subfolder", "")
+                img_type = image_info.get("type", "output")
+                saved = self._download_image(fname, subfolder, img_type, image_output_path)
+                if not saved:
+                    errors.append(f"beat[{idx}] download failed: {fname}")
+                break
+            else:
+                errors.append(f"beat[{idx}] timed out after {_POLL_MAX_WAIT_S}s")
+
+            if saved:
+                image_paths.append(saved)
+
+        first_path = image_paths[0] if image_paths else ""
+        return {
+            "output_image_paths": image_paths,
+            "output_image_path": first_path,
+            "prompt_ids": prompt_ids,
+            "errors": errors,
+            "simulation_only": True,
+            "outbound_actions_taken": 0,
+        }
+
 
 # ---------------------------------------------------------------------------
 # Module-level helpers (used by worker and health endpoint)
