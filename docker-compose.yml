@@ -14,6 +14,24 @@ x-signalforge-env: &signalforge-env
   COMFYUI_ENABLED: ${COMFYUI_ENABLED:-false}
   COMFYUI_BASE_URL: ${COMFYUI_BASE_URL:-http://comfyui:8188}
   COMFYUI_WORKFLOW_PATH: ${COMFYUI_WORKFLOW_PATH:-}
+  COMFYUI_RENDERER_TYPE: ${COMFYUI_RENDERER_TYPE:-}
+  COMFYUI_FORCE_PORTRAIT: ${COMFYUI_FORCE_PORTRAIT:-true}
+  COMFYUI_FALLBACK_ALLOWED: ${COMFYUI_FALLBACK_ALLOWED:-false}
+  # Phase 11 — Comfy Cloud renderer (disabled by default; requires subscription)
+  COMFY_CLOUD_ENABLED: ${COMFY_CLOUD_ENABLED:-false}
+  COMFY_CLOUD_BASE_URL: ${COMFY_CLOUD_BASE_URL:-https://cloud.comfy.org}
+  COMFY_CLOUD_API_KEY: ${COMFY_CLOUD_API_KEY:-}
+  COMFY_CLOUD_WORKFLOW_PATH: ${COMFY_CLOUD_WORKFLOW_PATH:-}
+  COMFY_CLOUD_PROVIDER: ${COMFY_CLOUD_PROVIDER:-official}
+  COMFY_CLOUD_TIMEOUT_SECONDS: ${COMFY_CLOUD_TIMEOUT_SECONDS:-600}
+  COMFY_CLOUD_FALLBACK_ALLOWED: ${COMFY_CLOUD_FALLBACK_ALLOWED:-false}
+  # Phase 11 — Comfy MCP validation (early access; disabled by default)
+  COMFY_MCP_ENABLED: ${COMFY_MCP_ENABLED:-false}
+  COMFY_MCP_URL: ${COMFY_MCP_URL:-https://cloud.comfy.org/mcp}
+  COMFY_MCP_API_KEY: ${COMFY_MCP_API_KEY:-}
+  COMFY_MCP_VALIDATION_ONLY: ${COMFY_MCP_VALIDATION_ONLY:-true}
+  # Phase 12 — AnimateDiff / Comfy Cloud video workflow
+  COMFY_CLOUD_WORKFLOW_VARIANT: ${COMFY_CLOUD_WORKFLOW_VARIANT:-}
   # Social Creative Engine v5.5 — FFmpeg render pipeline (enabled by default)
   REDIS_URL: ${REDIS_URL:-redis://redis:6379}
   FFMPEG_ENABLED: ${FFMPEG_ENABLED:-true}
@@ -130,6 +148,7 @@ services:
       - ./data:/data
       - render-output:/tmp/signalforge_renders
       - ytdlp-downloads:/tmp/signalforge_downloads
+      - ./workflows:/app/workflows:ro
     depends_on:
       mongo:
         condition: service_healthy
@@ -164,6 +183,7 @@ services:
       - ./data:/data
       - render-output:/tmp/signalforge_renders
       - ytdlp-downloads:/tmp/signalforge_downloads
+      - ./workflows:/app/workflows:ro
     depends_on:
       mongo:
         condition: service_healthy

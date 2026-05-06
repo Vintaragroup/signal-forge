@@ -1,0 +1,126 @@
+{
+  "1": {
+    "class_type": "CheckpointLoaderSimple",
+    "inputs": {
+      "ckpt_name": "stabilityai/stable-diffusion-xl-base-1.0"
+    }
+  },
+  "2": {
+    "class_type": "CLIPTextEncode",
+    "inputs": {
+      "clip": [
+        "1",
+        1
+      ],
+      "text": "{{positive_prompt}}, premium cinematic faceless inspirational b-roll, editorial documentary still, vertical 9:16 composition, symbolic leadership imagery, emotional visual storytelling, dramatic natural light, golden hour, volumetric light, atmospheric depth, shallow depth of field, realistic textures, film grain, high dynamic range, rich contrast, purposeful negative space for captions, elegant composition, no visible face, no identifiable person, no celebrity likeness, no avatar, no lip sync, studio quality"
+    }
+  },
+  "3": {
+    "class_type": "CLIPTextEncode",
+    "inputs": {
+      "clip": [
+        "1",
+        1
+      ],
+      "text": "{{negative_prompt}}, face, portrait, close-up face, identifiable person, celebrity, John Maxwell likeness, avatar, talking head, lip sync, mouth speaking, text artifacts, watermark, logo, subtitles, caption text, blurry, low quality, flat lighting, generic stock photo, plastic skin, distorted hands, extra fingers, extra limbs, deformed body, bad anatomy, duplicate people, crowd looking at camera, uncanny, oversaturated, compression artifacts"
+    }
+  },
+  "4": {
+    "class_type": "EmptyLatentImage",
+    "inputs": {
+      "width": 1024,
+      "height": 1792,
+      "batch_size": 2
+    }
+  },
+  "5": {
+    "class_type": "KSampler",
+    "inputs": {
+      "seed": 92837465,
+      "steps": 32,
+      "cfg": 6.5,
+      "sampler_name": "dpmpp_2m",
+      "scheduler": "karras",
+      "denoise": 1.0,
+      "model": [
+        "1",
+        0
+      ],
+      "positive": [
+        "2",
+        0
+      ],
+      "negative": [
+        "3",
+        0
+      ],
+      "latent_image": [
+        "4",
+        0
+      ]
+    }
+  },
+  "6": {
+    "class_type": "LatentUpscale",
+    "inputs": {
+      "samples": [
+        "5",
+        0
+      ],
+      "upscale_method": "nearest-exact",
+      "width": 1080,
+      "height": 1920,
+      "crop": "center"
+    }
+  },
+  "7": {
+    "class_type": "KSampler",
+    "inputs": {
+      "seed": 92837466,
+      "steps": 14,
+      "cfg": 5.5,
+      "sampler_name": "dpmpp_2m",
+      "scheduler": "karras",
+      "denoise": 0.28,
+      "model": [
+        "1",
+        0
+      ],
+      "positive": [
+        "2",
+        0
+      ],
+      "negative": [
+        "3",
+        0
+      ],
+      "latent_image": [
+        "6",
+        0
+      ]
+    }
+  },
+  "8": {
+    "class_type": "VAEDecode",
+    "inputs": {
+      "samples": [
+        "7",
+        0
+      ],
+      "vae": [
+        "1",
+        2
+      ]
+    }
+  },
+  "9": {
+    "class_type": "SaveImage",
+    "inputs": {
+      "filename_prefix": "signalforge_faceless_cinematic_frame",
+      "images": [
+        "8",
+        0
+      ]
+    }
+  }
+}

@@ -271,6 +271,171 @@ def assemble_video(
 
 
 # ---------------------------------------------------------------------------
+# Direct video mux (Phase 12 — Comfy Cloud video output)
+# ---------------------------------------------------------------------------
+
+def mux_video_with_audio(
+    *,
+    video_path: str,
+    audio_path: str = "",
+    output_path: str = "",
+    duration_seconds: float = 0.0,
+    output_dir: str = "",
+    asset_render_id: str = "",
+    preserve_original_audio: bool = True,
+) -> "VideoAssemblyResult":
+    """
+    Mux an existing video file with an audio track using FFmpeg.
+
+    The video's visual content is copied as-is (no re-encoding of video stream).
+    The audio track is the original spoken audio — never altered, cloned, or replaced.
+    Output is trimmed to duration_seconds if > 0.
+    Output is an MP4 container (9:16 assumed if video was generated vertically).
+
+    Safety guarantees
+    -----------------
+    - preserve_original_audio=True: audio is the original unaltered source
+    - simulation_only=True, outbound_actions_taken=0 always
+    - Never replaces spoken audio with AI-generated audio
+    - FFMPEG_ENABLED=false → returns mock result immediately
+
+    Parameters
+    ----------
+    video_path : str
+        Path to the Comfy-generated video file (visual-only or with generated audio).
+    audio_path : str
+        Path to the original source audio (e.g. John Maxwell MP3/WAV).
+        If empty, video audio track (if any) is preserved as-is.
+    output_path : str
+        Explicit output file path. Defaults to {asset_render_id}_muxed.mp4.
+    duration_seconds : float
+        If > 0, trim output to this length. Matches snippet duration.
+    output_dir : str
+        Directory for output file. Defaults to FFMPEG_OUTPUT_DIR.
+    asset_render_id : str
+        Used for output filename when output_path not specified.
+    preserve_original_audio : bool
+        Informational flag confirming intent. Audio is always preserved.
+    """
+    ffmpeg_enabled = _env_enabled(os.getenv("FFMPEG_ENABLED", "false"))
+    render_id = asset_render_id or str(uuid.uuid4())
+    out_dir = output_dir or _output_dir()
+
+    if not output_path:
+        output_path = os.path.join(out_dir, f"{render_id}_muxed.mp4")
+
+    if not ffmpeg_enabled:
+        return VideoAssemblyResult(
+            file_path=output_path,
+            duration_seconds=duration_seconds,
+            resolution="1080x1920",
+            generation_engine="comfyui_cloud",
+            ffmpeg_enabled=False,
+            mock=True,
+            assembly_status="mock",
+            assembly_engine="mock",
+            skip_reason="ffmpeg_disabled",
+            simulation_only=True,
+            outbound_actions_taken=0,
+        )
+
+    if not video_path or not os.path.isfile(video_path):
+        return VideoAssemblyResult(
+            file_path="",
+            duration_seconds=duration_seconds,
+            resolution="1080x1920",
+            generation_engine="comfyui_cloud",
+            ffmpeg_enabled=True,
+            mock=False,
+            assembly_status="failed",
+            assembly_engine="ffmpeg",
+            error=f"Video file not found: {video_path!r}",
+            simulation_only=True,
+            outbound_actions_taken=0,
+        )
+
+    # Build FFmpeg mux command
+    # - Copy video stream to avoid re-encoding
+    # - Encode audio as AAC for MP4 compatibility
+    # - Trim to duration_seconds if specified
+    cmd = ["ffmpeg", "-y", "-i", video_path]
+
+    if audio_path and os.path.isfile(audio_path):
+        cmd += ["-i", audio_path]
+        audio_map = ["-map", "0:v:0", "-map", "1:a:0"]
+        audio_codec = ["-c:a", "aac", "-b:a", "128k"]
+    else:
+        # Use existing audio from video (if any), or produce silent video
+        audio_map = ["-map", "0:v:0", "-map", "0:a?"]
+        audio_codec = ["-c:a", "copy"]
+
+    cmd += audio_map + ["-c:v", "copy"] + audio_codec
+
+    if duration_seconds > 0:
+        cmd += ["-t", str(duration_seconds)]
+
+    cmd += ["-movflags", "+faststart", output_path]
+
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+        if result.returncode != 0:
+            return VideoAssemblyResult(
+                file_path="",
+                duration_seconds=duration_seconds,
+                resolution="1080x1920",
+                generation_engine="comfyui_cloud",
+                ffmpeg_enabled=True,
+                mock=False,
+                assembly_status="failed",
+                assembly_engine="ffmpeg",
+                error=f"FFmpeg mux failed (rc={result.returncode}): {result.stderr[:500]}",
+                simulation_only=True,
+                outbound_actions_taken=0,
+            )
+    except subprocess.TimeoutExpired:
+        return VideoAssemblyResult(
+            file_path="",
+            duration_seconds=duration_seconds,
+            resolution="1080x1920",
+            generation_engine="comfyui_cloud",
+            ffmpeg_enabled=True,
+            mock=False,
+            assembly_status="failed",
+            assembly_engine="ffmpeg",
+            error="FFmpeg mux timed out after 300s.",
+            simulation_only=True,
+            outbound_actions_taken=0,
+        )
+    except FileNotFoundError:
+        return VideoAssemblyResult(
+            file_path="",
+            duration_seconds=duration_seconds,
+            resolution="1080x1920",
+            generation_engine="comfyui_cloud",
+            ffmpeg_enabled=True,
+            mock=False,
+            assembly_status="failed",
+            assembly_engine="ffmpeg",
+            error="FFmpeg binary not found. Install ffmpeg or set FFMPEG_ENABLED=false.",
+            simulation_only=True,
+            outbound_actions_taken=0,
+        )
+
+    return VideoAssemblyResult(
+        file_path=output_path,
+        duration_seconds=duration_seconds,
+        resolution="1080x1920",
+        generation_engine="comfyui_cloud",
+        ffmpeg_enabled=True,
+        mock=False,
+        assembly_status="success",
+        assembly_engine="ffmpeg",
+        simulation_only=True,
+        outbound_actions_taken=0,
+    )
+
+
+# ---------------------------------------------------------------------------
 # Multi-image sequence assembly (Ken Burns effect)
 # ---------------------------------------------------------------------------
 

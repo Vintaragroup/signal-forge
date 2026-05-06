@@ -1,0 +1,85 @@
+{
+  "1": {
+    "class_type": "CheckpointLoaderSimple",
+    "inputs": {
+      "ckpt_name": "sd_xl_base_1.0.safetensors"
+    }
+  },
+  "2": {
+    "class_type": "ADE_AnimateDiffLoaderWithContext",
+    "inputs": {
+      "model": ["1", 0],
+      "model_name": "mm_sdxl_v10_beta.ckpt",
+      "beta_schedule": "linear (AnimateDiff-SDXL)",
+      "motion_scale": 1.0,
+      "apply_v2_models_properly": true
+    }
+  },
+  "3": {
+    "class_type": "CLIPTextEncode",
+    "inputs": {
+      "clip": ["1", 1],
+      "text": "{{positive_prompt}}, cinematic faceless inspirational b-roll, emotional visual storytelling, vertical 9:16, professional commercial film look, symbolic leadership imagery, natural movement, slow camera drift, dynamic parallax, warm dramatic light, high detail, shallow depth of field, no visible face, no identifiable person, no celebrity likeness, no avatar, no lip sync"
+    }
+  },
+  "4": {
+    "class_type": "CLIPTextEncode",
+    "inputs": {
+      "clip": ["1", 1],
+      "text": "{{negative_prompt}}, face, portrait, close-up face, visible eyes, identifiable person, celebrity, John Maxwell likeness, avatar, talking head, lip sync, AI presenter, text artifacts, subtitles, watermark, logo, blurry, low quality, distorted hands, extra limbs, deformed body, uncanny, flicker, jitter, warped motion, low contrast"
+    }
+  },
+  "5": {
+    "class_type": "EmptyLatentImage",
+    "inputs": {
+      "width": 768,
+      "height": 1344,
+      "batch_size": 24
+    }
+  },
+  "6": {
+    "class_type": "KSampler",
+    "inputs": {
+      "seed": 92837465,
+      "steps": 24,
+      "cfg": 6.5,
+      "sampler_name": "dpmpp_2m_sde",
+      "scheduler": "karras",
+      "denoise": 1.0,
+      "model": ["2", 0],
+      "positive": ["3", 0],
+      "negative": ["4", 0],
+      "latent_image": ["5", 0]
+    }
+  },
+  "7": {
+    "class_type": "VAEDecode",
+    "inputs": {
+      "samples": ["6", 0],
+      "vae": ["1", 2]
+    }
+  },
+  "8": {
+    "class_type": "VHS_VideoCombine",
+    "inputs": {
+      "images": ["7", 0],
+      "frame_rate": 12,
+      "loop_count": 0,
+      "filename_prefix": "signalforge_animatediff_faceless_t2v",
+      "format": "video/h264-mp4",
+      "pix_fmt": "yuv420p",
+      "crf": 19,
+      "save_metadata": false,
+      "trim_to_audio": false,
+      "pingpong": false,
+      "save_output": true
+    }
+  },
+  "9": {
+    "class_type": "SaveImage",
+    "inputs": {
+      "filename_prefix": "signalforge_animatediff_preview_frame",
+      "images": ["7", 0]
+    }
+  }
+}

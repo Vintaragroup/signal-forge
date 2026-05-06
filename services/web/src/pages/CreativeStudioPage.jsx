@@ -3032,6 +3032,11 @@ function AssetRenderSection({
                     ✓ Real ComfyUI
                   </span>
                 )}
+                {render.renderer_type === "comfyui_cloud" && (
+                  <span className="rounded-full bg-purple-100 px-2 py-0.5 text-xs text-purple-800 font-semibold border border-purple-300">
+                    ☁ Cloud ComfyUI
+                  </span>
+                )}
                 {render.renderer_type === "comfyui_stub" && (
                   <span className="rounded-full bg-amber-100 px-2 py-0.5 text-xs text-amber-700 border border-amber-200">
                     ⚠ Stub Render
@@ -3072,6 +3077,21 @@ function AssetRenderSection({
                 {render.fallback_used && (
                   <span className="rounded-full bg-orange-100 px-2 py-0.5 text-xs text-orange-700 border border-orange-200">
                     Fallback Used
+                  </span>
+                )}
+                {render.workflow_variant === "animatediff_t2v" && (
+                  <span className="rounded-full bg-indigo-100 px-2 py-0.5 text-xs text-indigo-800 font-semibold border border-indigo-300">
+                    🎬 AnimateDiff T2V
+                  </span>
+                )}
+                {render.comfy_output_type === "video" && (
+                  <span className="rounded-full bg-violet-100 px-2 py-0.5 text-xs text-violet-800 font-semibold border border-violet-200">
+                    📹 Direct Video Output
+                  </span>
+                )}
+                {render.comfy_output_type === "image_sequence" && render.renderer_type === "comfyui_cloud" && (
+                  <span className="rounded-full bg-sky-100 px-2 py-0.5 text-xs text-sky-700 border border-sky-200">
+                    🖼 Image Sequence
                   </span>
                 )}
               </div>
@@ -3170,7 +3190,19 @@ function AssetRenderSection({
                 {render.image_source ? ` · Image: ${render.image_source}` : ""}
                 {render.model_name ? ` · Model: ${render.model_name}` : ""}
                 {render.workflow_path ? ` · Workflow: ${render.workflow_path.split("/").pop()}` : ""}
+                {render.workflow_variant ? ` · Variant: ${render.workflow_variant}` : ""}
+                {render.comfy_output_type && render.renderer_type === "comfyui_cloud"
+                  ? ` · Output: ${render.comfy_output_type}`
+                  : ""}
               </p>
+
+              {/* Comfy Cloud video path (Phase 12) */}
+              {render.comfy_video_path && (
+                <p className="text-xs text-slate-400 truncate">
+                  <span className="font-medium text-violet-700">Comfy video: </span>
+                  {render.comfy_video_path.split("/").pop()}
+                </p>
+              )}
 
               {/* Safety notice */}
               <p className="rounded bg-green-50 px-2 py-1 text-xs text-green-700">
@@ -3902,6 +3934,306 @@ function MediaIngestionSection({ mediaFolderScans, approvedUrlDownloads, mediaIn
 }
 
 // ---------------------------------------------------------------------------
+// Phase 11 — Renderer Validation Section
+// ---------------------------------------------------------------------------
+
+const RENDERER_TYPE_BADGES = {
+  comfyui_stub: { label: "Stub (Test)", color: "bg-slate-100 text-slate-600 border-slate-200" },
+  comfyui_real: { label: "Real ComfyUI", color: "bg-blue-100 text-blue-700 border-blue-200" },
+  comfyui_cloud: { label: "☁ Cloud Render", color: "bg-purple-100 text-purple-700 border-purple-200" },
+  external_manual: { label: "External Manual", color: "bg-amber-100 text-amber-700 border-amber-200" },
+};
+
+function RendererTypeBadge({ rendererType }) {
+  const badge = RENDERER_TYPE_BADGES[rendererType] || { label: rendererType, color: "bg-slate-100 text-slate-600 border-slate-200" };
+  return (
+    <span className={`inline-flex items-center rounded-full border px-2 py-0.5 text-xs font-medium ${badge.color}`}>
+      {badge.label}
+    </span>
+  );
+}
+
+function RendererValidationSection({
+  rendererValidationRuns,
+  rendererDiagnostics,
+  setRendererDiagnostics,
+  promptGenerations,
+  wsParam,
+  getAppWorkspace,
+  onRefresh,
+  showNotice,
+}) {
+  const [createForm, setCreateForm] = useState({
+    prompt_generation_id: "",
+    renderer_type: "comfyui_stub",
+    notes: "",
+    test_mode: true,
+  });
+  const [creating, setCreating] = useState(false);
+  const [loadingDiag, setLoadingDiag] = useState(false);
+  const [reviewForm, setReviewForm] = useState({});
+  const [reviewingId, setReviewingId] = useState(null);
+
+  async function loadDiagnostics() {
+    setLoadingDiag(true);
+    try {
+      const data = await api.rendererValidationDiagnostics();
+      setRendererDiagnostics(data);
+    } catch {
+      showNotice("Failed to load renderer diagnostics.");
+    } finally {
+      setLoadingDiag(false);
+    }
+  }
+
+  async function handleCreate(e) {
+    e.preventDefault();
+    setCreating(true);
+    try {
+      const ws = getAppWorkspace();
+      await api.createRendererValidationRun({
+        ...(ws && ws !== "all" ? { workspace_slug: ws } : {}),
+        ...createForm,
+      });
+      showNotice("Renderer validation run created.");
+      setCreateForm({ prompt_generation_id: "", renderer_type: "comfyui_stub", notes: "", test_mode: true });
+      onRefresh();
+    } catch {
+      showNotice("Failed to create renderer validation run.");
+    } finally {
+      setCreating(false);
+    }
+  }
+
+  async function handleReview(runId, decision) {
+    try {
+      const form = reviewForm[runId] || {};
+      await api.reviewRendererValidationRun(runId, {
+        decision,
+        quality_score: parseFloat(form.quality_score || 0),
+        quality_notes: form.quality_notes || "",
+        usable_for_final: decision === "approve_as_usable" ? Boolean(form.usable_for_final) : false,
+        reviewer_notes: form.reviewer_notes || "",
+      });
+      showNotice(`Review submitted: ${decision}`);
+      setReviewingId(null);
+      onRefresh();
+    } catch {
+      showNotice("Failed to submit review.");
+    }
+  }
+
+  return (
+    <div className="space-y-6">
+      {/* Safety notice */}
+      <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-2 text-sm text-amber-800">
+        <strong>Renderer Validation:</strong> Records are test-only. API keys are never shown. No rendering jobs are submitted from this UI. <code>simulation_only=true</code>, <code>outbound_actions_taken=0</code>.
+      </div>
+
+      {/* Diagnostics card */}
+      <section className="rounded-lg border border-slate-200 bg-white p-5">
+        <div className="flex items-center justify-between">
+          <h2 className="text-base font-semibold text-slate-950">Renderer Diagnostics</h2>
+          <button
+            type="button"
+            onClick={loadDiagnostics}
+            disabled={loadingDiag}
+            className="rounded-lg bg-slate-100 px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-200 disabled:opacity-50"
+          >
+            {loadingDiag ? "Loading…" : "Refresh Diagnostics"}
+          </button>
+        </div>
+        {rendererDiagnostics ? (
+          <div className="mt-4 space-y-4">
+            {/* Local renderer */}
+            <div>
+              <p className="text-xs font-semibold text-slate-700 uppercase tracking-wide">Local ComfyUI</p>
+              <div className="mt-1 grid grid-cols-2 gap-2 text-xs text-slate-600 sm:grid-cols-4">
+                <span>Renderer type: <strong>{rendererDiagnostics.local?.renderer_type || "—"}</strong></span>
+                <span>Valid: <strong>{rendererDiagnostics.local?.renderer_valid ? "✓ Yes" : "✗ No"}</strong></span>
+                <span>Reachable: <strong>{rendererDiagnostics.local?.comfyui_reachable ? "✓ Yes" : "✗ No"}</strong></span>
+                <span>Enabled: <strong>{rendererDiagnostics.local?.comfyui_enabled ? "✓ Yes" : "✗ No"}</strong></span>
+              </div>
+              {(rendererDiagnostics.local?.renderer_warnings || []).length > 0 && (
+                <ul className="mt-1 list-disc pl-4 text-xs text-amber-700">
+                  {rendererDiagnostics.local.renderer_warnings.map((w, i) => <li key={i}>{w}</li>)}
+                </ul>
+              )}
+            </div>
+            {/* Cloud renderer (API key NEVER shown) */}
+            <div>
+              <p className="text-xs font-semibold text-slate-700 uppercase tracking-wide">Comfy Cloud ☁</p>
+              <div className="mt-1 grid grid-cols-2 gap-2 text-xs text-slate-600 sm:grid-cols-4">
+                <span>Enabled: <strong>{rendererDiagnostics.cloud?.cloud_enabled ? "✓ Yes" : "✗ No"}</strong></span>
+                <span>API key configured: <strong>{rendererDiagnostics.cloud?.api_key_configured ? "✓ Yes" : "✗ No"}</strong></span>
+                <span>Provider: <strong>{rendererDiagnostics.cloud?.provider || "—"}</strong></span>
+                <span>Fallback allowed: <strong>{rendererDiagnostics.cloud?.fallback_allowed ? "Yes" : "No"}</strong></span>
+              </div>
+              {(rendererDiagnostics.cloud?.errors || []).map((e, i) => (
+                <p key={i} className="mt-1 text-xs text-red-600">{e}</p>
+              ))}
+            </div>
+            {/* MCP */}
+            <div>
+              <p className="text-xs font-semibold text-slate-700 uppercase tracking-wide">MCP Validation</p>
+              <div className="mt-1 grid grid-cols-2 gap-2 text-xs text-slate-600 sm:grid-cols-4">
+                <span>Enabled: <strong>{rendererDiagnostics.mcp?.mcp_enabled ? "✓ Yes" : "✗ No"}</strong></span>
+                <span>API key configured: <strong>{rendererDiagnostics.mcp?.api_key_configured ? "✓ Yes" : "✗ No"}</strong></span>
+                <span>Validation only: <strong>{rendererDiagnostics.mcp?.validation_only ? "Yes" : "No"}</strong></span>
+                <span>Ready: <strong>{rendererDiagnostics.mcp?.ready ? "✓ Yes" : "✗ No"}</strong></span>
+              </div>
+            </div>
+          </div>
+        ) : (
+          <p className="mt-3 text-xs text-slate-500">Click "Refresh Diagnostics" to load renderer status.</p>
+        )}
+      </section>
+
+      {/* Create validation run form */}
+      <section className="rounded-lg border border-slate-200 bg-white p-5">
+        <h2 className="mb-4 text-base font-semibold text-slate-950">Create Validation Run</h2>
+        <form onSubmit={handleCreate} className="space-y-4">
+          <div>
+            <label className="mb-1 block text-xs font-medium text-slate-700">Prompt Generation</label>
+            <select
+              value={createForm.prompt_generation_id}
+              onChange={(e) => setCreateForm((f) => ({ ...f, prompt_generation_id: e.target.value }))}
+              className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm"
+              required
+            >
+              <option value="">— Select prompt generation —</option>
+              {promptGenerations.map((pg) => (
+                <option key={pg._id} value={pg._id}>
+                  {pg.title || pg.hook_line || pg._id}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <label className="mb-1 block text-xs font-medium text-slate-700">Renderer Type</label>
+            <select
+              value={createForm.renderer_type}
+              onChange={(e) => setCreateForm((f) => ({ ...f, renderer_type: e.target.value }))}
+              className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm"
+            >
+              <option value="comfyui_stub">comfyui_stub — Built-in test stub (Pillow)</option>
+              <option value="comfyui_real">comfyui_real — Local ComfyUI instance</option>
+              <option value="comfyui_cloud">comfyui_cloud — Comfy Cloud (requires subscription)</option>
+              <option value="external_manual">external_manual — Operator-supplied frames</option>
+            </select>
+          </div>
+          {createForm.renderer_type === "comfyui_cloud" && (
+            <div className="rounded-lg border border-purple-200 bg-purple-50 px-4 py-2 text-xs text-purple-800">
+              <strong>Comfy Cloud:</strong> Requires <code>COMFY_CLOUD_ENABLED=true</code> and a valid API key in environment variables. API key is never stored or shown in this UI.
+            </div>
+          )}
+          <div>
+            <label className="mb-1 block text-xs font-medium text-slate-700">Notes (optional)</label>
+            <textarea
+              value={createForm.notes}
+              onChange={(e) => setCreateForm((f) => ({ ...f, notes: e.target.value }))}
+              rows={2}
+              className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm"
+              placeholder="What are you testing?"
+            />
+          </div>
+          <button
+            type="submit"
+            disabled={creating}
+            className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50"
+          >
+            {creating ? "Creating…" : "Create Validation Run"}
+          </button>
+        </form>
+      </section>
+
+      {/* Validation runs list */}
+      <section className="rounded-lg border border-slate-200 bg-white p-5">
+        <h2 className="mb-4 text-base font-semibold text-slate-950">
+          Validation Runs ({rendererValidationRuns.length})
+        </h2>
+        {rendererValidationRuns.length === 0 ? (
+          <p className="text-sm text-slate-500">No renderer validation runs yet.</p>
+        ) : (
+          <div className="space-y-4">
+            {rendererValidationRuns.map((run) => (
+              <div key={run._id} className="rounded-lg border border-slate-100 bg-slate-50 p-4">
+                <div className="flex flex-wrap items-start gap-2">
+                  <RendererTypeBadge rendererType={run.renderer_type} />
+                  <span className={`inline-flex items-center rounded-full border px-2 py-0.5 text-xs font-medium ${
+                    run.status === "completed" ? "bg-green-100 text-green-700 border-green-200"
+                    : run.status === "failed" ? "bg-red-100 text-red-700 border-red-200"
+                    : run.status === "needs_review" ? "bg-amber-100 text-amber-700 border-amber-200"
+                    : "bg-slate-100 text-slate-600 border-slate-200"
+                  }`}>{run.status}</span>
+                  <span className="text-xs text-slate-500">{run.created_at ? new Date(run.created_at).toLocaleString() : ""}</span>
+                </div>
+                <p className="mt-2 text-xs text-slate-600">
+                  PG: <code className="rounded bg-slate-100 px-1">{run.prompt_generation_id}</code>
+                  {run.notes && <> · {run.notes}</>}
+                </p>
+                {run.review_decision && (
+                  <p className="mt-1 text-xs text-slate-500">Decision: <strong>{run.review_decision}</strong> · Usable: {run.usable_for_final ? "Yes" : "No"}</p>
+                )}
+
+                {/* Quality review form */}
+                {reviewingId === run._id ? (
+                  <div className="mt-3 rounded-lg border border-blue-200 bg-blue-50 p-3 space-y-2">
+                    <p className="text-xs font-semibold text-slate-700">Quality Review</p>
+                    <div className="grid grid-cols-2 gap-2">
+                      <div>
+                        <label className="block text-xs text-slate-600">Quality Score (0–10)</label>
+                        <input
+                          type="number" min={0} max={10} step={0.1}
+                          value={reviewForm[run._id]?.quality_score || ""}
+                          onChange={(e) => setReviewForm((f) => ({ ...f, [run._id]: { ...f[run._id], quality_score: e.target.value } }))}
+                          className="w-full rounded border border-slate-200 px-2 py-1 text-xs"
+                        />
+                      </div>
+                      <div className="flex items-end">
+                        <label className="flex items-center gap-1 text-xs text-slate-600">
+                          <input
+                            type="checkbox"
+                            checked={reviewForm[run._id]?.usable_for_final || false}
+                            onChange={(e) => setReviewForm((f) => ({ ...f, [run._id]: { ...f[run._id], usable_for_final: e.target.checked } }))}
+                          />
+                          Usable for final
+                        </label>
+                      </div>
+                    </div>
+                    <textarea
+                      rows={2}
+                      placeholder="Quality notes…"
+                      value={reviewForm[run._id]?.quality_notes || ""}
+                      onChange={(e) => setReviewForm((f) => ({ ...f, [run._id]: { ...f[run._id], quality_notes: e.target.value } }))}
+                      className="w-full rounded border border-slate-200 px-2 py-1 text-xs"
+                    />
+                    <div className="flex gap-2">
+                      <button onClick={() => handleReview(run._id, "approve_as_usable")} className="rounded bg-green-600 px-2 py-1 text-xs text-white hover:bg-green-700">Approve as Usable</button>
+                      <button onClick={() => handleReview(run._id, "needs_revision")} className="rounded bg-amber-500 px-2 py-1 text-xs text-white hover:bg-amber-600">Needs Revision</button>
+                      <button onClick={() => handleReview(run._id, "reject")} className="rounded bg-red-600 px-2 py-1 text-xs text-white hover:bg-red-700">Reject</button>
+                      <button onClick={() => setReviewingId(null)} className="rounded bg-slate-200 px-2 py-1 text-xs text-slate-700 hover:bg-slate-300">Cancel</button>
+                    </div>
+                  </div>
+                ) : (
+                  run.status !== "completed" && run.status !== "failed" && (
+                    <button
+                      onClick={() => setReviewingId(run._id)}
+                      className="mt-2 rounded bg-slate-100 px-3 py-1 text-xs font-medium text-slate-700 hover:bg-slate-200"
+                    >
+                      Review
+                    </button>
+                  )
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+      </section>
+    </div>
+  );
+}
+
 // Main page
 // ---------------------------------------------------------------------------
 
@@ -3959,10 +4291,20 @@ export default function CreativeStudioPage({ activeWorkspace, refreshTrigger = 0
   const [mediaFolderScans, setMediaFolderScans] = useState([]);
   const [approvedUrlDownloads, setApprovedUrlDownloads] = useState([]);
 
+  // Phase 11: Renderer Validation
+  const [rendererValidationRuns, setRendererValidationRuns] = useState([]);
+  const [rendererDiagnostics, setRendererDiagnostics] = useState(null);
+  const [validationRunForm, setValidationRunForm] = useState({
+    prompt_generation_id: "",
+    renderer_type: "comfyui_stub",
+    notes: "",
+  });
+  const [validationRunNotice, setValidationRunNotice] = useState("");
+
   async function load() {
     setLoading(true);
     try {
-      const [briefData, draftData, profilesData, channelsData, contentData, snippetsData, assetsData, audioRunsData, transcriptRunsData, segmentsData, intakeData, promptGenData, assetRendersData, publishLogsData, perfRecordsData, perfSummariesData, campaignPacksData, campaignReportsData, campaignExportsData, clientIntelligenceData, leadCorrelationsData, mediaFolderScansData, approvedUrlDownloadsData] = await Promise.all([
+      const [briefData, draftData, profilesData, channelsData, contentData, snippetsData, assetsData, audioRunsData, transcriptRunsData, segmentsData, intakeData, promptGenData, assetRendersData, publishLogsData, perfRecordsData, perfSummariesData, campaignPacksData, campaignReportsData, campaignExportsData, clientIntelligenceData, leadCorrelationsData, mediaFolderScansData, approvedUrlDownloadsData, rendererValidationData] = await Promise.all([
         api.contentBriefs({ ...wsParam() }),
         api.contentDrafts({ ...wsParam() }),
         api.clientProfiles({ ...wsParam() }),
@@ -3986,6 +4328,7 @@ export default function CreativeStudioPage({ activeWorkspace, refreshTrigger = 0
         api.leadContentCorrelations({ ...wsParam() }),
         api.mediaFolderScans({ ...wsParam() }),
         api.approvedUrlDownloads({ ...wsParam() }),
+        api.rendererValidationRuns({ ...wsParam() }),
       ]);
       setBriefs(briefData.items || []);
       setDrafts(draftData.items || []);
@@ -4010,6 +4353,7 @@ export default function CreativeStudioPage({ activeWorkspace, refreshTrigger = 0
       setLeadCorrelations(leadCorrelationsData.items || []);
       setMediaFolderScans(mediaFolderScansData.items || []);
       setApprovedUrlDownloads(approvedUrlDownloadsData.items || []);
+      setRendererValidationRuns(rendererValidationData.items || []);
     } catch {
       // fail silently
     } finally {
@@ -4159,6 +4503,7 @@ export default function CreativeStudioPage({ activeWorkspace, refreshTrigger = 0
           { id: "campaign-exports", label: `Exports (${campaignExports.length})` },
           { id: "client-intelligence", label: `Intelligence (${clientIntelligenceRecords.length})` },
           { id: "media-ingestion", label: `Media Ingestion (${mediaFolderScans.length + approvedUrlDownloads.length})` },
+          { id: "renderer-validation", label: `Renderer Validation (${rendererValidationRuns.length})` },
           { id: "poc-demo", label: demoMode ? "POC Demo ✦" : "POC Demo" },
         ].map(({ id, label }) => (
           <button
@@ -4689,6 +5034,19 @@ export default function CreativeStudioPage({ activeWorkspace, refreshTrigger = 0
           mediaIntakeRecords={mediaIntakeRecords}
           clientProfiles={clientProfiles}
           wsParam={wsParam}
+          onRefresh={load}
+          showNotice={showNotice}
+        />
+      )}
+
+      {activeSection === "renderer-validation" && (
+        <RendererValidationSection
+          rendererValidationRuns={rendererValidationRuns}
+          rendererDiagnostics={rendererDiagnostics}
+          setRendererDiagnostics={setRendererDiagnostics}
+          promptGenerations={promptGenerations}
+          wsParam={wsParam}
+          getAppWorkspace={getAppWorkspace}
           onRefresh={load}
           showNotice={showNotice}
         />

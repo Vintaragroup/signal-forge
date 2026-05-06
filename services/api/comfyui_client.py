@@ -7,13 +7,15 @@ renderer_type is resolved at runtime from environment / config:
 
   comfyui_stub      — built-in Pillow test stub (never production-ready)
   comfyui_real      — real ComfyUI instance with COMFYUI_WORKFLOW_PATH set
+  comfyui_cloud     — Comfy Cloud API (COMFY_CLOUD_ENABLED=true + API key)
   external_manual   — placeholder for operator-supplied frames (no HTTP calls)
 
 Resolution order:
   1. COMFYUI_RENDERER_TYPE env var (explicit override)
-  2. COMFYUI_WORKFLOW_PATH set + COMFYUI_ENABLED=true → comfyui_real
-  3. COMFYUI_ENABLED=true but no workflow path → comfyui_stub (with warning)
-  4. COMFYUI_ENABLED=false → skipped entirely (comfyui_stub label, mock result)
+  2. COMFY_CLOUD_ENABLED=true → comfyui_cloud
+  3. COMFYUI_WORKFLOW_PATH set + COMFYUI_ENABLED=true → comfyui_real
+  4. COMFYUI_ENABLED=true but no workflow path → comfyui_stub (with warning)
+  5. COMFYUI_ENABLED=false → skipped entirely (comfyui_stub label, mock result)
 
 Real workflow support (comfyui_real)
 --------------------------------------
@@ -99,8 +101,15 @@ def resolve_renderer_type() -> str:
     4. Default → comfyui_stub
     """
     explicit = os.getenv("COMFYUI_RENDERER_TYPE", "").strip().lower()
-    if explicit in ("comfyui_stub", "comfyui_real", "external_manual"):
+    if explicit in ("comfyui_stub", "comfyui_real", "comfyui_cloud", "external_manual"):
         return explicit
+
+    # Cloud takes priority if explicitly enabled
+    cloud_enabled = str(os.getenv("COMFY_CLOUD_ENABLED", "false")).strip().lower() in (
+        "1", "true", "yes", "on"
+    )
+    if cloud_enabled:
+        return "comfyui_cloud"
 
     enabled = str(os.getenv("COMFYUI_ENABLED", "false")).strip().lower() in (
         "1", "true", "yes", "on"
@@ -141,6 +150,29 @@ def validate_renderer(renderer_type: str | None = None) -> dict[str, Any]:
 
     errors: list[str] = []
     warnings: list[str] = []
+
+    if rt == "comfyui_cloud":
+        # Delegate to cloud validator — import lazily to avoid circular deps
+        try:
+            from comfyui_cloud_client import validate_cloud_renderer  # type: ignore
+            cloud_validation = validate_cloud_renderer()
+            if not cloud_validation["valid"]:
+                cloud_fallback_allowed = str(
+                    os.getenv("COMFY_CLOUD_FALLBACK_ALLOWED", "false")
+                ).strip().lower() in ("1", "true", "yes", "on")
+                if not cloud_fallback_allowed:
+                    errors.extend(cloud_validation["errors"])
+                else:
+                    warnings.extend(cloud_validation["errors"])
+                    warnings.append("Falling back to comfyui_stub due to cloud config error.")
+                    rt = "comfyui_stub"
+            else:
+                workflow_path = os.getenv("COMFY_CLOUD_WORKFLOW_PATH", "").strip()
+                model_name = os.getenv("COMFY_CLOUD_MODEL", model_name)
+        except ImportError:
+            errors.append(
+                "comfyui_cloud_client module not available — cannot use comfyui_cloud renderer."
+            )
 
     if rt == "comfyui_real":
         if not workflow_path:
@@ -781,6 +813,23 @@ def comfyui_diagnostics() -> dict[str, Any]:
     client = ComfyUIClient()
     health = client.health_check()
     validation = validate_renderer()
+
+    # Cloud renderer diagnostics (never exposes API key)
+    cloud_diag: dict[str, Any] = {}
+    try:
+        from comfyui_cloud_client import cloud_diagnostics as _cloud_diag  # type: ignore
+        cloud_diag = _cloud_diag()
+    except ImportError:
+        cloud_diag = {"error": "comfyui_cloud_client not available"}
+
+    # MCP diagnostics
+    mcp_diag: dict[str, Any] = {}
+    try:
+        from comfyui_mcp_validation import mcp_diagnostics as _mcp_diag  # type: ignore
+        mcp_diag = _mcp_diag()
+    except ImportError:
+        mcp_diag = {"error": "comfyui_mcp_validation not available"}
+
     return {
         "comfyui_enabled": _env_enabled(os.getenv("COMFYUI_ENABLED", "false")),
         "comfyui_base_url": client.base_url,
@@ -793,4 +842,8 @@ def comfyui_diagnostics() -> dict[str, Any]:
         "renderer_valid": validation["valid"],
         "renderer_warnings": validation["warnings"],
         "renderer_errors": validation["errors"],
+        # Cloud renderer status (API key NEVER included)
+        "cloud": cloud_diag,
+        # MCP validation status (API key NEVER included)
+        "mcp": mcp_diag,
     }

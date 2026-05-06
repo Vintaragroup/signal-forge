@@ -7714,3 +7714,287 @@ def media_ingestion_diagnostics() -> dict:
         "simulation_only": True,
         "outbound_actions_taken": 0,
     }
+
+
+# ===========================================================================
+# Phase 11 — Renderer Validation Runs
+# ===========================================================================
+
+class RendererValidationRunRequest(BaseModel):
+    workspace_slug: str
+    client_id: str = ""
+    prompt_generation_id: str
+    renderer_type: str = "comfyui_stub"
+    provider: str = "official"
+    workflow_path: str = ""
+    model_name: str = ""
+    prompt_summary: str = ""
+    negative_prompt_summary: str = ""
+    notes: str = ""
+    test_mode: bool = True
+
+
+class RendererValidationReviewRequest(BaseModel):
+    decision: str  # approve_as_usable | needs_revision | reject
+    quality_score: float = 0.0
+    quality_notes: str = ""
+    usable_for_final: bool = False
+    reviewer_notes: str = ""
+
+
+VALID_VALIDATION_DECISIONS = {"approve_as_usable", "needs_revision", "reject"}
+
+
+@app.post("/renderer-validation-runs", status_code=201)
+def create_renderer_validation_run(payload: RendererValidationRunRequest) -> dict:
+    """
+    Create a renderer validation run record.
+
+    This records an intent to validate a renderer backend.
+    It does NOT submit any jobs to Comfy Cloud or any external service.
+    All records are simulation_only=True, outbound_actions_taken=0.
+    """
+    now = utc_now()
+    client = get_client()
+    db = get_database(client)
+
+    # Validate renderer_type
+    allowed_renderer_types = {
+        "comfyui_stub", "comfyui_real", "comfyui_cloud", "external_manual",
+    }
+    rt = clean_text(payload.renderer_type)
+    if rt not in allowed_renderer_types:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Invalid renderer_type={rt!r}. Must be one of: {sorted(allowed_renderer_types)}",
+        )
+
+    # Validate decision options
+    run_record: dict[str, Any] = {
+        "workspace_slug": clean_text(payload.workspace_slug),
+        "client_id": clean_text(payload.client_id),
+        "prompt_generation_id": clean_text(payload.prompt_generation_id),
+        "renderer_type": rt,
+        "provider": clean_text(payload.provider),
+        "workflow_path": clean_text(payload.workflow_path),
+        "model_name": clean_text(payload.model_name),
+        "prompt_summary": clean_text(payload.prompt_summary)[:500],
+        "negative_prompt_summary": clean_text(payload.negative_prompt_summary)[:500],
+        "notes": clean_text(payload.notes)[:1000],
+        "test_mode": bool(payload.test_mode),
+        "status": "pending",
+        "generated_output_paths": [],
+        "quality_score": 0.0,
+        "quality_notes": "",
+        "usable_for_final": False,
+        "failure_reason": "",
+        "review_decision": "",
+        "reviewer_notes": "",
+        "review_events": [],
+        "simulation_only": True,
+        "outbound_actions_taken": 0,
+        "created_at": now,
+        "updated_at": now,
+        "reviewed_at": None,
+    }
+
+    insert_result = db.renderer_validation_runs.insert_one(run_record)
+    run_id = str(insert_result.inserted_id)
+
+    # If this is a cloud validation run, include diagnostics (no API key)
+    cloud_diag: dict[str, Any] = {}
+    if rt == "comfyui_cloud":
+        try:
+            from comfyui_cloud_client import cloud_diagnostics  # type: ignore
+            cloud_diag = cloud_diagnostics()
+        except ImportError:
+            cloud_diag = {"error": "comfyui_cloud_client not available"}
+
+    # MCP validation plan if applicable
+    mcp_plan: dict[str, Any] = {}
+    if rt == "comfyui_cloud" and payload.prompt_generation_id:
+        try:
+            from comfyui_mcp_validation import create_mcp_validation_plan  # type: ignore
+            pg_id_clean = clean_text(payload.prompt_generation_id)
+            pg = db.prompt_generations.find_one(
+                {"_id": ObjectId(pg_id_clean)} if ObjectId.is_valid(pg_id_clean) else {"_id": pg_id_clean}
+            )
+            if pg:
+                pg["_id"] = str(pg["_id"])
+                mcp_plan = create_mcp_validation_plan(pg)
+        except ImportError:
+            mcp_plan = {"error": "comfyui_mcp_validation not available"}
+
+    run_record["_id"] = run_id
+    return {
+        "status": "created",
+        "item": serialize(run_record),
+        "cloud_diagnostics": cloud_diag,
+        "mcp_validation_plan": mcp_plan,
+        "simulation_only": True,
+        "outbound_actions_taken": 0,
+    }
+
+
+@app.get("/renderer-validation-runs")
+def list_renderer_validation_runs(
+    workspace_slug: str = Query(""),
+    renderer_type: str = Query(""),
+    status: str = Query(""),
+    limit: int = Query(50, ge=1, le=200),
+) -> dict:
+    """
+    List renderer validation runs.
+
+    Filters by workspace_slug, renderer_type, and status.
+    Results are ordered newest-first.
+    """
+    client = get_client()
+    db = get_database(client)
+
+    query: dict[str, Any] = {}
+    if workspace_slug:
+        query["workspace_slug"] = clean_text(workspace_slug)
+    if renderer_type:
+        query["renderer_type"] = clean_text(renderer_type)
+    if status:
+        query["status"] = clean_text(status)
+
+    runs = list(
+        db.renderer_validation_runs.find(query)
+        .sort("created_at", -1)
+        .limit(limit)
+    )
+    return {
+        "items": [serialize(r) for r in runs],
+        "total": len(runs),
+        "simulation_only": True,
+        "outbound_actions_taken": 0,
+    }
+
+
+@app.post("/renderer-validation-runs/{run_id}/review")
+def review_renderer_validation_run(
+    run_id: str,
+    payload: RendererValidationReviewRequest,
+) -> dict:
+    """
+    Submit a human review decision for a renderer validation run.
+
+    Valid decisions: approve_as_usable | needs_revision | reject
+
+    This does NOT approve any asset for publishing.
+    It only records whether the renderer output is usable for final production.
+    """
+    now = utc_now()
+    client = get_client()
+    db = get_database(client)
+
+    decision = clean_text(payload.decision)
+    if decision not in VALID_VALIDATION_DECISIONS:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Invalid decision={decision!r}. Must be one of: {sorted(VALID_VALIDATION_DECISIONS)}",
+        )
+
+    run = db.renderer_validation_runs.find_one(
+        {"_id": ObjectId(run_id)} if ObjectId.is_valid(run_id) else {"_id": run_id}
+    )
+    if not run:
+        raise HTTPException(status_code=404, detail="Renderer validation run not found.")
+
+    usable = decision == "approve_as_usable" and bool(payload.usable_for_final)
+
+    review_event = {
+        "decision": decision,
+        "quality_score": float(payload.quality_score),
+        "quality_notes": clean_text(payload.quality_notes)[:1000],
+        "usable_for_final": usable,
+        "reviewer_notes": clean_text(payload.reviewer_notes)[:1000],
+        "reviewed_at": now,
+    }
+
+    new_status = {
+        "approve_as_usable": "completed",
+        "needs_revision": "needs_review",
+        "reject": "failed",
+    }[decision]
+
+    db.renderer_validation_runs.update_one(
+        {"_id": ObjectId(run_id) if ObjectId.is_valid(run_id) else run_id},
+        {
+            "$set": {
+                "status": new_status,
+                "review_decision": decision,
+                "quality_score": float(payload.quality_score),
+                "quality_notes": clean_text(payload.quality_notes)[:1000],
+                "usable_for_final": usable,
+                "reviewer_notes": clean_text(payload.reviewer_notes)[:1000],
+                "reviewed_at": now,
+                "updated_at": now,
+            },
+            "$push": {"review_events": review_event},
+        },
+    )
+
+    updated = db.renderer_validation_runs.find_one(
+        {"_id": ObjectId(run_id)} if ObjectId.is_valid(run_id) else {"_id": run_id}
+    )
+    return {
+        "status": "reviewed",
+        "decision": decision,
+        "usable_for_final": usable,
+        "item": serialize(updated),
+        "simulation_only": True,
+        "outbound_actions_taken": 0,
+    }
+
+
+@app.get("/renderer-validation/diagnostics")
+def renderer_validation_diagnostics() -> dict:
+    """
+    Return full renderer diagnostics for all renderer backends.
+
+    This endpoint is safe to call at any time.
+    API keys are NEVER returned — only configured=True/False.
+    """
+    # Local ComfyUI diagnostics
+    local_diag: dict[str, Any] = {}
+    try:
+        from comfyui_client import comfyui_diagnostics  # type: ignore
+        local_diag = comfyui_diagnostics()
+    except Exception as exc:
+        local_diag = {"error": str(exc)}
+
+    # Cloud renderer diagnostics (API key never included)
+    cloud_diag: dict[str, Any] = {}
+    try:
+        from comfyui_cloud_client import cloud_diagnostics  # type: ignore
+        cloud_diag = cloud_diagnostics()
+    except Exception as exc:
+        cloud_diag = {"error": str(exc)}
+
+    # MCP diagnostics
+    mcp_diag: dict[str, Any] = {}
+    try:
+        from comfyui_mcp_validation import mcp_diagnostics  # type: ignore
+        mcp_diag = mcp_diagnostics()
+    except Exception as exc:
+        mcp_diag = {"error": str(exc)}
+
+    # MCP connection instructions
+    mcp_instructions: dict[str, Any] = {}
+    try:
+        from comfyui_mcp_validation import build_mcp_connection_instructions  # type: ignore
+        mcp_instructions = build_mcp_connection_instructions()
+    except Exception as exc:
+        mcp_instructions = {"error": str(exc)}
+
+    return {
+        "local": local_diag,
+        "cloud": cloud_diag,
+        "mcp": mcp_diag,
+        "mcp_setup_instructions": mcp_instructions,
+        "simulation_only": True,
+        "outbound_actions_taken": 0,
+    }

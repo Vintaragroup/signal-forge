@@ -141,6 +141,10 @@ def process_render_job(job: dict, db: Any) -> dict:
         model_name = ""
         fallback_used = False
         fallback_reason = ""
+        # Phase 12 — video output metadata
+        workflow_variant = ""
+        comfy_output_type = "image_sequence"
+        comfy_video_path = ""
 
         if comfyui_enabled:
             try:
@@ -171,6 +175,10 @@ def process_render_job(job: dict, db: Any) -> dict:
                     model_name = comfyui_result.get("model_name", "")
                     fallback_used = bool(comfyui_result.get("fallback_used", False))
                     fallback_reason = comfyui_result.get("fallback_reason", "")
+                    # Phase 12 — video output metadata
+                    workflow_variant = comfyui_result.get("workflow_variant", "")
+                    comfy_output_type = comfyui_result.get("comfy_output_type", "image_sequence")
+                    comfy_video_path = comfyui_result.get("comfy_video_path", "")
                     if img_paths:
                         generated_image_paths = [p for p in img_paths if os.path.isfile(p)]
                         generated_image_path = generated_image_paths[0] if generated_image_paths else ""
@@ -258,7 +266,7 @@ def process_render_job(job: dict, db: Any) -> dict:
         resolution = record.get("resolution", "1080x1920")
 
         try:
-            from video_assembler import assemble_video, assemble_video_sequence  # type: ignore
+            from video_assembler import assemble_video, assemble_video_sequence, mux_video_with_audio  # type: ignore
 
             caption_text = ""
             if add_captions:
@@ -270,7 +278,18 @@ def process_render_job(job: dict, db: Any) -> dict:
                         or ""
                     )
 
-            if len(generated_image_paths) > 1:
+            # Phase 12 — direct video output path (Comfy Cloud AnimateDiff / VHS)
+            if comfy_output_type == "video" and comfy_video_path:
+                out_dir = os.getenv("FFMPEG_OUTPUT_DIR", "/tmp/signalforge_renders")
+                va_result = mux_video_with_audio(
+                    video_path=comfy_video_path,
+                    audio_path=source_audio_path,
+                    duration_seconds=duration_seconds,
+                    output_dir=out_dir,
+                    asset_render_id=render_id_str,
+                    preserve_original_audio=preserve_original_audio,
+                )
+            elif len(generated_image_paths) > 1:
                 va_result = assemble_video_sequence(
                     image_paths=generated_image_paths,
                     audio_path=source_audio_path,
@@ -330,6 +349,12 @@ def process_render_job(job: dict, db: Any) -> dict:
                     "fallback_used": fallback_used,
                     "fallback_reason": fallback_reason,
                     "comfyui_partial_failure": comfyui_partial_failure,
+                    # Phase 12 — AnimateDiff / video output metadata
+                    "workflow_variant": workflow_variant,
+                    "comfy_output_type": comfy_output_type,
+                    "comfy_video_path": comfy_video_path,
+                    "preserve_original_audio": preserve_original_audio,
+                    "downloaded_outputs": comfyui_result.get("downloaded_outputs", []),
                     "simulation_only": True,
                     "outbound_actions_taken": 0,
                     "updated_at": _utc_now(),
@@ -357,6 +382,10 @@ def process_render_job(job: dict, db: Any) -> dict:
             "fallback_used": fallback_used,
             "fallback_reason": fallback_reason,
             "comfyui_partial_failure": comfyui_partial_failure,
+            "workflow_variant": workflow_variant,
+            "comfy_output_type": comfy_output_type,
+            "comfy_video_path": comfy_video_path,
+            "preserve_original_audio": preserve_original_audio,
             "file_path": final_file_path,
             "simulation_only": True,
             "outbound_actions_taken": 0,

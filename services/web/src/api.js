@@ -346,6 +346,22 @@ export const api = {
   mediaIngestionDiagnostics: () =>
     request("/media-ingestion/diagnostics"),
 
+  // Phase 11 — Renderer Validation
+  rendererValidationRuns: (params = {}) =>
+    request(`/renderer-validation-runs?${new URLSearchParams({ ...wsParam(), ...params })}`),
+  createRendererValidationRun: (payload) =>
+    request("/renderer-validation-runs", {
+      method: "POST",
+      body: JSON.stringify({ ...wsParam(), ...payload }),
+    }),
+  reviewRendererValidationRun: (id, payload) =>
+    request(`/renderer-validation-runs/${id}/review`, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  rendererValidationDiagnostics: () =>
+    request("/renderer-validation/diagnostics"),
+
   createAudioExtractionRunV4: (payload) =>
     request("/audio-extraction-runs/v4", {
       method: "POST",
