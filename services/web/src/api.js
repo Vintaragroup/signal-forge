@@ -646,6 +646,12 @@ export const api = {
   clientProfileWorkflowDefinition: (slug) =>
     request(`/admin/client-profiles/${encodeURIComponent(slug)}/workflow-definition`),
 
+  getAdminClientProfile: (slug) =>
+    request(`/admin/client-profiles/${encodeURIComponent(slug)}`),
+
+  getAdminWorkflowDefinition: (slug) =>
+    request(`/admin/workflow-definitions/${encodeURIComponent(slug)}`),
+
   // ── Phase 6A: Admin Workflow Definitions ────────────────────────────────
   workflowDefinitions: (params = {}) =>
     request(`/admin/workflow-definitions?${new URLSearchParams(params)}`),
