@@ -1,22 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import {
-  Activity,
-  BarChart3,
-  Bot,
-  Briefcase,
-  Building2,
-  Clapperboard,
-  FileText,
-  Gauge,
-  Mail,
-  ClipboardCheck,
-  ListChecks,
-  PenLine,
-  RefreshCw,
-  SearchCheck,
-  Users,
-  Workflow,
-} from "lucide-react";
+import { BarChart3, RefreshCw } from "lucide-react";
 import Sidebar from "./components/Sidebar.jsx";
 import Header from "./components/Header.jsx";
 import ModeBanner from "./components/ModeBanner.jsx";
@@ -36,23 +19,26 @@ import ReportsPage from "./pages/ReportsPage.jsx";
 import WorkspacesPage from "./pages/WorkspacesPage.jsx";
 import CreativeStudioPage from "./pages/CreativeStudioPage.jsx";
 import { api, setAppWorkspace } from "./api.js";
+import { ROUTE_MAP } from "./navigation/routeRegistry.js";
+import { NAV_GROUPS } from "./navigation/navGroups.js";
+import { PROFILE_STORAGE_KEY } from "./navigation/systemProfiles.js";
 
-const NAV_ITEMS = [
-  { id: "demo", label: "Demo Mode", icon: Clapperboard },
-  { id: "workflow", label: "Workflow", icon: Workflow },
-  { id: "overview", label: "Overview", icon: Gauge },
-  { id: "pipeline", label: "Pipeline", icon: Users },
-  { id: "messages", label: "Messages", icon: Mail },
-  { id: "approvals", label: "Approvals", icon: ClipboardCheck },
-  { id: "agent-tasks", label: "Agent Tasks", icon: ListChecks },
-  { id: "agents", label: "Agent Console", icon: Bot },
-  { id: "research-tools", label: "Research / Tools", icon: SearchCheck },
-  { id: "gpt-diagnostics", label: "GPT Diagnostics", icon: Activity },
-  { id: "deals", label: "Deals", icon: Building2 },
-  { id: "creative-studio", label: "Creative Studio", icon: PenLine },
-  { id: "reports", label: "Reports", icon: FileText },
-  { id: "workspaces", label: "Workspaces", icon: Briefcase },
-];
+const PAGE_COMPONENTS = {
+  demo:             DemoModePage,
+  workflow:         WorkflowPage,
+  overview:         OverviewPage,
+  pipeline:         PipelinePage,
+  messages:         MessagesPage,
+  approvals:        ApprovalQueuePage,
+  "agent-tasks":    AgentTasksPage,
+  agents:           AgentsPage,
+  "research-tools": ResearchToolsPage,
+  "gpt-diagnostics": GptDiagnosticsPage,
+  deals:            DealsPage,
+  "creative-studio": CreativeStudioPage,
+  reports:          ReportsPage,
+  workspaces:       WorkspacesPage,
+};
 
 export default function App() {
   const initialPage = () => window.location.hash.replace("#", "").split("?")[0] || "overview";
@@ -65,6 +51,14 @@ export default function App() {
   const [refreshTrigger, setRefreshTrigger] = useState(0);
   const [workspaces, setWorkspaces] = useState([]);
   const [activeWorkspace, setActiveWorkspace] = useState("all");
+  const [activeProfile, setActiveProfile] = useState(
+    () => localStorage.getItem(PROFILE_STORAGE_KEY) || "custom"
+  );
+
+  function handleProfileChange(profileId) {
+    localStorage.setItem(PROFILE_STORAGE_KEY, profileId);
+    setActiveProfile(profileId);
+  }
 
   async function refreshHealth() {
     const [nextHealth, nextGptRuntime] = await Promise.all([
@@ -119,30 +113,16 @@ export default function App() {
     }
   }
 
-  const Page = useMemo(() => {
-    if (activePage === "demo") return DemoModePage;
-    if (activePage === "workflow") return WorkflowPage;
-    if (activePage === "pipeline") return PipelinePage;
-    if (activePage === "messages") return MessagesPage;
-    if (activePage === "approvals") return ApprovalQueuePage;
-    if (activePage === "agent-tasks") return AgentTasksPage;
-    if (activePage === "agents") return AgentsPage;
-    if (activePage === "research-tools") return ResearchToolsPage;
-    if (activePage === "gpt-diagnostics") return GptDiagnosticsPage;
-    if (activePage === "deals") return DealsPage;
-    if (activePage === "creative-studio") return CreativeStudioPage;
-    if (activePage === "reports") return ReportsPage;
-    if (activePage === "workspaces") return WorkspacesPage;
-    return OverviewPage;
-  }, [activePage]);
+  const Page = useMemo(() => PAGE_COMPONENTS[activePage] ?? OverviewPage, [activePage]);
 
-  const title = NAV_ITEMS.find((item) => item.id === activePage)?.label || "Overview";
+  const title = ROUTE_MAP[activePage]?.label ?? "Overview";
 
   return (
     <div className="min-h-screen bg-slate-50 text-slate-950">
       <div className="flex min-h-screen">
         <Sidebar
-          items={NAV_ITEMS}
+          navGroups={NAV_GROUPS}
+          routeMap={ROUTE_MAP}
           activePage={activePage}
           onChange={(page) => {
             window.location.hash = page;
@@ -160,6 +140,8 @@ export default function App() {
             workspaces={workspaces}
             activeWorkspace={activeWorkspace}
             onWorkspaceChange={handleWorkspaceChange}
+            activeProfile={activeProfile}
+            onProfileChange={handleProfileChange}
             action={
               <button
                 type="button"
@@ -178,7 +160,7 @@ export default function App() {
             onCancel={() => setPendingMode(null)}
           />
           <div className="mx-auto max-w-[1500px] px-5 py-5 lg:px-8">
-            <Page onWorkspacesChange={loadWorkspaces} activeWorkspace={activeWorkspace} refreshTrigger={refreshTrigger} />
+            <Page onWorkspacesChange={loadWorkspaces} activeWorkspace={activeWorkspace} refreshTrigger={refreshTrigger} activeProfile={activeProfile} demoMode={demoMode} />
           </div>
         </main>
       </div>
