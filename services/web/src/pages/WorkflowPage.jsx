@@ -1264,6 +1264,10 @@ export default function WorkflowPage({ activeProfile = "custom", demoMode = fals
         return t > latest ? t : latest;
       }, 0)
     : null;
+  // Approvals from content_discovery runs are discovery artifacts, not content review items.
+  // Filter them out of Step 4 and nextStep so discovery doesn't jump to Review & Approve.
+  const contentApprovals = openApprovals.filter((a) => a.source_card_id !== "content_discovery");
+
   const stageStatuses = {
     1: "ready",
     2: (todayInsights.length > 0 && pendingInsights.length === 0)
@@ -1272,7 +1276,7 @@ export default function WorkflowPage({ activeProfile = "custom", demoMode = fals
     3: activeTask?.status === "running" ? "running"
        : latestRun ? "completed"
        : "not_started",
-    4: (draftsNeedingReview.length + openApprovals.length + currentRunAssets.length > 0) ? "needs_review"
+    4: (draftsNeedingReview.length + contentApprovals.length + currentRunAssets.length > 0) ? "needs_review"
        : (latestRun ? "ready" : "not_started"),
     5: (readyToSend.length + activeDistributionWorkCount > 0) ? "ready" : "not_started",
     6: (awaitingResponse.length + interested.length + booked.length > 0) ? "ready" : "not_started",
@@ -1295,6 +1299,14 @@ export default function WorkflowPage({ activeProfile = "custom", demoMode = fals
     }) || null;
   }, [discoveryRunSummaries]);
 
+  // Whether a discovery run completed today (used for Step 2 badge and nextStep routing).
+  const discoveryDoneToday = !!todayRunSummary;
+
+  // Update Stage 2 to "completed" once discovery has run today
+  if (discoveryDoneToday && stageStatuses[2] !== "completed") {
+    stageStatuses[2] = "completed";
+  }
+
   // Phase 6G: count stages that differ from the fallback template
   const overrideCount = useMemo(() => {
     if (!clientWorkflowDef) return 0;
@@ -1307,11 +1319,15 @@ export default function WorkflowPage({ activeProfile = "custom", demoMode = fals
   const nextStep = useMemo(() => {
     if (activeTask?.status === "running") return 3;
     if (readyToSend.length || activeDistributionWorkCount) return 5;
-    if (draftsNeedingReview.length || openApprovals.length) return 4;
+    // After discovery completes today, stay on Step 2 so operator reviews insights
+    // (takes priority over pending approvals to avoid wrongly jumping to Step 4 after discovery)
+    if (discoveryDoneToday) return 2;
+    // Only content-creation approvals (not discovery artifacts) trigger Step 4
+    if (draftsNeedingReview.length || contentApprovals.length) return 4;
     if (awaitingResponse.length || interested.length || booked.length) return 6;
     if (openDeals.length || closedWon.length) return 7;
     return 1;
-  }, [activeTask?.status, draftsNeedingReview.length, openApprovals.length, readyToSend.length, activeDistributionWorkCount, awaitingResponse.length, interested.length, booked.length, openDeals.length, closedWon.length]);
+  }, [activeTask?.status, draftsNeedingReview.length, contentApprovals.length, readyToSend.length, activeDistributionWorkCount, awaitingResponse.length, interested.length, booked.length, openDeals.length, closedWon.length, discoveryDoneToday]);
 
   // Sync expandedStep with nextStep unless the user has manually selected a step
   useEffect(() => {
@@ -1540,13 +1556,19 @@ export default function WorkflowPage({ activeProfile = "custom", demoMode = fals
 
       <div ref={livePanelRef}>
         <StepSection step="3" title={resolvedWorkflow.stages[3].label} subtitle={resolvedWorkflow.stages[3].subtitle} stageNote={resolvedWorkflow.stages[3].notes || undefined} required={resolvedWorkflow.stages[3].required} agentKey={resolvedWorkflow.stages[3].agent_key || undefined} runCardType={resolvedWorkflow.stages[3].run_card_type || undefined} active={nextStep === 3} count={latestRun ? 1 : 0} expanded={expandedStep === 3} onExpand={() => selectStep(3)} stageStatus={stageStatuses[3]}>
-          {latestRun || activeTask ? (
+          {/* Discovery run completion card — shown when latest run was a content_discovery */}
+          {latestRun?.agent_name === "content_discovery" && todayRunSummary ? (
+            <div className="space-y-4">
+              <DiscoveryRunCompletionCard runSummaries={discoveryRunSummaries} />
+              <DiscoveryExecutionTimeline runSummaries={discoveryRunSummaries} discoveryInsights={discoveryInsights} />
+            </div>
+          ) : latestRun || activeTask ? (
             <LiveAgentRunPanel task={activeTask} runDetail={activeRunDetail} loading={panelLoading} onRefresh={() => refreshRunDetail(activeTask?.linked_run_id || latestRun?.run_id)} />
           ) : (
             <EmptyState>No agent run yet. Use Step 2 to queue a run — outputs and timeline will appear here as the agent works.</EmptyState>
           )}
 
-          {/* Phase 6D: Discovery timeline */}
+          {/* Discovery Timeline — always shown when insights exist (original Phase 6D behaviour) */}
           {discoveryInsights.length > 0 && (
             <div className="mt-5 border-t border-slate-100 pt-4">
               <h3 className="mb-3 text-xs font-semibold uppercase tracking-wide text-slate-400">Discovery Timeline</h3>
@@ -1577,7 +1599,7 @@ export default function WorkflowPage({ activeProfile = "custom", demoMode = fals
         </StepSection>
       </div>
 
-      <StepSection step="4" title={resolvedWorkflow.stages[4].label} subtitle={resolvedWorkflow.stages[4].subtitle} stageNote={resolvedWorkflow.stages[4].notes || undefined} required={resolvedWorkflow.stages[4].required} agentKey={resolvedWorkflow.stages[4].agent_key || undefined} runCardType={resolvedWorkflow.stages[4].run_card_type || undefined} active={nextStep === 4} count={draftsNeedingReview.length + openApprovals.length} expanded={expandedStep === 4} onExpand={() => selectStep(4)} stageStatus={stageStatuses[4]}>
+      <StepSection step="4" title={resolvedWorkflow.stages[4].label} subtitle={resolvedWorkflow.stages[4].subtitle} stageNote={resolvedWorkflow.stages[4].notes || undefined} required={resolvedWorkflow.stages[4].required} agentKey={resolvedWorkflow.stages[4].agent_key || undefined} runCardType={resolvedWorkflow.stages[4].run_card_type || undefined} active={nextStep === 4} count={draftsNeedingReview.length + contentApprovals.length} expanded={expandedStep === 4} onExpand={() => selectStep(4)} stageStatus={stageStatuses[4]}>
         <div className="space-y-6">
 
           {/* Run context banner */}

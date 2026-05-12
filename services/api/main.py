@@ -2164,6 +2164,180 @@ def create_agent_task(payload: AgentTaskCreateRequest) -> dict:
         client.close()
 
 
+def _run_content_discovery_task(db, task: dict, started_at: Any) -> dict:
+    """Dedicated handler for card_id='content_discovery' agent tasks.
+
+    Skips normal agent execution so NO approval_requests are created.
+    Outputs: discovery_insights + discovery_run_summary only.
+    A synthetic agent_run record is written so Step 3 shows execution details.
+    """
+    from bson import ObjectId as _ObjId
+    from discovery_engine import generate_discovery_insights as _gen_insights, get_configured_sources as _get_sources
+
+    ws = clean_text(task.get("workspace_slug") or "")
+    module = clean_text(task.get("module") or "")
+    input_cfg = task.get("input_config") or {}
+    max_insights = max(1, min(int(input_cfg.get("limit") or 4), 10))
+
+    run_id = str(_ObjId())
+
+    # Mark task as running
+    db.agent_tasks.update_one(
+        {"_id": task["_id"]},
+        {"$set": {"status": "running", "started_at": started_at, "updated_at": started_at, "outbound_actions_taken": 0}},
+    )
+
+    # Create synthetic agent_run for Step 3 LiveAgentRunPanel
+    run_doc: dict[str, Any] = {
+        "_id": _ObjId(run_id),
+        "run_id": run_id,
+        "task_id": str(task["_id"]),
+        "agent_name": "content_discovery",
+        "agent_role": "Scan configured sources for content signals and discovery themes",
+        "module": module,
+        "status": "running",
+        "started_at": started_at,
+        "completed_at": None,
+        "input_summary": {"agent": "content_discovery", "module": module, "dry_run": True, "simulation_only": True},
+        "output_summary": {},
+        "steps": [],
+        "related_contacts": [],
+        "related_leads": [],
+        "related_messages": [],
+        "related_deals": [],
+        "warnings": ["Discovery scan only. No outbound actions taken."],
+        "errors": [],
+        "workspace_slug": ws,
+    }
+    db.agent_runs.insert_one(run_doc)
+
+    # Generate insights
+    completion_state = "completed"
+    created_insights: list[dict] = []
+    try:
+        created_insights = _gen_insights(
+            db=db,
+            workspace_slug=ws,
+            client_profile_slug=None,
+            module=module,
+            source_run_id=run_id,
+            max_insights=max_insights,
+        )
+    except Exception:
+        completion_state = "failed"
+    if completion_state == "completed" and not created_insights:
+        completion_state = "partial"
+
+    disc_completed = utc_now()
+
+    # Gather source/platform metadata for a human-readable summary
+    configured_sources: list[dict] = []
+    try:
+        configured_sources = _get_sources(ws, None, db)
+    except Exception:
+        pass
+    source_labels = [s.get("label", "") for s in configured_sources if s.get("status") == "active"]
+    platforms_from_insights: list[str] = []
+    for ins in created_insights:
+        for ev in ins.get("evidence", []):
+            p = clean_text(ev.get("platform", ""))
+            if p and p not in platforms_from_insights:
+                platforms_from_insights.append(p)
+    high_conf = sum(1 for i in created_insights if (i.get("confidence_score") or 0) >= 0.8)
+
+    if completion_state == "completed" and created_insights:
+        src_count = len(configured_sources)
+        plat_str = ", ".join(platforms_from_insights[:3]) if platforms_from_insights else "configured sources"
+        summary_text = (
+            f"Checked {src_count} configured source{'s' if src_count != 1 else ''} across {plat_str}. "
+            f"Generated {len(created_insights)} discovery insight{'s' if len(created_insights) != 1 else ''} "
+            f"with {high_conf} high-confidence signal{'s' if high_conf != 1 else ''}."
+        )
+        next_action = "Review discovery insights in Step 2, then run Content Asset Creation to generate reviewable content."
+    elif completion_state == "partial":
+        summary_text = "Discovery ran but no insights were generated for this workspace and module."
+        next_action = "Add more client sources or rerun Content Discovery."
+    else:
+        summary_text = "Discovery run encountered an error."
+        next_action = "Check system logs and retry Content Discovery."
+
+    # Persist discovery_run_summary
+    try:
+        db.discovery_run_summaries.insert_one({
+            "workspace_slug": ws,
+            "run_id": run_id,
+            "agent_name": "content_discovery",
+            "started_at": started_at,
+            "completed_at": disc_completed,
+            "sources_checked": len(configured_sources),
+            "insights_generated": len(created_insights),
+            "high_confidence_insights": high_conf,
+            "configured_sources_used": source_labels,
+            "platforms_checked": platforms_from_insights,
+            "completion_state": completion_state,
+            "summary": summary_text,
+            "next_recommended_action": next_action,
+            "metadata": {"module": module, "card_id": "content_discovery"},
+            "created_at": disc_completed,
+            "updated_at": disc_completed,
+        })
+    except Exception:
+        pass
+
+    # Update agent_run to completed
+    db.agent_runs.update_one(
+        {"run_id": run_id},
+        {"$set": {
+            "status": completion_state,
+            "completed_at": disc_completed,
+            "output_summary": {
+                "sources_checked": len(configured_sources),
+                "insights_generated": len(created_insights),
+                "high_confidence_insights": high_conf,
+                "completion_state": completion_state,
+                "simulation_only": True,
+                "outbound_actions_taken": 0,
+            },
+        }},
+    )
+
+    # Complete agent_task — status always "completed", never "waiting_for_approval"
+    completed_update: dict[str, Any] = {
+        "status": "completed",
+        "completed_at": disc_completed,
+        "updated_at": disc_completed,
+        "linked_run_id": run_id,
+        "result_summary": {
+            "agent_run_status": completion_state,
+            "sources_checked": len(configured_sources),
+            "insights_generated": len(created_insights),
+            "completion_state": completion_state,
+            "simulation_only": True,
+            "outbound_actions_taken": 0,
+        },
+        "error": None,
+        "outbound_actions_taken": 0,
+    }
+    db.agent_tasks.update_one({"_id": task["_id"]}, {"$set": completed_update})
+    updated = db.agent_tasks.find_one({"_id": task["_id"]})
+    run = db.agent_runs.find_one({"run_id": run_id})
+
+    return serialize({
+        "item": updated,
+        "run": run,
+        "result": {
+            "run_id": run_id,
+            "actions": [],
+            "insights_generated": len(created_insights),
+            "completion_state": completion_state,
+            "summary": summary_text,
+            "next_recommended_action": next_action,
+        },
+        "message": f"Content discovery completed. {len(created_insights)} insight(s) generated. No outbound action taken.",
+        "simulation_only": True,
+    })
+
+
 @app.post("/agent-tasks/{task_id}/run")
 def run_agent_task(task_id: str) -> dict:
     client = get_client()
@@ -2181,6 +2355,14 @@ def run_agent_task(task_id: str) -> dict:
         task_type = clean_text(task.get("task_type"))
         validate_agent_task(agent_name, module)
         validate_agent_task_type(agent_name, task_type)
+
+        # ── content_discovery: dedicated handler — no approval_requests created ──────
+        _early_card_id = clean_text(task.get("card_id") or (task.get("input_config") or {}).get("card_id") or "")
+        _early_ws = clean_text(task.get("workspace_slug") or "")
+        _early_module = module
+        if _early_card_id == "content_discovery" and _early_ws and _early_module:
+            return _run_content_discovery_task(db, task, started_at)
+
         db.agent_tasks.update_one(
             {"_id": task["_id"]},
             {"$set": {"status": "running", "started_at": started_at, "updated_at": started_at, "outbound_actions_taken": 0}},
@@ -2224,23 +2406,6 @@ def run_agent_task(task_id: str) -> dict:
             updated = db.agent_tasks.find_one({"_id": task["_id"]})
 
             # Phase 6D: auto-generate discovery insights for content_discovery runs
-            _card_id = clean_text(task.get("card_id") or (task.get("input_config") or {}).get("card_id") or "")
-            _ws = clean_text(task.get("workspace_slug") or "")
-            if _card_id == "content_discovery" and _ws:
-                try:
-                    from discovery_engine import generate_discovery_insights as _gen_insights
-                    _module = clean_text(task.get("module") or "")
-                    _run_id = result.get("run_id") or str(task["_id"])
-                    _gen_insights(
-                        db=db,
-                        workspace_slug=_ws,
-                        client_profile_slug=None,
-                        module=_module,
-                        source_run_id=_run_id,
-                    )
-                except Exception:
-                    pass  # Non-fatal: insight generation failure must not fail the task
-
             return serialize(
                 {
                     "item": updated,

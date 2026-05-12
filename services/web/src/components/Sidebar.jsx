@@ -32,21 +32,47 @@ export default function Sidebar({ navGroups, routeMap, activePage, onChange }) {
         {navGroups.map((group) => {
           const Icon = group.icon;
           const active = group.id === activeGroup;
+          const subRoutes = (group.subRoutes || []).map((id) => routeMap[id]).filter(Boolean).filter((r) => !r.hidden);
           return (
-            <button
-              key={group.id}
-              type="button"
-              onClick={() => onChange(group.defaultRoute)}
-              className={[
-                "flex h-10 w-full items-center gap-3 rounded-lg px-3 text-sm font-medium transition",
-                active
-                  ? "bg-white text-slate-950 shadow-soft"
-                  : "text-slate-300 hover:bg-slate-800 hover:text-white",
-              ].join(" ")}
-            >
-              <Icon className="h-4 w-4" />
-              {group.label}
-            </button>
+            <div key={group.id}>
+              <button
+                type="button"
+                onClick={() => onChange(group.defaultRoute)}
+                className={[
+                  "flex h-10 w-full items-center gap-3 rounded-lg px-3 text-sm font-medium transition",
+                  active
+                    ? "bg-white text-slate-950 shadow-soft"
+                    : "text-slate-300 hover:bg-slate-800 hover:text-white",
+                ].join(" ")}
+              >
+                <Icon className="h-4 w-4" />
+                {group.label}
+              </button>
+              {active && subRoutes.length > 1 && (
+                <div className="ml-3 mt-0.5 space-y-0.5 border-l border-slate-700 pl-3">
+                  {subRoutes.map((route) => {
+                    const RouteIcon = route.icon;
+                    const routeActive = activePage === route.id;
+                    return (
+                      <button
+                        key={route.id}
+                        type="button"
+                        onClick={() => onChange(route.id)}
+                        className={[
+                          "flex h-8 w-full items-center gap-2 rounded-md px-2 text-xs font-medium transition",
+                          routeActive
+                            ? "bg-slate-700 text-white"
+                            : "text-slate-400 hover:bg-slate-800 hover:text-slate-200",
+                        ].join(" ")}
+                      >
+                        <RouteIcon className="h-3.5 w-3.5 shrink-0" />
+                        {route.label}
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
           );
         })}
       </nav>
