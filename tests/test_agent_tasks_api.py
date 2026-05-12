@@ -98,15 +98,17 @@ def patch_supported_agents(monkeypatch, db, run_status="waiting_for_approval"):
     class FakeAgent:
         agent_role = "Fake safe dry-run agent"
 
-        def __init__(self, module, dry_run=True, mongo_uri=None, vault_path=None, limit=10):
+        def __init__(self, module, dry_run=True, mongo_uri=None, vault_path=None, limit=10, task_id=None):
             self.module = module
             self.dry_run = dry_run
             self.limit = limit
+            self.task_id = task_id
 
         def run(self):
             db.agent_runs.insert_one(
                 {
                     "run_id": "run-task-1",
+                    "task_id": self.task_id,
                     "agent_name": "outreach",
                     "module": self.module,
                     "status": run_status,
@@ -169,8 +171,10 @@ def test_run_agent_task_links_run_and_waiting_for_approval(monkeypatch):
 
     assert response.status_code == 200
     updated = db.agent_tasks.documents[0]
+    run = db.agent_runs.documents[0]
     assert updated["status"] == "waiting_for_approval"
     assert updated["linked_run_id"] == "run-task-1"
+    assert run["task_id"] == str(task_id)
     assert updated["result_summary"]["outbound_actions_taken"] == 0
     assert updated["outbound_actions_taken"] == 0
 
@@ -198,6 +202,7 @@ def test_run_agent_task_marks_completed_when_run_completed(monkeypatch):
     assert response.status_code == 200
     assert db.agent_tasks.documents[0]["status"] == "completed"
     assert db.agent_tasks.documents[0]["linked_run_id"] == "run-task-1"
+    assert db.agent_runs.documents[0]["task_id"] == str(task_id)
 
 
 def test_cancel_agent_task_updates_internal_status(monkeypatch):

@@ -82,6 +82,17 @@ export const api = {
       method: "POST",
       body: JSON.stringify(payload),
     }),
+  workflowAssets: (params = {}) => request(`/workflow-assets?${new URLSearchParams({ ...wsParam(), ...params })}`),
+  decideWorkflowAsset: (id, payload) =>
+    request(`/workflow-assets/${encodeURIComponent(id)}/decision`, {
+      method: "PATCH",
+      body: JSON.stringify(payload),
+    }),
+  updateWorkflowAssetDistribution: (id, payload) =>
+    request(`/workflow-assets/${encodeURIComponent(id)}/distribution`, {
+      method: "PATCH",
+      body: JSON.stringify(payload),
+    }),
   toolRuns: (params = {}) => request(`/tool-runs?${new URLSearchParams({ ...wsParam(), ...params })}`),
   runWebSearchTool: (payload) =>
     request("/tools/web-search", {

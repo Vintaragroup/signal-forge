@@ -53,6 +53,7 @@ class BaseAgent:
         limit: int = 10,
         use_tools: bool | None = None,
         workspace_slug: str = "",
+        task_id: str | None = None,
     ) -> None:
         if module not in SUPPORTED_MODULES:
             supported = ", ".join(sorted(SUPPORTED_MODULES))
@@ -66,6 +67,7 @@ class BaseAgent:
         self.limit = limit
         self.use_tools = bool(use_tools) if use_tools is not None else os.getenv("SIGNALFORGE_AGENT_TOOLS_ENABLED", "").lower() == "true"
         self.workspace_slug = workspace_slug
+        self.task_id = task_id
         self.started_at = datetime.now(timezone.utc)
         self.contacts: list[dict[str, Any]] = []
         self.message_drafts: list[dict[str, Any]] = []
@@ -204,6 +206,7 @@ class BaseAgent:
         run_doc = {
             "_id": run_object_id,
             "run_id": run_id,
+            "task_id": self.task_id or None,
             "agent_name": self.agent_name,
             "agent_role": self.agent_role,
             "module": self.module,
@@ -366,6 +369,17 @@ class BaseAgent:
             return []
         result = db.approval_requests.insert_many(requests)
         return [str(item) for item in result.inserted_ids]
+
+    def create_workflow_assets(self, db, run_id: str, asset_docs: list[dict]) -> list[str]:
+        """Insert workflow_asset documents and return their IDs.
+
+        Additive utility — does not replace or modify approval_request creation.
+        Only writes to the workflow_assets collection.
+        """
+        if not asset_docs:
+            return []
+        result = db.workflow_assets.insert_many(asset_docs)
+        return [str(inserted_id) for inserted_id in result.inserted_ids]
 
     @staticmethod
     def sort_contacts(contacts: list[dict[str, Any]]) -> list[dict[str, Any]]:

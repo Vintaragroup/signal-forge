@@ -113,6 +113,13 @@ class ApprovalDecisionRequest(BaseModel):
     note: str = ""
 
 
+class WorkflowAssetDistributionRequest(BaseModel):
+    action: Literal["queue", "unqueue", "mark_published", "archive"] | None = None
+    distribution_channel: str | None = None
+    distribution_notes: str | None = None
+    published_url: str | None = None
+
+
 class ScrapedCandidateDecisionRequest(BaseModel):
     decision: Literal["approve", "reject", "convert_to_contact", "convert_to_lead"]
     note: str = ""
@@ -239,6 +246,22 @@ def serialize(value: Any) -> Any:
     if isinstance(value, dict):
         return {key: serialize(item) for key, item in value.items()}
     return value
+
+
+WORKFLOW_ASSET_DISTRIBUTION_DEFAULTS = {
+    "distribution_state": "not_queued",
+    "distribution_channel": None,
+    "distribution_notes": None,
+    "published_at": None,
+    "published_url": None,
+}
+
+
+def normalize_workflow_asset(asset: dict[str, Any]) -> dict[str, Any]:
+    normalized = dict(asset)
+    for key, default_value in WORKFLOW_ASSET_DISTRIBUTION_DEFAULTS.items():
+        normalized.setdefault(key, default_value)
+    return normalized
 
 
 def module_for_lead(lead: dict) -> str:
@@ -883,7 +906,7 @@ def convert_approval_to_draft(db, request: dict, note: str, decided_at: datetime
     return "artifact_draft", create_artifact_draft_from_approval(db, request, note, decided_at)
 
 
-def instantiate_agent(agent_cls, *, module: str, dry_run: bool, mongo_uri: str, vault_path: Path, limit: int, use_tools: bool = False, workspace_slug: str = ""):
+def instantiate_agent(agent_cls, *, module: str, dry_run: bool, mongo_uri: str, vault_path: Path, limit: int, use_tools: bool = False, workspace_slug: str = "", task_id: str | None = None):
     kwargs = {
         "module": module,
         "dry_run": dry_run,
@@ -897,6 +920,8 @@ def instantiate_agent(agent_cls, *, module: str, dry_run: bool, mongo_uri: str, 
             kwargs["use_tools"] = use_tools
         if "workspace_slug" in parameters:
             kwargs["workspace_slug"] = workspace_slug
+        if "task_id" in parameters:
+            kwargs["task_id"] = task_id
     except (TypeError, ValueError):
         pass
     return agent_cls(**kwargs)
@@ -1027,9 +1052,8 @@ def dashboard_tasks(leads: list[dict], contacts: list[dict], messages: list[dict
     if research:
         tasks.append({"label": "Research leads", "count": research, "tone": "purple"})
 
-    nurture = sum(1 for contact in contacts if contact.get("segment") == "nurture" or contact.get("deal_outcome") == "nurture")
-    if nurture:
-        tasks.append({"label": "Nurture contacts", "count": nurture, "tone": "green"})
+        if "task_id" in parameters:
+            kwargs["task_id"] = task_id
 
     open_deals = sum(1 for deal in deals if deal.get("outcome") in ("proposal_sent", "negotiation"))
     if open_deals:
@@ -1532,6 +1556,132 @@ def approval_requests(
         client.close()
 
 
+@app.get("/workflow-assets")
+def get_workflow_assets(
+    run_id: str = Query(""),
+    module: str = Query(""),
+    profile_id: str = Query(""),
+    approval_state: str = Query(""),
+    distribution_state: str = Query(""),
+    asset_type: str = Query(""),
+    workspace_slug: str = Query(""),
+    limit: int = Query(100, ge=1, le=500),
+) -> dict:
+    client = get_client()
+    try:
+        db = get_database(client)
+        query: dict[str, Any] = {}
+        if run_id:
+            query["run_id"] = run_id
+        if module:
+            query["module"] = module
+        if profile_id:
+            query["profile_id"] = profile_id
+        if approval_state:
+            query["approval_state"] = approval_state
+        if distribution_state:
+            if distribution_state == "not_queued":
+                query["$or"] = [
+                    {"distribution_state": "not_queued"},
+                    {"distribution_state": {"$exists": False}},
+                ]
+            else:
+                query["distribution_state"] = distribution_state
+        if asset_type:
+            query["asset_type"] = asset_type
+        if workspace_slug:
+            query["workspace_slug"] = workspace_slug
+        items = [normalize_workflow_asset(item) for item in db.workflow_assets.find(query).sort([("created_at", -1)]).limit(limit)]
+        return {"items": serialize(items), "count": len(items)}
+    finally:
+        client.close()
+
+
+@app.patch("/workflow-assets/{asset_id}/decision")
+def decide_workflow_asset(asset_id: str, payload: dict) -> dict:
+    decision = payload.get("decision", "")
+    if decision not in ("approve", "reject"):
+        raise HTTPException(status_code=400, detail="decision must be 'approve' or 'reject'.")
+    client = get_client()
+    try:
+        db = get_database(client)
+        asset = db.workflow_assets.find_one({"_id": ObjectId(asset_id)})
+        if not asset:
+            raise HTTPException(status_code=404, detail="Workflow asset not found.")
+        state_map = {"approve": "approved", "reject": "rejected"}
+        db.workflow_assets.update_one(
+            {"_id": ObjectId(asset_id)},
+            {"$set": {
+                "approval_state": state_map[decision],
+                "updated_at": datetime.now(timezone.utc),
+            }},
+        )
+        updated = db.workflow_assets.find_one({"_id": ObjectId(asset_id)})
+        return {"item": serialize([normalize_workflow_asset(updated)])[0], "message": f"Asset {decision}d."}
+    finally:
+        client.close()
+
+
+@app.patch("/workflow-assets/{asset_id}/distribution")
+def update_workflow_asset_distribution(asset_id: str, payload: WorkflowAssetDistributionRequest) -> dict:
+    client = get_client()
+    try:
+        db = get_database(client)
+        asset = db.workflow_assets.find_one({"_id": ObjectId(asset_id)})
+        if not asset:
+            raise HTTPException(status_code=404, detail="Workflow asset not found.")
+
+        asset = normalize_workflow_asset(asset)
+        if asset.get("approval_state") != "approved":
+            raise HTTPException(status_code=400, detail="Only approved workflow assets can be updated for distribution.")
+
+        action = payload.action
+        current_state = asset.get("distribution_state") or "not_queued"
+
+        allowed_transitions = {
+            "queue": {"not_queued"},
+            "unqueue": {"queued"},
+            "mark_published": {"queued"},
+            "archive": {"not_queued", "queued", "published"},
+        }
+        if action and current_state not in allowed_transitions[action]:
+            raise HTTPException(status_code=400, detail=f"Cannot {action.replace('_', ' ')} from distribution_state={current_state}.")
+
+        payload_dict = payload.dict(exclude_unset=True)
+        updates: dict[str, Any] = {"updated_at": utc_now()}
+
+        if "distribution_channel" in payload_dict:
+            updates["distribution_channel"] = clean_text(payload.distribution_channel) or None
+        if "distribution_notes" in payload_dict:
+            updates["distribution_notes"] = clean_text(payload.distribution_notes) or None
+        if "published_url" in payload_dict and (action == "mark_published" or current_state == "published"):
+            updates["published_url"] = clean_text(payload.published_url) or None
+
+        if action == "queue":
+            updates["distribution_state"] = "queued"
+        elif action == "unqueue":
+            updates["distribution_state"] = "not_queued"
+        elif action == "mark_published":
+            updates["distribution_state"] = "published"
+            updates["published_at"] = utc_now()
+            updates.setdefault("published_url", clean_text(payload.published_url) or None)
+        elif action == "archive":
+            updates["distribution_state"] = "archived"
+
+        db.workflow_assets.update_one({"_id": ObjectId(asset_id)}, {"$set": updates})
+        updated = db.workflow_assets.find_one({"_id": ObjectId(asset_id)})
+        message_map = {
+            "queue": "Asset queued for manual distribution.",
+            "unqueue": "Asset removed from distribution queue.",
+            "mark_published": "Asset marked as manually published.",
+            "archive": "Asset archived from distribution queue.",
+            None: "Distribution details updated.",
+        }
+        return {"item": serialize([normalize_workflow_asset(updated)])[0], "message": message_map[action]}
+    finally:
+        client.close()
+
+
 @app.get("/tool-runs")
 def tool_runs(limit: int = Query(100, ge=1, le=500), status: str = "", agent_run_id: str = "", workspace_slug: str = Query(""), include_legacy: bool = Query(False), include_test: bool = Query(False)) -> dict:
     client = get_client()
@@ -1974,6 +2124,7 @@ def run_agent_task(task_id: str) -> dict:
                 limit=max(1, min(limit, 50)),
                 use_tools=bool((task.get("input_config") or {}).get("use_tools")),
                 workspace_slug=clean_text(task.get("workspace_slug") or ""),
+                task_id=str(task["_id"]),
             )
             result = agent.run()
             run = db.agent_runs.find_one({"run_id": result.get("run_id")})
