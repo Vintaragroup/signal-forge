@@ -54,3 +54,7 @@ build/
 # MongoDB dumps
 *.bson
 *.dump
+
+artifacts/
+vault/content/agents/
+services/web/public/media/john-maxwell-demo/*.aiff
