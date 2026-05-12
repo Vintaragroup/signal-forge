@@ -26,6 +26,10 @@ import {
   X,
   Lightbulb,
   ChevronDown,
+  AlertCircle,
+  CheckCircle2,
+  Maximize2,
+  Volume2,
 } from "lucide-react";
 import { api } from "../api.js";
 import { PROFILE_MAP } from "../navigation/systemProfiles.js";
@@ -423,35 +427,339 @@ function SourceReadinessCard({ clientSources }) {
   const connectedTypes = [...new Set(activeSources.map((s) => s.source_type))];
   const missing = RECOMMENDED_SOURCES.filter((t) => !connectedTypes.includes(t));
 
-  if (clientSources.length === 0) {
-    return (
-      <div className="rounded-lg border border-slate-200 bg-white px-4 py-3 text-xs text-slate-500">
-        <span className="font-semibold text-slate-700 mr-2">Source Readiness</span>
-        No client sources configured. Add sources in Admin Onboarding to make discovery client-aware.
-      </div>
-    );
+  // Phase 6F: readiness scoring
+  let readiness, readinessLabel, readinessClass, guidanceText;
+  if (activeSources.length >= 3) {
+    readiness = "ready";
+    readinessLabel = "Ready";
+    readinessClass = "bg-green-100 text-green-700 border-green-300";
+    guidanceText = "Ready for discovery scanning.";
+  } else if (activeSources.length >= 1) {
+    readiness = "partial";
+    readinessLabel = "Partial";
+    readinessClass = "bg-amber-100 text-amber-700 border-amber-300";
+    guidanceText = "Discovery quality will improve with more connected media sources.";
+  } else {
+    readiness = "missing";
+    readinessLabel = "Missing";
+    readinessClass = "bg-red-100 text-red-700 border-red-300";
+    guidanceText = "No client sources configured yet.";
   }
 
+  const cardBorder = readiness === "ready"
+    ? "border-teal-200 bg-teal-50"
+    : readiness === "partial"
+    ? "border-amber-200 bg-amber-50"
+    : "border-slate-200 bg-white";
+
   return (
-    <div className="rounded-lg border border-teal-200 bg-teal-50 px-4 py-3 text-xs space-y-2">
+    <div className={`rounded-lg border px-4 py-3 text-xs space-y-2 ${cardBorder}`}>
       <div className="flex items-center justify-between">
-        <span className="font-semibold text-teal-800">Source Readiness</span>
-        <span className="text-teal-700">{activeSources.length} active / {clientSources.length} total</span>
+        <span className="font-semibold text-slate-800">Source Readiness</span>
+        <div className="flex items-center gap-2">
+          <span className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold ${readinessClass}`}>
+            {readinessLabel}
+          </span>
+          <span className="text-slate-500">{activeSources.length} active / {clientSources.length} total</span>
+        </div>
       </div>
+      <p className="text-slate-600">{guidanceText}</p>
       {connectedTypes.length > 0 && (
         <div className="flex flex-wrap gap-1">
           {connectedTypes.map((t) => (
-            <span key={t} className="rounded-full bg-teal-100 border border-teal-300 px-2 py-0.5 text-[10px] font-medium text-teal-700 capitalize">
+            <span key={t} className="rounded-full bg-teal-100 border border-teal-200 px-2 py-0.5 text-[10px] font-medium text-teal-700 capitalize">
               {t.replace(/_/g, " ")}
             </span>
           ))}
         </div>
       )}
-      {missing.length > 0 && (
-        <div className="text-amber-700">
-          Missing recommended: {missing.map((t) => t.replace(/_/g, " ")).join(", ")}
-        </div>
+      {readiness === "missing" && (
+        <p className="text-slate-500 italic">
+          Go to Admin Onboarding to connect sources.
+        </p>
       )}
+      {missing.length > 0 && readiness !== "missing" && (
+        <p className="text-amber-700 text-[10px]">
+          Missing recommended: {missing.map((t) => t.replace(/_/g, " ")).join(", ")}
+        </p>
+      )}
+    </div>
+  );
+}
+
+// ── Phase 6F: DiscoveryRunCompletionCard ──────────────────────────────────────
+
+const COMPLETION_BORDER = {
+  completed: "border-green-200 bg-green-50",
+  partial: "border-amber-200 bg-amber-50",
+  failed: "border-red-200 bg-red-50",
+  running: "border-blue-200 bg-blue-50",
+};
+
+const COMPLETION_BADGE = {
+  completed: "bg-green-600 text-white",
+  partial: "bg-amber-500 text-white",
+  failed: "bg-red-600 text-white",
+  running: "bg-blue-500 text-white",
+};
+
+function DiscoveryRunCompletionCard({ runSummaries }) {
+  const today = new Date().toDateString();
+  const todaySummaries = runSummaries.filter((s) => {
+    const ts = s.completed_at || s.created_at;
+    return ts && new Date(ts).toDateString() === today;
+  });
+
+  if (todaySummaries.length === 0) {
+    return (
+      <div className="rounded-lg border border-slate-200 bg-slate-50 px-4 py-3 text-xs text-slate-500">
+        No discovery runs completed today.
+      </div>
+    );
+  }
+
+  const latest = todaySummaries[0];
+  const state = latest.completion_state || "running";
+  const cardClass = COMPLETION_BORDER[state] || "border-slate-200 bg-white";
+  const badgeClass = COMPLETION_BADGE[state] || "bg-slate-500 text-white";
+  const ts = latest.completed_at || latest.created_at;
+
+  return (
+    <div className={`rounded-lg border px-4 py-3 text-xs space-y-2 ${cardClass}`}>
+      <div className="flex items-center gap-2 flex-wrap">
+        <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold capitalize ${badgeClass}`}>
+          {state === "completed" ? "Completed Today" : state.charAt(0).toUpperCase() + state.slice(1)}
+        </span>
+        {latest.agent_name && (
+          <span className="text-slate-600 font-medium">{latest.agent_name}</span>
+        )}
+        {ts && (
+          <span className="ml-auto text-slate-400">
+            {new Date(ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+          </span>
+        )}
+      </div>
+      {latest.summary && (
+        <p className="text-slate-700 leading-relaxed">{latest.summary}</p>
+      )}
+      <div className="flex flex-wrap gap-x-5 gap-y-1 text-slate-600">
+        <span><strong>{latest.sources_checked ?? 0}</strong> sources checked</span>
+        <span><strong>{latest.insights_generated ?? 0}</strong> insights generated</span>
+        <span><strong>{latest.high_confidence_insights ?? 0}</strong> high confidence</span>
+        {latest.platforms_checked?.length > 0 && (
+          <span>Platforms: {latest.platforms_checked.slice(0, 4).join(", ")}</span>
+        )}
+      </div>
+      {latest.next_recommended_action && (
+        <p className="text-slate-700 font-medium">
+          Next: {latest.next_recommended_action}
+        </p>
+      )}
+    </div>
+  );
+}
+
+// ── Phase 6F: DiscoveryExecutionTimeline ──────────────────────────────────────
+
+const EXECUTION_STAGES = [
+  { key: "sources_loaded", label: "Sources Loaded", icon: CheckCircle2 },
+  { key: "platforms_scanned", label: "Platforms Scanned", icon: Search },
+  { key: "signals_ranked", label: "Signals Ranked", icon: TrendingUp },
+  { key: "insights_generated", label: "Insights Generated", icon: Lightbulb },
+  { key: "recommendations_prepared", label: "Recommendations Prepared", icon: CheckCircle2 },
+];
+
+function DiscoveryExecutionTimeline({ runSummaries, discoveryInsights }) {
+  const latestSummary = runSummaries.length > 0 ? runSummaries[0] : null;
+
+  if (!latestSummary && discoveryInsights.length === 0) return null;
+
+  const isCompleted = latestSummary?.completion_state === "completed";
+  const isFailed = latestSummary?.completion_state === "failed";
+
+  function stageDetail(stage) {
+    if (!latestSummary) return null;
+    if (stage.key === "sources_loaded") {
+      const used = latestSummary.configured_sources_used || [];
+      return used.length > 0 ? used.join(", ") : `${latestSummary.sources_checked ?? 0} sources`;
+    }
+    if (stage.key === "platforms_scanned") {
+      const plats = latestSummary.platforms_checked || [];
+      return plats.length > 0 ? plats.join(", ") : null;
+    }
+    if (stage.key === "insights_generated") {
+      return latestSummary.insights_generated != null
+        ? `${latestSummary.insights_generated} insight${latestSummary.insights_generated !== 1 ? "s" : ""}`
+        : null;
+    }
+    if (stage.key === "recommendations_prepared" && latestSummary.next_recommended_action) {
+      return latestSummary.next_recommended_action;
+    }
+    return null;
+  }
+
+  function stageStatus(idx) {
+    if (isFailed) return idx === 0 ? "done" : "error";
+    if (!latestSummary) return discoveryInsights.length > 0 ? "done" : "pending";
+    if (isCompleted) return "done";
+    return idx < 2 ? "done" : "pending";
+  }
+
+  const ts = latestSummary?.completed_at || latestSummary?.created_at;
+
+  return (
+    <div className="space-y-2">
+      <div className="flex items-center gap-2 justify-between">
+        <h4 className="text-xs font-semibold uppercase tracking-wide text-slate-400">Execution Timeline</h4>
+        {ts && (
+          <span className="text-[10px] text-slate-400">
+            {new Date(ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+          </span>
+        )}
+      </div>
+      <ol className="space-y-1.5">
+        {EXECUTION_STAGES.map((stage, idx) => {
+          const status = stageStatus(idx);
+          const detail = stageDetail(stage);
+          const Icon = stage.icon;
+          return (
+            <li key={stage.key} className="flex items-start gap-2 text-xs">
+              <Icon
+                size={13}
+                className={`mt-0.5 shrink-0 ${
+                  status === "done" ? "text-green-500"
+                  : status === "error" ? "text-red-400"
+                  : "text-slate-300"
+                }`}
+              />
+              <div className="min-w-0">
+                <span className={`font-medium ${status === "done" ? "text-slate-700" : "text-slate-400"}`}>
+                  {stage.label}
+                </span>
+                {detail && (
+                  <span className="ml-2 text-slate-400">{detail}</span>
+                )}
+              </div>
+            </li>
+          );
+        })}
+      </ol>
+    </div>
+  );
+}
+
+// ── Phase 6F: WorkflowAssetPreviewModal ───────────────────────────────────────
+
+function WorkflowAssetPreviewModal({ asset, discoveryInsightMap, onClose }) {
+  if (!asset) return null;
+
+  const linkedInsight = asset.source_discovery_insight_id
+    ? discoveryInsightMap?.[asset.source_discovery_insight_id]
+    : null;
+  const hasAudio = asset.audio_url || asset.source_audio_url;
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
+      onClick={onClose}
+    >
+      <div
+        className="relative w-full max-w-2xl rounded-xl bg-white shadow-2xl overflow-hidden max-h-[90vh] flex flex-col"
+        onClick={(e) => e.stopPropagation()}
+      >
+        {/* Header */}
+        <div className="flex items-start justify-between gap-3 px-5 pt-5 pb-3 border-b border-slate-100">
+          <div className="min-w-0">
+            <div className="text-xs font-semibold uppercase tracking-wide text-slate-400 mb-1">
+              {asset.asset_type?.replace(/_/g, " ")} · {asset.approval_state}
+            </div>
+            <h3 className="text-base font-semibold text-slate-900 leading-snug">{asset.title || "Untitled Asset"}</h3>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="shrink-0 rounded-lg p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-700"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+
+        {/* Scrollable body */}
+        <div className="overflow-y-auto flex-1 px-5 py-4 space-y-4">
+          {/* Full content */}
+          {(asset.content || asset.body) && (
+            <div>
+              <h4 className="text-[10px] font-semibold uppercase tracking-wide text-slate-400 mb-1.5">Content</h4>
+              <div className="whitespace-pre-wrap rounded-lg border border-slate-100 bg-slate-50 p-3 text-sm leading-6 text-slate-700">
+                {asset.content || asset.body}
+              </div>
+            </div>
+          )}
+
+          {/* Audio player */}
+          {hasAudio && (
+            <div>
+              <div className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wide text-slate-400 mb-1.5">
+                <Volume2 size={11} />
+                Audio
+              </div>
+              <audio
+                controls
+                src={asset.audio_url || asset.source_audio_url}
+                className="w-full rounded"
+              />
+            </div>
+          )}
+
+          {/* Discovery lineage */}
+          {linkedInsight && (
+            <div className="rounded-lg border border-violet-200 bg-violet-50 p-3 space-y-2 text-xs">
+              <div className="font-semibold text-violet-800">Generated from Discovery Insight</div>
+              <div className="text-violet-700 font-medium">{linkedInsight.title}</div>
+              {linkedInsight.confidence_score != null && (
+                <div className="text-violet-600">
+                  Confidence: {Math.round(linkedInsight.confidence_score * 100)}%
+                </div>
+              )}
+              {linkedInsight.recommendation?.rationale && (
+                <p className="text-violet-600 leading-relaxed">{linkedInsight.recommendation.rationale}</p>
+              )}
+              {linkedInsight.evidence?.length > 0 && (
+                <div>
+                  <div className="text-[10px] font-semibold uppercase tracking-wide text-violet-500 mb-1">Evidence</div>
+                  <ul className="space-y-0.5">
+                    {linkedInsight.evidence.slice(0, 4).map((ev, i) => (
+                      <li key={i} className="text-violet-600">
+                        {ev.platform && <strong>{ev.platform}</strong>}
+                        {ev.keyword && <span> — {ev.keyword}</span>}
+                        {ev.configured_source && (
+                          <span className="ml-1 rounded-full bg-teal-100 border border-teal-200 px-1.5 text-[9px] font-semibold text-teal-700">
+                            ✓ Configured
+                          </span>
+                        )}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Metadata */}
+          <div>
+            <h4 className="text-[10px] font-semibold uppercase tracking-wide text-slate-400 mb-1.5">Metadata</h4>
+            <dl className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs text-slate-600">
+              {asset.platform && <><dt className="text-slate-400">Platform</dt><dd>{asset.platform}</dd></>}
+              {asset.module && <><dt className="text-slate-400">Module</dt><dd>{asset.module}</dd></>}
+              {asset.workspace_slug && <><dt className="text-slate-400">Workspace</dt><dd>{asset.workspace_slug}</dd></>}
+              {asset.created_at && (
+                <><dt className="text-slate-400">Generated</dt>
+                <dd>{new Date(asset.created_at).toLocaleString()}</dd></>
+              )}
+            </dl>
+          </div>
+        </div>
+      </div>
     </div>
   );
 }
@@ -485,8 +793,12 @@ export default function WorkflowPage({ activeProfile = "custom", demoMode = fals
   // Phase 6C: discovery insights
   const [discoveryInsights, setDiscoveryInsights] = useState([]);
   const [clientSources, setClientSources] = useState([]);
+  const [discoveryRunSummaries, setDiscoveryRunSummaries] = useState([]);
   const [activeInsightModal, setActiveInsightModal] = useState(null);
   const [insightEvidenceOpen, setInsightEvidenceOpen] = useState({});
+  // Phase 6F: asset preview modal + distribution platforms
+  const [activeAssetPreview, setActiveAssetPreview] = useState(null);
+  const [distributionPlatforms, setDistributionPlatforms] = useState([]);
   // Phase 6D: generating assets state
   const [generatingAssetForInsight, setGeneratingAssetForInsight] = useState("");
   // Stepper state — tracks which step is expanded.
@@ -580,6 +892,15 @@ export default function WorkflowPage({ activeProfile = "custom", demoMode = fals
     if (!activeWorkspace || activeWorkspace === "all") return;
     api.clientSources({ workspace_slug: activeWorkspace, limit: "100" })
       .then((data) => setClientSources(data.items || []))
+      .catch(() => {});
+  }, [activeWorkspace]);
+
+  // Phase 6F: load discovery run summaries
+  useEffect(() => {
+    setDiscoveryRunSummaries([]);
+    if (!activeWorkspace || activeWorkspace === "all") return;
+    api.discoveryRunSummaries(activeWorkspace)
+      .then((data) => setDiscoveryRunSummaries(data.items || []))
       .catch(() => {});
   }, [activeWorkspace]);
 
@@ -881,6 +1202,15 @@ export default function WorkflowPage({ activeProfile = "custom", demoMode = fals
     return map;
   }, [discoveryInsights]);
 
+  // Phase 6F: today's most recent run summary
+  const todayRunSummary = useMemo(() => {
+    const today = new Date().toDateString();
+    return discoveryRunSummaries.find((r) => {
+      const ts = r.completed_at || r.created_at;
+      return ts && new Date(ts).toDateString() === today;
+    }) || null;
+  }, [discoveryRunSummaries]);
+
   const nextStep = useMemo(() => {
     if (activeTask?.status === "running") return 3;
     if (readyToSend.length || activeDistributionWorkCount) return 5;
@@ -917,6 +1247,12 @@ export default function WorkflowPage({ activeProfile = "custom", demoMode = fals
         dbSlug={resolvedTemplate._dbSlug}
       />
       <SourceReadinessCard clientSources={clientSources} />
+      <DiscoveryRunCompletionCard runSummaries={discoveryRunSummaries} />
+      {(todayRunSummary || discoveryInsights.length > 0) && (
+        <div className="rounded-lg border border-slate-200 bg-slate-50 px-4 py-3">
+          <DiscoveryExecutionTimeline runSummaries={discoveryRunSummaries} discoveryInsights={discoveryInsights} />
+        </div>
+      )}
       <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div>
@@ -979,17 +1315,6 @@ export default function WorkflowPage({ activeProfile = "custom", demoMode = fals
       </StepSection>
 
       <StepSection step="2" title={activeTemplate.steps[2].label} subtitle={activeTemplate.steps[2].subtitle} active={nextStep === 2} count={tasks.length} expanded={expandedStep === 2} onExpand={() => selectStep(2)} stageStatus={stageStatuses[2]}>
-        {completedTodayTasks.length > 0 && (
-          <div className="mb-4 flex items-center gap-2 rounded-lg border border-green-200 bg-green-50 px-3 py-2 text-xs text-green-800">
-            <span className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-green-600 text-white">
-              <Check className="h-3 w-3" />
-            </span>
-            <span className="font-semibold">Completed Today</span>
-            <span className="text-green-600">—</span>
-            <span>{completedTodayTasks[0].agent_name} / {completedTodayTasks[0].task_type}</span>
-            <span className="ml-auto shrink-0 text-green-600">{formatDate(completedTodayTasks[0].updated_at || completedTodayTasks[0].created_at)}</span>
-          </div>
-        )}
         <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
           {activeTemplate.runCards.map((card) => {
             const Icon = ICON_MAP[card.icon] ?? Megaphone;
@@ -1190,6 +1515,7 @@ export default function WorkflowPage({ activeProfile = "custom", demoMode = fals
                     busyId={busyId}
                     discoveryInsightMap={discoveryInsightMap}
                     onViewInsight={(insight) => setActiveInsightModal(insight)}
+                    onOpenPreview={(a) => setActiveAssetPreview(a)}
                   />
                 ))}
               </div>
@@ -1388,9 +1714,47 @@ export default function WorkflowPage({ activeProfile = "custom", demoMode = fals
 
       <StepSection step="5" title={activeTemplate.steps[5].label} subtitle={activeTemplate.steps[5].subtitle} active={nextStep === 5} count={readyToSend.length + activeDistributionWorkCount} expanded={expandedStep === 5} onExpand={() => selectStep(5)} stageStatus={stageStatuses[5]}>
         <div className="space-y-6">
-          <p className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2.5 text-xs leading-5 text-slate-500">
-            Approved content awaiting publishing assignment. This step covers final distribution staging — platform selection, channel assignment, and publish queue management. It is not a content review step.
-          </p>
+          {/* Phase 6F: Distribution Clarity Panel */}
+          <div className="rounded-lg border border-slate-200 bg-slate-50 px-4 py-4 space-y-3">
+            <div>
+              <h4 className="text-xs font-semibold uppercase tracking-wide text-slate-500 mb-1">Platform Distribution &amp; Scheduling</h4>
+              <p className="text-xs leading-5 text-slate-500">
+                Approved content awaiting publishing assignment. This step determines where approved content will be distributed and scheduled — platform selection, channel assignment, and publish queue management. It is not a content review step.
+              </p>
+            </div>
+            <div>
+              <p className="text-xs font-medium text-slate-600 mb-2">Select target distribution platforms:</p>
+              <div className="flex flex-wrap gap-2">
+                {["LinkedIn", "X", "Instagram", "Facebook", "YouTube", "Email", "Podcast"].map((platform) => {
+                  const selected = distributionPlatforms.includes(platform);
+                  return (
+                    <button
+                      key={platform}
+                      type="button"
+                      onClick={() =>
+                        setDistributionPlatforms((prev) =>
+                          selected ? prev.filter((p) => p !== platform) : [...prev, platform]
+                        )
+                      }
+                      className={[
+                        "rounded-full border px-3 py-1 text-xs font-medium transition",
+                        selected
+                          ? "border-blue-400 bg-blue-100 text-blue-700"
+                          : "border-slate-200 bg-white text-slate-600 hover:border-blue-300 hover:text-blue-600",
+                      ].join(" ")}
+                    >
+                      {platform}
+                    </button>
+                  );
+                })}
+              </div>
+              {distributionPlatforms.length > 0 && (
+                <p className="mt-2 text-[10px] text-slate-400">
+                  Selected: {distributionPlatforms.join(", ")}
+                </p>
+              )}
+            </div>
+          </div>
           <div>
             <div className="mb-3 flex items-center gap-3">
               <h3 className="text-sm font-semibold text-slate-950">Approved / Not Queued</h3>
@@ -1539,6 +1903,15 @@ export default function WorkflowPage({ activeProfile = "custom", demoMode = fals
       {/* Phase 6C: Discovery Insight detail modal */}
       {activeInsightModal ? (
         <DiscoveryInsightModal insight={activeInsightModal} onClose={() => setActiveInsightModal(null)} />
+      ) : null}
+
+      {/* Phase 6F: Workflow Asset preview modal */}
+      {activeAssetPreview ? (
+        <WorkflowAssetPreviewModal
+          asset={activeAssetPreview}
+          discoveryInsightMap={discoveryInsightMap}
+          onClose={() => setActiveAssetPreview(null)}
+        />
       ) : null}
 
       {activeAction ? (

@@ -723,6 +723,19 @@ export const api = {
     }),
   deleteClientSource: (id) =>
     request(`/admin/client-sources/${encodeURIComponent(id)}`, { method: "DELETE" }),
+
+  // Phase 6F: discovery run summaries
+  discoveryRunSummaries: (workspaceSlug) =>
+    request(`/discovery-run-summaries?workspace_slug=${encodeURIComponent(workspaceSlug || "")}&limit=20`),
+  getDiscoveryRunSummary: (runId) =>
+    request(`/discovery-run-summaries/${encodeURIComponent(runId)}`),
+  createDiscoveryRunSummary: (payload) =>
+    request("/discovery-run-summaries", { method: "POST", body: JSON.stringify(payload) }),
+  updateDiscoveryRunSummary: (runId, payload) =>
+    request(`/discovery-run-summaries/${encodeURIComponent(runId)}`, {
+      method: "PATCH",
+      body: JSON.stringify(payload),
+    }),
 };
 
 export { API_BASE_URL };

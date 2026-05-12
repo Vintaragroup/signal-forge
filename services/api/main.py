@@ -8736,6 +8736,7 @@ def trigger_discovery_insight_generation(payload: DiscoveryGenerateRequest) -> d
     """Manually trigger discovery insight generation for a workspace/module.
 
     Internally calls the discovery_engine pipeline and persists results.
+    Also creates a discovery_run_summary record capturing the operational result.
     Returns the batch of created insights.
     """
     ws = clean_text(payload.workspace_slug)
@@ -8745,23 +8746,98 @@ def trigger_discovery_insight_generation(payload: DiscoveryGenerateRequest) -> d
     if not module:
         raise HTTPException(status_code=400, detail="module is required.")
 
-    from discovery_engine import generate_discovery_insights as _gen_insights
+    from discovery_engine import generate_discovery_insights as _gen_insights, get_configured_sources as _get_sources
 
     client = get_client()
+    started = utc_now()
     try:
         db = get_database(client)
-        created = _gen_insights(
-            db=db,
-            workspace_slug=ws,
-            client_profile_slug=payload.client_profile_slug,
-            module=module,
-            source_run_id=payload.source_run_id,
-            max_insights=max(1, min(int(payload.max_insights), 10)),
-        )
+        completion_state = "completed"
+        created: list[dict] = []
+        try:
+            created = _gen_insights(
+                db=db,
+                workspace_slug=ws,
+                client_profile_slug=payload.client_profile_slug,
+                module=module,
+                source_run_id=payload.source_run_id,
+                max_insights=max(1, min(int(payload.max_insights), 10)),
+            )
+        except Exception:
+            completion_state = "failed"
+
+        if completion_state == "completed" and not created:
+            completion_state = "partial"
+
+        completed = utc_now()
+        run_id = payload.source_run_id or slugify(f"{ws}-{module}-{int(completed.timestamp())}")
+
+        # Gather source / platform metadata for summary
+        configured_sources: list[dict] = []
+        try:
+            configured_sources = _get_sources(ws, payload.client_profile_slug, db)
+        except Exception:
+            pass
+        source_labels = [s.get("label", "") for s in configured_sources if s.get("status") == "active"]
+        platforms_from_insights: list[str] = []
+        for ins in created:
+            for ev in ins.get("evidence", []):
+                p = ev.get("platform", "")
+                if p and p not in platforms_from_insights:
+                    platforms_from_insights.append(p)
+
+        high_conf = sum(1 for i in created if (i.get("confidence_score") or 0) >= 0.8)
+
+        # Build human-readable summary
+        if completion_state == "completed" and created:
+            src_count = len(configured_sources)
+            plat_str = ", ".join(platforms_from_insights[:3]) if platforms_from_insights else "configured sources"
+            summary_text = (
+                f"Checked {src_count} configured source{'s' if src_count != 1 else ''} across {plat_str}. "
+                f"Generated {len(created)} discovery insight{'s' if len(created) != 1 else ''} "
+                f"with {high_conf} high-confidence signal{'s' if high_conf != 1 else ''}."
+            )
+            next_action = "Review discovery insights and approve content directions."
+        elif completion_state == "partial":
+            summary_text = "Discovery ran but no insights were generated for this workspace and module."
+            next_action = "Add more client sources or rerun discovery later."
+        else:
+            summary_text = "Discovery run encountered an error."
+            next_action = "Check system logs and retry."
+
+        # Persist run summary (non-fatal)
+        try:
+            existing = db.discovery_run_summaries.find_one({"run_id": run_id})
+            summary_doc: dict[str, Any] = {
+                "workspace_slug": ws,
+                "run_id": run_id,
+                "agent_name": "content_discovery",
+                "started_at": started,
+                "completed_at": completed,
+                "sources_checked": len(configured_sources),
+                "insights_generated": len(created),
+                "high_confidence_insights": high_conf,
+                "configured_sources_used": source_labels,
+                "platforms_checked": platforms_from_insights,
+                "completion_state": completion_state,
+                "summary": summary_text,
+                "next_recommended_action": next_action,
+                "metadata": {"module": module},
+                "updated_at": completed,
+            }
+            if existing:
+                db.discovery_run_summaries.update_one({"run_id": run_id}, {"$set": summary_doc})
+            else:
+                summary_doc["created_at"] = completed
+                db.discovery_run_summaries.insert_one(summary_doc)
+        except Exception:
+            pass  # Non-fatal: never block insight delivery
+
         return {
             "items": serialize(created),
             "count": len(created),
             "message": f"{len(created)} discovery insight(s) generated.",
+            "run_summary": {"run_id": run_id, "completion_state": completion_state, "summary": summary_text},
         }
     finally:
         client.close()
@@ -9018,5 +9094,157 @@ def admin_delete_client_source(source_id: str) -> dict:
         doc = _get_client_source_or_404(db, source_id)
         db.client_sources.delete_one({"_id": doc["_id"]})
         return {"deleted": True, "id": source_id}
+    finally:
+        client.close()
+
+
+# ── Phase 6F: Discovery Run Summaries ────────────────────────────────────────
+
+class DiscoveryRunSummaryCreateRequest(BaseModel):
+    workspace_slug: str
+    run_id: str
+    agent_name: str = "content_discovery"
+    started_at: datetime
+    completed_at: datetime | None = None
+    sources_checked: int = 0
+    insights_generated: int = 0
+    high_confidence_insights: int = 0
+    configured_sources_used: list[str] = Field(default_factory=list)
+    platforms_checked: list[str] = Field(default_factory=list)
+    completion_state: str = "running"
+    summary: str | None = None
+    next_recommended_action: str | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class DiscoveryRunSummaryUpdateRequest(BaseModel):
+    completed_at: datetime | None = None
+    sources_checked: int | None = None
+    insights_generated: int | None = None
+    high_confidence_insights: int | None = None
+    configured_sources_used: list[str] | None = None
+    platforms_checked: list[str] | None = None
+    completion_state: str | None = None
+    summary: str | None = None
+    next_recommended_action: str | None = None
+    metadata: dict[str, Any] | None = None
+
+
+def _serialize_run_summary(doc: dict) -> dict:
+    return serialize(doc)
+
+
+@app.post("/discovery-run-summaries")
+def create_discovery_run_summary(payload: DiscoveryRunSummaryCreateRequest) -> dict:
+    ws = clean_text(payload.workspace_slug)
+    if not ws:
+        raise HTTPException(status_code=400, detail="workspace_slug is required.")
+    run_id = clean_text(payload.run_id)
+    if not run_id:
+        raise HTTPException(status_code=400, detail="run_id is required.")
+    client = get_client()
+    now = utc_now()
+    try:
+        db = get_database(client)
+        if db.discovery_run_summaries.find_one({"run_id": run_id}):
+            raise HTTPException(status_code=409, detail=f"Discovery run summary for run_id '{run_id}' already exists.")
+        doc: dict[str, Any] = {
+            "workspace_slug": ws,
+            "run_id": run_id,
+            "agent_name": clean_text(payload.agent_name) or "content_discovery",
+            "started_at": payload.started_at,
+            "completed_at": payload.completed_at,
+            "sources_checked": max(0, payload.sources_checked),
+            "insights_generated": max(0, payload.insights_generated),
+            "high_confidence_insights": max(0, payload.high_confidence_insights),
+            "configured_sources_used": list(payload.configured_sources_used),
+            "platforms_checked": list(payload.platforms_checked),
+            "completion_state": clean_text(payload.completion_state) or "running",
+            "summary": clean_text(payload.summary) if payload.summary else None,
+            "next_recommended_action": clean_text(payload.next_recommended_action) if payload.next_recommended_action else None,
+            "metadata": payload.metadata or {},
+            "created_at": now,
+            "updated_at": now,
+        }
+        result = db.discovery_run_summaries.insert_one(doc)
+        doc["_id"] = result.inserted_id
+        return {"item": _serialize_run_summary(doc)}
+    finally:
+        client.close()
+
+
+@app.get("/discovery-run-summaries")
+def list_discovery_run_summaries(
+    workspace_slug: str = Query(""),
+    run_id: str = Query(""),
+    completion_state: str = Query(""),
+    limit: int = Query(50),
+) -> dict:
+    query: dict[str, Any] = {}
+    if workspace_slug:
+        query["workspace_slug"] = workspace_slug
+    if run_id:
+        query["run_id"] = run_id
+    if completion_state:
+        query["completion_state"] = completion_state
+    client = get_client()
+    try:
+        db = get_database(client)
+        docs = list(
+            db.discovery_run_summaries.find(query)
+            .sort("completed_at", -1)
+            .limit(max(1, min(limit, 500)))
+        )
+        return {"items": [_serialize_run_summary(d) for d in docs], "count": len(docs)}
+    finally:
+        client.close()
+
+
+@app.get("/discovery-run-summaries/{run_id}")
+def get_discovery_run_summary(run_id: str) -> dict:
+    client = get_client()
+    try:
+        db = get_database(client)
+        doc = db.discovery_run_summaries.find_one({"run_id": run_id})
+        if not doc:
+            raise HTTPException(status_code=404, detail=f"Discovery run summary '{run_id}' not found.")
+        return {"item": _serialize_run_summary(doc)}
+    finally:
+        client.close()
+
+
+@app.patch("/discovery-run-summaries/{run_id}")
+def update_discovery_run_summary(run_id: str, payload: DiscoveryRunSummaryUpdateRequest) -> dict:
+    client = get_client()
+    now = utc_now()
+    try:
+        db = get_database(client)
+        doc = db.discovery_run_summaries.find_one({"run_id": run_id})
+        if not doc:
+            raise HTTPException(status_code=404, detail=f"Discovery run summary '{run_id}' not found.")
+        updates: dict[str, Any] = {"updated_at": now}
+        if payload.completed_at is not None:
+            updates["completed_at"] = payload.completed_at
+        if payload.sources_checked is not None:
+            updates["sources_checked"] = max(0, payload.sources_checked)
+        if payload.insights_generated is not None:
+            updates["insights_generated"] = max(0, payload.insights_generated)
+        if payload.high_confidence_insights is not None:
+            updates["high_confidence_insights"] = max(0, payload.high_confidence_insights)
+        if payload.configured_sources_used is not None:
+            updates["configured_sources_used"] = list(payload.configured_sources_used)
+        if payload.platforms_checked is not None:
+            updates["platforms_checked"] = list(payload.platforms_checked)
+        if payload.completion_state is not None:
+            updates["completion_state"] = clean_text(payload.completion_state) or doc.get("completion_state", "running")
+        if payload.summary is not None:
+            updates["summary"] = clean_text(payload.summary) or None
+        if payload.next_recommended_action is not None:
+            updates["next_recommended_action"] = clean_text(payload.next_recommended_action) or None
+        if payload.metadata is not None:
+            updates["metadata"] = payload.metadata
+        db.discovery_run_summaries.update_one({"run_id": run_id}, {"$set": updates})
+        updated = db.discovery_run_summaries.find_one({"run_id": run_id})
+        return {"item": _serialize_run_summary(updated)}
     finally:
         client.close()

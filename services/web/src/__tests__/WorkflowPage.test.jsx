@@ -16,6 +16,7 @@ const { apiMock } = vi.hoisted(() => ({
     generateAssetsFromInsight: vi.fn(),
     triggerDiscoveryInsights: vi.fn(),
     clientSources: vi.fn(),
+    discoveryRunSummaries: vi.fn(),
   },
 }));
 
@@ -80,6 +81,7 @@ describe("WorkflowPage Step 5 grouping", () => {
     apiMock.getWorkspace.mockRejectedValue(new Error("no workspace"));
     apiMock.clientProfileWorkflowDefinition.mockRejectedValue(new Error("no def"));
     apiMock.clientSources.mockResolvedValue({ items: [] });
+    apiMock.discoveryRunSummaries.mockResolvedValue({ items: [] });
     apiMock.agentRuns.mockResolvedValue({ items: [{ _id: "run-1", run_id: "run-1", status: "completed" }] });
     apiMock.messages.mockResolvedValue({
       items: [
@@ -220,6 +222,7 @@ describe("WorkflowPage Phase 6C discovery insights", () => {
     apiMock.getWorkspace.mockRejectedValue(new Error("no workspace"));
     apiMock.clientProfileWorkflowDefinition.mockRejectedValue(new Error("no def"));
     apiMock.clientSources.mockResolvedValue({ items: [] });
+    apiMock.discoveryRunSummaries.mockResolvedValue({ items: [] });
   });
 
   afterEach(async () => {
@@ -395,6 +398,7 @@ describe("WorkflowPage Phase 6D discovery engine", () => {
     apiMock.getWorkspace.mockRejectedValue(new Error("no workspace"));
     apiMock.clientProfileWorkflowDefinition.mockRejectedValue(new Error("no def"));
     apiMock.clientSources.mockResolvedValue({ items: [] });
+    apiMock.discoveryRunSummaries.mockResolvedValue({ items: [] });
   });
 
   afterEach(async () => {
@@ -568,6 +572,7 @@ describe("WorkflowPage Phase 6E source registry", () => {
     apiMock.generateAssetsFromInsight.mockResolvedValue({ item: {} });
     apiMock.triggerDiscoveryInsights.mockResolvedValue({ status: "ok" });
     apiMock.clientSources.mockResolvedValue({ items: [] });
+    apiMock.discoveryRunSummaries.mockResolvedValue({ items: [] });
   });
 
   afterEach(() => {
@@ -578,6 +583,7 @@ describe("WorkflowPage Phase 6E source registry", () => {
   async function render(sources = []) {
     const { default: WorkflowPage } = await import("../pages/WorkflowPage.jsx");
     apiMock.clientSources.mockResolvedValue({ items: sources });
+    apiMock.discoveryRunSummaries.mockResolvedValue({ items: [] });
     await act(async () => {
       const root = createRoot(container);
       container._root = root;
@@ -617,6 +623,7 @@ describe("WorkflowPage Phase 6E source registry", () => {
 
   it("does not crash when clientSources returns empty", async () => {
     apiMock.clientSources.mockResolvedValue({ items: [] });
+    apiMock.discoveryRunSummaries.mockResolvedValue({ items: [] });
     await render([]);
     expect(container.textContent).toContain("Source Readiness");
   });
@@ -666,5 +673,164 @@ describe("WorkflowPage Phase 6E source registry", () => {
       await act(async () => { evidenceBtn.click(); });
       expect(container.textContent).toContain("Configured Source");
     }
+  });
+});
+// ── Phase 6F: Discovery Run Completion + Source Readiness + Distribution ──────
+
+describe("WorkflowPage Phase 6F discovery run completion + distribution", () => {
+  let container6f;
+
+  beforeEach(() => {
+    globalThis.IS_REACT_ACT_ENVIRONMENT = true;
+    vi.clearAllMocks();
+    container6f = document.createElement("div");
+    document.body.appendChild(container6f);
+
+    apiMock.agentTasks.mockResolvedValue({ items: [] });
+    apiMock.approvalRequests.mockResolvedValue({ items: [] });
+    apiMock.deals.mockResolvedValue({ items: [] });
+    apiMock.discoveryInsights.mockResolvedValue({ items: [] });
+    apiMock.getWorkspace.mockRejectedValue(new Error("no workspace"));
+    apiMock.clientProfileWorkflowDefinition.mockRejectedValue(new Error("no def"));
+    apiMock.clientSources.mockResolvedValue({ items: [] });
+    apiMock.discoveryRunSummaries.mockResolvedValue({ items: [] });
+    apiMock.agentRuns.mockResolvedValue({ items: [] });
+    apiMock.messages.mockResolvedValue({ items: [] });
+    apiMock.workflowAssets.mockResolvedValue({ items: [] });
+  });
+
+  afterEach(() => {
+    const root6f = container6f._root;
+    if (root6f) { act(() => { root6f.unmount(); }); }
+    if (container6f.parentNode) container6f.parentNode.removeChild(container6f);
+  });
+
+  async function render6f(props = {}) {
+    const root = createRoot(container6f);
+    container6f._root = root;
+    await act(async () => {
+      root.render(<WorkflowPage activeProfile="executive_growth" demoMode={false} activeWorkspace="ws-test" {...props} />);
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+  }
+
+  async function expandStep(n) {
+    const btn = Array.from(container6f.querySelectorAll("button")).find(
+      (b) => b.textContent.match(new RegExp(`^${n}`))
+    );
+    if (btn) await act(async () => { btn.click(); await Promise.resolve(); });
+  }
+
+  it("shows neutral no-run state when no run summaries for today", async () => {
+    apiMock.discoveryRunSummaries.mockResolvedValue({ items: [] });
+    await render6f();
+    expect(container6f.textContent).toContain("No discovery runs completed today");
+  });
+
+  it("shows DiscoveryRunCompletionCard completed state for today's run", async () => {
+    const today = new Date().toISOString();
+    apiMock.discoveryRunSummaries.mockResolvedValue({
+      items: [{
+        _id: "rs-1",
+        run_id: "run-001",
+        workspace_slug: "ws-test",
+        agent_name: "content_discovery",
+        completion_state: "completed",
+        completed_at: today,
+        sources_checked: 3,
+        insights_generated: 5,
+        high_confidence_insights: 2,
+        platforms_checked: ["LinkedIn", "YouTube"],
+        summary: "Checked 3 configured sources across LinkedIn, YouTube.",
+        next_recommended_action: "Review discovery insights and approve content directions.",
+      }],
+    });
+    await render6f();
+    expect(container6f.textContent).toContain("Completed Today");
+    expect(container6f.textContent).toContain("content_discovery");
+    expect(container6f.textContent).toContain("5");
+    expect(container6f.textContent).toContain("Review discovery insights");
+  });
+
+  it("shows partial state with guidance", async () => {
+    const today = new Date().toISOString();
+    apiMock.discoveryRunSummaries.mockResolvedValue({
+      items: [{
+        _id: "rs-2", run_id: "run-002", workspace_slug: "ws-test",
+        completion_state: "partial", completed_at: today,
+        sources_checked: 1, insights_generated: 0, high_confidence_insights: 0,
+        summary: "Discovery ran but found no new insights to generate.",
+        next_recommended_action: "Add more client sources or rerun discovery later.",
+      }],
+    });
+    await render6f();
+    expect(container6f.textContent).toContain("Partial");
+    expect(container6f.textContent).toContain("Add more client sources");
+  });
+
+  it("shows SourceReadinessCard with missing state when no sources", async () => {
+    apiMock.clientSources.mockResolvedValue({ items: [] });
+    await render6f();
+    expect(container6f.textContent).toContain("Missing");
+    expect(container6f.textContent).toContain("Go to Admin Onboarding to connect sources");
+  });
+
+  it("shows SourceReadinessCard partial state with 1-2 active sources", async () => {
+    apiMock.clientSources.mockResolvedValue({
+      items: [{ _id: "s1", source_type: "website", status: "active", label: "My Website", workspace_slug: "ws-test" }],
+    });
+    await render6f();
+    expect(container6f.textContent).toContain("Partial");
+    expect(container6f.textContent).toContain("website");
+  });
+
+  it("shows SourceReadinessCard ready state with 3+ active sources", async () => {
+    apiMock.clientSources.mockResolvedValue({
+      items: [
+        { _id: "s1", source_type: "website", status: "active", label: "A", workspace_slug: "ws-test" },
+        { _id: "s2", source_type: "linkedin", status: "active", label: "B", workspace_slug: "ws-test" },
+        { _id: "s3", source_type: "youtube", status: "active", label: "C", workspace_slug: "ws-test" },
+      ],
+    });
+    await render6f();
+    expect(container6f.textContent).toContain("Ready");
+    expect(container6f.textContent).toContain("Ready for discovery scanning");
+  });
+
+  it("renders platform distribution chips in Step 5", async () => {
+    await render6f();
+    const step5Btn = Array.from(container6f.querySelectorAll("button")).find(
+      (b) => b.textContent.includes("Queue for Distribution") || b.textContent.includes("Ready to Send")
+    );
+    if (step5Btn) await act(async () => { step5Btn.click(); await Promise.resolve(); await Promise.resolve(); });
+    expect(container6f.textContent).toContain("Platform Distribution");
+  });
+
+  it("shows execution timeline when insights exist", async () => {
+    apiMock.discoveryInsights.mockResolvedValue({
+      items: [{
+        _id: "i1", title: "Test Insight", module: "contractor_growth",
+        workspace_slug: "ws-test", confidence_score: 0.9,
+        status: "pending_review", evidence: [], recommendation: {},
+        source_agent: "discovery_engine",
+      }],
+    });
+    const today = new Date().toISOString();
+    apiMock.discoveryRunSummaries.mockResolvedValue({
+      items: [{
+        _id: "rs-3", run_id: "run-003", workspace_slug: "ws-test",
+        completion_state: "completed", completed_at: today,
+        sources_checked: 2, insights_generated: 1, high_confidence_insights: 1,
+        platforms_checked: ["LinkedIn"],
+        configured_sources_used: ["My Website"],
+      }],
+    });
+    await render6f();
+    await render6f();
+    expect(container6f.textContent).toContain("Sources Loaded");
+    expect(container6f.textContent).toContain("Insights Generated");
   });
 });
