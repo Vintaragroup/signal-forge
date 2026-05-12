@@ -698,6 +698,18 @@ export const api = {
       method: "PATCH",
       body: JSON.stringify({ source_discovery_insight_id: insightId }),
     }),
+
+  // Phase 6D: discovery engine
+  triggerDiscoveryInsights: (payload) =>
+    request("/discovery-insights/generate", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+
+  generateAssetsFromInsight: (insightId) =>
+    request(`/discovery-insights/${encodeURIComponent(insightId)}/generate-assets`, {
+      method: "POST",
+    }),
 };
 
 export { API_BASE_URL };

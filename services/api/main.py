@@ -106,6 +106,7 @@ class AgentTaskCreateRequest(BaseModel):
     priority: Literal["low", "normal", "high"] = "normal"
     input_config: dict[str, Any] = Field(default_factory=dict)
     workspace_slug: str = ""
+    card_id: str = ""  # Phase 6D: run card identifier for discovery routing
 
 
 class ApprovalDecisionRequest(BaseModel):
@@ -2151,6 +2152,7 @@ def create_agent_task(payload: AgentTaskCreateRequest) -> dict:
         "outbound_actions_taken": 0,
         "simulation_only": True,
         **({"workspace_slug": payload.workspace_slug} if payload.workspace_slug else {}),
+        **({"card_id": payload.card_id} if payload.card_id else {}),
     }
     client = get_client()
     try:
@@ -2220,6 +2222,25 @@ def run_agent_task(task_id: str) -> dict:
             }
             db.agent_tasks.update_one({"_id": task["_id"]}, {"$set": update})
             updated = db.agent_tasks.find_one({"_id": task["_id"]})
+
+            # Phase 6D: auto-generate discovery insights for content_discovery runs
+            _card_id = clean_text(task.get("card_id") or (task.get("input_config") or {}).get("card_id") or "")
+            _ws = clean_text(task.get("workspace_slug") or "")
+            if _card_id == "content_discovery" and _ws:
+                try:
+                    from discovery_engine import generate_discovery_insights as _gen_insights
+                    _module = clean_text(task.get("module") or "")
+                    _run_id = result.get("run_id") or str(task["_id"])
+                    _gen_insights(
+                        db=db,
+                        workspace_slug=_ws,
+                        client_profile_slug=None,
+                        module=_module,
+                        source_run_id=_run_id,
+                    )
+                except Exception:
+                    pass  # Non-fatal: insight generation failure must not fail the task
+
             return serialize(
                 {
                     "item": updated,
@@ -8696,5 +8717,91 @@ def link_workflow_asset_to_insight(asset_id: str, payload: dict) -> dict:
         )
         updated = db.workflow_assets.find_one({"_id": oid})
         return {"item": serialize([normalize_workflow_asset(updated)])[0], "message": "Asset lineage updated."}
+    finally:
+        client.close()
+
+
+# ── Phase 6D: Discovery Engine Endpoints ──────────────────────────────────────
+
+class DiscoveryGenerateRequest(BaseModel):
+    workspace_slug: str
+    module: str
+    client_profile_slug: str | None = None
+    source_run_id: str | None = None
+    max_insights: int = 4
+
+
+@app.post("/discovery-insights/generate")
+def trigger_discovery_insight_generation(payload: DiscoveryGenerateRequest) -> dict:
+    """Manually trigger discovery insight generation for a workspace/module.
+
+    Internally calls the discovery_engine pipeline and persists results.
+    Returns the batch of created insights.
+    """
+    ws = clean_text(payload.workspace_slug)
+    if not ws:
+        raise HTTPException(status_code=400, detail="workspace_slug is required.")
+    module = clean_text(payload.module)
+    if not module:
+        raise HTTPException(status_code=400, detail="module is required.")
+
+    from discovery_engine import generate_discovery_insights as _gen_insights
+
+    client = get_client()
+    try:
+        db = get_database(client)
+        created = _gen_insights(
+            db=db,
+            workspace_slug=ws,
+            client_profile_slug=payload.client_profile_slug,
+            module=module,
+            source_run_id=payload.source_run_id,
+            max_insights=max(1, min(int(payload.max_insights), 10)),
+        )
+        return {
+            "items": serialize(created),
+            "count": len(created),
+            "message": f"{len(created)} discovery insight(s) generated.",
+        }
+    finally:
+        client.close()
+
+
+@app.post("/discovery-insights/{insight_id}/generate-assets")
+def generate_assets_from_insight(insight_id: str) -> dict:
+    """Create placeholder workflow_assets linked to a discovery insight.
+
+    Reads the insight's recommendation to determine asset types (up to 3),
+    creates one workflow_asset per type with approval_state='needs_review',
+    and links each asset back to the insight via source_discovery_insight_id.
+    No content is published — all assets require human review.
+    """
+    from discovery_engine import asset_docs_from_insight as _asset_docs
+
+    client = get_client()
+    now = utc_now()
+    try:
+        db = get_database(client)
+        insight = _get_discovery_insight_or_404(db, insight_id)
+        docs = _asset_docs(insight, now=now)
+        created_assets: list[dict] = []
+        for doc in docs:
+            result = db.workflow_assets.insert_one(doc)
+            inserted = db.workflow_assets.find_one({"_id": result.inserted_id})
+            if inserted:
+                created_assets.append(normalize_workflow_asset(inserted))
+        # Link created asset IDs back onto the insight
+        asset_ids = [str(a["_id"]) for a in created_assets]
+        if asset_ids:
+            db.discovery_insights.update_one(
+                {"_id": insight["_id"]},
+                {"$addToSet": {"linked_workflow_asset_ids": {"$each": asset_ids}}, "$set": {"updated_at": now}},
+            )
+        return {
+            "items": serialize(created_assets),
+            "count": len(created_assets),
+            "insight_id": insight_id,
+            "message": f"{len(created_assets)} workflow asset(s) created from insight.",
+        }
     finally:
         client.close()

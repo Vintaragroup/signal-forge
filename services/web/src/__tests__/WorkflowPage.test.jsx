@@ -13,6 +13,8 @@ const { apiMock } = vi.hoisted(() => ({
     discoveryInsights: vi.fn(),
     getWorkspace: vi.fn(),
     clientProfileWorkflowDefinition: vi.fn(),
+    generateAssetsFromInsight: vi.fn(),
+    triggerDiscoveryInsights: vi.fn(),
   },
 }));
 
@@ -345,5 +347,185 @@ describe("WorkflowPage Phase 6C discovery insights", () => {
     apiMock.discoveryInsights.mockReturnValue(undefined);
     // Should not crash — renders without error
     await expect(renderAndOpenStep2()).resolves.not.toThrow();
+  });
+});
+
+describe("WorkflowPage Phase 6D discovery engine", () => {
+  async function renderAndOpenStep2(props = {}) {
+    await renderPage({ activeWorkspace: "ws-6d", ...props });
+    await act(async () => {
+      const step2Btn = Array.from(container.querySelectorAll("button")).find(
+        (b) => b.textContent.includes("Discover Opportunities")
+      );
+      if (step2Btn) step2Btn.click();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+  }
+
+  async function renderAndOpenStep3(props = {}) {
+    await renderPage({ activeWorkspace: "ws-6d", ...props });
+    await act(async () => {
+      // Step 3 label varies by template — match on "Agent Activity" OR "Review Agent Work"
+      const step3Btn = Array.from(container.querySelectorAll("button")).find(
+        (b) => b.textContent.includes("Agent Activity") || b.textContent.includes("Review Agent Work")
+      );
+      if (step3Btn) step3Btn.click();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+  }
+
+  beforeEach(() => {
+    globalThis.IS_REACT_ACT_ENVIRONMENT = true;
+    vi.clearAllMocks();
+    container = document.createElement("div");
+    document.body.appendChild(container);
+    root = createRoot(container);
+
+    apiMock.agentTasks.mockResolvedValue({ items: [] });
+    apiMock.approvalRequests.mockResolvedValue({ items: [] });
+    apiMock.deals.mockResolvedValue({ items: [] });
+    apiMock.messages.mockResolvedValue({ items: [] });
+    apiMock.workflowAssets.mockResolvedValue({ items: [] });
+    apiMock.agentRuns.mockResolvedValue({ items: [] });
+    apiMock.getWorkspace.mockRejectedValue(new Error("no workspace"));
+    apiMock.clientProfileWorkflowDefinition.mockRejectedValue(new Error("no def"));
+  });
+
+  afterEach(async () => {
+    if (root) {
+      await act(async () => { root.unmount(); });
+    }
+    container?.remove();
+    container = null;
+    root = null;
+    globalThis.IS_REACT_ACT_ENVIRONMENT = false;
+  });
+
+  it("shows discovery summary header with insight count and high confidence", async () => {
+    apiMock.discoveryInsights.mockResolvedValue({
+      items: [
+        {
+          _id: "ins-1",
+          title: "Burnout content insight",
+          insight_type: "content_opportunity",
+          confidence_score: 0.92,
+          quality_tags: ["High Confidence", "Fresh Signal"],
+          summary: "Summary text",
+          evidence: [],
+          recommendation: { recommended_platforms: ["LinkedIn", "TikTok"], recommended_asset_types: ["script_draft"] },
+          status: "pending_review",
+          source_agent: "discovery_engine",
+          source_run_id: null,
+          created_at: new Date().toISOString(),
+        },
+        {
+          _id: "ins-2",
+          title: "Low confidence insight",
+          insight_type: "content_format",
+          confidence_score: 0.55,
+          quality_tags: ["Fresh Signal"],
+          summary: "Another summary",
+          evidence: [],
+          recommendation: { recommended_platforms: ["Instagram"], recommended_asset_types: ["carousel_outline"] },
+          status: "pending_review",
+          source_agent: "discovery_engine",
+          source_run_id: null,
+          created_at: new Date().toISOString(),
+        },
+      ],
+    });
+
+    await renderAndOpenStep2();
+
+    // Summary header should show "2 insights today" and "1 high confidence"
+    const text = container.textContent;
+    expect(text).toContain("insights today");
+    expect(text).toContain("high confidence");
+  });
+
+  it("shows quality tags on insight card", async () => {
+    apiMock.discoveryInsights.mockResolvedValue({
+      items: [
+        {
+          _id: "ins-qt",
+          title: "Quality Tag Insight",
+          insight_type: "content_opportunity",
+          confidence_score: 0.88,
+          quality_tags: ["High Confidence", "Multi-Platform Signal", "Fresh Signal"],
+          summary: "Quality tag test summary",
+          evidence: [],
+          recommendation: { recommended_platforms: ["LinkedIn"], recommended_asset_types: ["script_draft"] },
+          status: "pending_review",
+          source_agent: "discovery_engine",
+          source_run_id: null,
+          created_at: new Date().toISOString(),
+        },
+      ],
+    });
+
+    await renderAndOpenStep2();
+
+    const text = container.textContent;
+    expect(text).toContain("High Confidence");
+    expect(text).toContain("Multi-Platform Signal");
+  });
+
+  it("Generate Assets button appears on approved insight", async () => {
+    apiMock.discoveryInsights.mockResolvedValue({
+      items: [
+        {
+          _id: "ins-approved",
+          title: "Approved Insight",
+          insight_type: "content_opportunity",
+          confidence_score: 0.85,
+          quality_tags: ["High Confidence"],
+          summary: "Approved insight summary",
+          evidence: [],
+          recommendation: {
+            recommended_platforms: ["LinkedIn"],
+            recommended_asset_types: ["script_draft", "linkedin_post"],
+          },
+          status: "approved",
+          source_agent: "discovery_engine",
+          source_run_id: null,
+          created_at: new Date().toISOString(),
+        },
+      ],
+    });
+
+    await renderAndOpenStep2();
+
+    const buttons = Array.from(container.querySelectorAll("button"));
+    const generateBtn = buttons.find((b) => b.textContent.includes("Generate Assets"));
+    expect(generateBtn).toBeTruthy();
+  });
+
+  it("Step 3 shows discovery timeline when insights exist", async () => {
+    apiMock.discoveryInsights.mockResolvedValue({
+      items: [
+        {
+          _id: "ins-timeline",
+          title: "Timeline Insight Entry",
+          insight_type: "content_opportunity",
+          confidence_score: 0.80,
+          quality_tags: ["Fresh Signal"],
+          summary: "Timeline test summary",
+          evidence: [],
+          recommendation: { recommended_platforms: ["LinkedIn"], recommended_asset_types: ["script_draft"] },
+          status: "approved",
+          source_agent: "discovery_engine",
+          source_run_id: "run-timeline-abc",
+          created_at: new Date().toISOString(),
+        },
+      ],
+    });
+
+    await renderAndOpenStep3();
+
+    const text = container.textContent;
+    expect(text).toContain("Discovery Timeline");
+    expect(text).toContain("Timeline Insight Entry");
   });
 });
