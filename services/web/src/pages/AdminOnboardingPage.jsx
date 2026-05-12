@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Plus, X, ChevronDown, ChevronUp, Link, Trash2 } from "lucide-react";
+import { Plus, X, ChevronDown, ChevronUp, Link, Trash2, Eye, EyeOff } from "lucide-react";
 import { api } from "../api.js";
 import { SYSTEM_PROFILES } from "../navigation/systemProfiles.js";
 
@@ -20,6 +20,25 @@ const STATUS_COLORS = {
   paused: "bg-amber-100 text-amber-700",
   archived: "bg-slate-100 text-slate-500",
 };
+
+const AGENT_KEY_OPTIONS = [
+  { value: "", label: "— none —" },
+  { value: "outreach", label: "outreach" },
+  { value: "followup", label: "followup" },
+  { value: "content", label: "content" },
+  { value: "fan_engagement", label: "fan_engagement" },
+];
+
+const RUN_CARD_TYPE_OPTIONS = [
+  { value: "", label: "— none —" },
+  { value: "discovery_scan", label: "discovery_scan" },
+  { value: "content_creation", label: "content_creation" },
+  { value: "media_prep", label: "media_prep" },
+  { value: "review_approval", label: "review_approval" },
+  { value: "distribution", label: "distribution" },
+  { value: "engagement", label: "engagement" },
+  { value: "monetization", label: "monetization" },
+];
 
 function slugifyLocal(value) {
   return value
@@ -50,6 +69,7 @@ function WorkflowDefinitionSubForm({ onCreated, onCancel }) {
   );
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [showPreview, setShowPreview] = useState(false);
 
   function updateStage(index, field, value) {
     setStages((prev) => {
@@ -159,35 +179,98 @@ function WorkflowDefinitionSubForm({ onCreated, onCancel }) {
       </div>
 
       <div>
-        <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">Stages (1–7)</div>
-        <div className="space-y-1.5">
-          {stages.map((stage, i) => (
-            <div key={stage.stage_number} className="grid grid-cols-[2rem_1fr_1fr_1fr] gap-2 items-center">
-              <span className="text-xs font-bold text-slate-500 text-center">{stage.stage_number}</span>
-              <input
-                type="text"
-                value={stage.label}
-                onChange={(e) => updateStage(i, "label", e.target.value)}
-                placeholder="Stage label"
-                className="rounded border border-slate-200 bg-white px-2 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-indigo-300"
-              />
-              <input
-                type="text"
-                value={stage.agent_key}
-                onChange={(e) => updateStage(i, "agent_key", e.target.value)}
-                placeholder="agent_key"
-                className="rounded border border-slate-200 bg-white px-2 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-indigo-300"
-              />
-              <input
-                type="text"
-                value={stage.run_card_type}
-                onChange={(e) => updateStage(i, "run_card_type", e.target.value)}
-                placeholder="run_card_type"
-                className="rounded border border-slate-200 bg-white px-2 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-indigo-300"
-              />
-            </div>
-          ))}
+        <div className="mb-2 flex items-center justify-between">
+          <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Stages (1–7)</div>
+          <button
+            type="button"
+            onClick={() => setShowPreview((v) => !v)}
+            className="flex items-center gap-1 rounded border border-slate-200 bg-white px-2 py-1 text-[10px] font-medium text-slate-600 hover:bg-slate-50"
+          >
+            {showPreview ? <EyeOff className="h-3 w-3" /> : <Eye className="h-3 w-3" />}
+            {showPreview ? "Hide Preview" : "Preview Workflow"}
+          </button>
         </div>
+        {showPreview ? (
+          <div className="rounded border border-slate-200 bg-white p-3 space-y-1.5">
+            {stages.map((stage) => (
+              <div key={stage.stage_number} className="flex items-start gap-2 text-xs text-slate-700">
+                <span className="w-5 font-bold text-slate-400 text-center shrink-0">{stage.stage_number}</span>
+                <div className="flex-1">
+                  <span className="font-medium">{stage.label || <em className="text-slate-400">No label</em>}</span>
+                  {stage.chips?.filter(Boolean).length > 0 && (
+                    <span className="ml-1.5 text-slate-400">· {stage.chips.filter(Boolean).join(", ")}</span>
+                  )}
+                  {stage.notes && <p className="mt-0.5 text-[10px] italic text-slate-400">{stage.notes}</p>}
+                </div>
+                <span className={`rounded-full px-1.5 py-0.5 text-[9px] font-semibold ${stage.required ? "bg-blue-50 text-blue-600" : "bg-slate-100 text-slate-500"}`}>
+                  {stage.required ? "Required" : "Optional"}
+                </span>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div className="space-y-3">
+            {stages.map((stage, i) => (
+              <div key={stage.stage_number} className="rounded border border-slate-200 bg-white p-3 space-y-2">
+                <div className="flex items-center gap-2">
+                  <span className="w-5 text-xs font-bold text-slate-400 text-center shrink-0">{stage.stage_number}</span>
+                  <input
+                    type="text"
+                    value={stage.label}
+                    onChange={(e) => updateStage(i, "label", e.target.value)}
+                    placeholder="Stage label"
+                    className="flex-1 rounded border border-slate-200 bg-slate-50 px-2 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-indigo-300"
+                  />
+                  <label className="flex items-center gap-1.5 cursor-pointer select-none ml-2 shrink-0">
+                    <input
+                      type="checkbox"
+                      checked={!!stage.required}
+                      onChange={(e) => updateStage(i, "required", e.target.checked)}
+                      className="h-3 w-3 accent-indigo-600"
+                    />
+                    <span className="text-[10px] font-medium text-slate-600">Required</span>
+                  </label>
+                </div>
+                <div className="grid grid-cols-2 gap-2 pl-7">
+                  <div>
+                    <label className="mb-0.5 block text-[10px] font-medium text-slate-500">Agent</label>
+                    <select
+                      value={stage.agent_key}
+                      onChange={(e) => updateStage(i, "agent_key", e.target.value)}
+                      className="w-full rounded border border-slate-200 bg-slate-50 px-2 py-1 text-[11px] focus:outline-none focus:ring-1 focus:ring-indigo-300"
+                    >
+                      {AGENT_KEY_OPTIONS.map((o) => (
+                        <option key={o.value} value={o.value}>{o.label}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="mb-0.5 block text-[10px] font-medium text-slate-500">Run Card Type</label>
+                    <select
+                      value={stage.run_card_type}
+                      onChange={(e) => updateStage(i, "run_card_type", e.target.value)}
+                      className="w-full rounded border border-slate-200 bg-slate-50 px-2 py-1 text-[11px] focus:outline-none focus:ring-1 focus:ring-indigo-300"
+                    >
+                      {RUN_CARD_TYPE_OPTIONS.map((o) => (
+                        <option key={o.value} value={o.value}>{o.label}</option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+                <div className="pl-7">
+                  <label className="mb-0.5 block text-[10px] font-medium text-slate-500">Stage Note</label>
+                  <textarea
+                    value={stage.notes}
+                    onChange={(e) => updateStage(i, "notes", e.target.value)}
+                    rows={2}
+                    placeholder="Operator guidance or stage-specific notes…"
+                    className="w-full rounded border border-slate-200 bg-slate-50 px-2 py-1 text-[11px] focus:outline-none focus:ring-1 focus:ring-indigo-300"
+                  />
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
 
       {error && <p className="text-xs text-red-600">{error}</p>}

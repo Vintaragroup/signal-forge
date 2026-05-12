@@ -8401,14 +8401,56 @@ def admin_get_client_profile_workflow_definition(slug: str) -> dict:
 
 _VALID_STAGE_NUMBERS = set(range(1, 8))  # 1–7 inclusive
 
+# Keep legacy alias for any internal references
+_validate_stages = None  # replaced by _validate_workflow_definition_stages below
 
-def _validate_stages(stages: list[WorkflowStageDefinition]) -> None:
+
+def _validate_workflow_definition_stages(stages: list[WorkflowStageDefinition]) -> None:
+    """
+    Phase 6G: Enhanced stage validation.
+    Rules:
+      - stage_number must be 1–7
+      - no duplicate stage_numbers
+      - at least one required stage
+      - labels cannot be blank
+      - max chips length = 10
+      - no null stage objects
+    """
+    if not stages:
+        return
+    seen: set[int] = set()
+    has_required = False
     for stage in stages:
+        if stage is None:
+            raise HTTPException(status_code=422, detail="Stage objects cannot be null.")
         if stage.stage_number not in _VALID_STAGE_NUMBERS:
             raise HTTPException(
                 status_code=422,
                 detail=f"stage_number {stage.stage_number} is invalid. Must be 1–7.",
             )
+        if stage.stage_number in seen:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Duplicate stage_number {stage.stage_number}. Each stage number must appear at most once.",
+            )
+        seen.add(stage.stage_number)
+        if not stage.label or not stage.label.strip():
+            raise HTTPException(
+                status_code=422,
+                detail=f"Stage {stage.stage_number} has a blank label. All stages must have a non-empty label.",
+            )
+        if len(stage.chips) > 10:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Stage {stage.stage_number} has {len(stage.chips)} chips. Maximum is 10.",
+            )
+        if stage.required:
+            has_required = True
+    if stages and not has_required:
+        raise HTTPException(
+            status_code=422,
+            detail="At least one stage must be marked as required.",
+        )
 
 
 @app.post("/admin/workflow-definitions")
@@ -8418,7 +8460,7 @@ def admin_create_workflow_definition(payload: AdminWorkflowDefinitionCreateReque
         raise HTTPException(status_code=400, detail="Workflow definition slug is required.")
     if not payload.display_name.strip():
         raise HTTPException(status_code=400, detail="Workflow definition display_name is required.")
-    _validate_stages(payload.stages)
+    _validate_workflow_definition_stages(payload.stages)
     client = get_client()
     now = utc_now()
     try:
@@ -8485,7 +8527,7 @@ def admin_update_workflow_definition(slug: str, payload: AdminWorkflowDefinition
             if value is not None:
                 updates[field] = value.strip() if isinstance(value, str) else value
         if payload.stages is not None:
-            _validate_stages(payload.stages)
+            _validate_workflow_definition_stages(payload.stages)
             updates["stages"] = [s.model_dump() for s in payload.stages]
         db.workflow_definitions.update_one({"slug": slug}, {"$set": updates})
         updated = db.workflow_definitions.find_one({"slug": slug})

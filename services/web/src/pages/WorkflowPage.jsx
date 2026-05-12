@@ -34,6 +34,8 @@ import {
 import { api } from "../api.js";
 import { PROFILE_MAP } from "../navigation/systemProfiles.js";
 import { WORKFLOW_TEMPLATES, DEFAULT_TEMPLATE } from "../navigation/workflowTemplates.js";
+import { normalizeWorkflowDefinition } from "../utils/workflowDefinitionNormalizer.js";
+import { getWorkflowOverrideCount } from "../utils/workflowTemplateDiff.js";
 import DemoPageBanner from "../components/DemoPageBanner.jsx";
 import LiveAgentRunPanel from "../components/LiveAgentRunPanel.jsx";
 import StatusBadge from "../components/StatusBadge.jsx";
@@ -79,15 +81,18 @@ function recordTitle(item) {
 /**
  * StepSection — renders expanded (full content) or collapsed (compact header row).
  *
- * New props:
- *   expanded    boolean — whether this step is currently open
- *   onExpand    () => void — called when the header is clicked while collapsed
+ * New props (Phase 6G):
+ *   stageNote   string  — operator note below subtitle (muted)
+ *   required    boolean — if false, shows Optional badge
+ *   agentKey    string  — primary agent display
+ *   runCardType string  — run card type display
  *
  * Existing props (all preserved):
- *   step, title, subtitle, active, count, children
+ *   step, title, subtitle, active, count, children, expanded, onExpand, stageStatus
  */
-function StepSection({ step, title, subtitle, active, count, children, expanded, onExpand, stageStatus }) {
+function StepSection({ step, title, subtitle, active, count, children, expanded, onExpand, stageStatus, stageNote, required, agentKey, runCardType }) {
   if (expanded) {
+    const hasMetadata = stageNote || agentKey || runCardType || required === false;
     // Full panel — same markup as before
     return (
       <section className={["rounded-lg border bg-white p-5 shadow-sm transition", active ? "border-blue-300 ring-2 ring-blue-100" : "border-slate-200"].join(" ")}>
@@ -96,6 +101,31 @@ function StepSection({ step, title, subtitle, active, count, children, expanded,
             <div className="text-xs font-semibold uppercase text-slate-400">Step {step}</div>
             <h2 className="mt-1 text-xl font-semibold text-slate-950">{title}</h2>
             {subtitle ? <p className="mt-2 text-sm leading-6 text-slate-600">{subtitle}</p> : null}
+            {stageNote ? <p className="mt-1 text-xs text-slate-400 italic">{stageNote}</p> : null}
+            {hasMetadata && (
+              <div className="mt-1.5 flex flex-wrap items-center gap-2">
+                {(agentKey || runCardType) && (
+                  <span className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${
+                    required !== false ? "bg-blue-50 text-blue-600" : "bg-slate-100 text-slate-500"
+                  }`}>
+                    {required !== false ? "Required" : "Optional"}
+                  </span>
+                )}
+                {required === false && !agentKey && !runCardType && (
+                  <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-medium text-slate-500">Optional</span>
+                )}
+                {agentKey && (
+                  <span className="text-[10px] text-slate-400">
+                    Primary Agent: <span className="font-medium text-slate-600">{agentKey}</span>
+                  </span>
+                )}
+                {runCardType && (
+                  <span className="text-[10px] text-slate-400">
+                    Run Type: <span className="font-medium text-slate-600">{runCardType}</span>
+                  </span>
+                )}
+              </div>
+            )}
           </div>
           <div className="flex flex-wrap items-center gap-2">
             {active ? <StatusBadge value="next action" /> : null}
@@ -129,54 +159,9 @@ function StepSection({ step, title, subtitle, active, count, children, expanded,
   );
 }
 
-/**
- * Converts a persisted admin workflow definition into the same shape as WORKFLOW_TEMPLATES
- * entries so WorkflowPage renders from DB data without changing agent execution logic.
- * DB stage labels/subtitles merge over the base template; runCards/agentFit are preserved.
- */
-function normalizeWorkflowDefinition(definition, activeProfile) {
-  const baseTemplate =
-    WORKFLOW_TEMPLATES[definition.system_profile_id] ??
-    WORKFLOW_TEMPLATES[activeProfile] ??
-    DEFAULT_TEMPLATE;
-
-  const mergedSteps = { ...baseTemplate.steps };
-  const dbStageNums = new Set();
-  for (const stage of definition.stages || []) {
-    const n = stage.stage_number;
-    if (n >= 1 && n <= 7) {
-      dbStageNums.add(n);
-      mergedSteps[n] = {
-        ...mergedSteps[n],
-        label: stage.label || mergedSteps[n]?.label || `Stage ${n}`,
-        subtitle: stage.notes || mergedSteps[n]?.subtitle || "",
-        required: stage.required !== false,
-      };
-    }
-  }
-  // Step 3: rename to "Active Agent Processing" when DB-driven, unless explicitly labeled
-  const step3HasCustomLabel = dbStageNums.has(3) && (definition.stages || []).find((s) => s.stage_number === 3)?.label;
-  if (!step3HasCustomLabel) {
-    mergedSteps[3] = {
-      ...mergedSteps[3],
-      label: "Active Agent Processing",
-      subtitle: mergedSteps[3]?.subtitle || "Monitor the active agent run and review outputs as they appear.",
-    };
-  }
-
-  const step1Stage = (definition.stages || []).find((s) => s.stage_number === 1);
-  const step1Guidance = step1Stage?.notes || definition.notes || baseTemplate.step1Guidance;
-
-  return {
-    ...baseTemplate,
-    step1Guidance,
-    steps: mergedSteps,
-    _fromDB: true,
-    _dbSlug: definition.slug,
-    _dbDisplayName: definition.display_name,
-    _dbStageNums: dbStageNums,
-  };
-}
+// Phase 6G: normalizeWorkflowDefinition and getWorkflowOverrideCount are now
+// imported from ../utils/workflowDefinitionNormalizer.js and ../utils/workflowTemplateDiff.js
+// The inline implementation has been removed.
 
 const STAGE_STATUS_CONFIG = {
   running:      { label: "Running",       className: "bg-amber-100 text-amber-800 animate-pulse" },
@@ -231,10 +216,82 @@ function Chip({ label, count }) {
   );
 }
 
+// ── Phase 6G: ClientWorkflowHeader ───────────────────────────────────────────
+
+function ClientWorkflowHeader({ activeProfile, resolvedWorkflow, overrideCount }) {
+  const profile = PROFILE_MAP[activeProfile] ?? PROFILE_MAP["custom"];
+  const source = resolvedWorkflow._source || "profile_template";
+  const sourceLabel =
+    source === "client_definition" ? "Client Definition"
+    : source === "profile_template" ? "Profile Template"
+    : "Default Template";
+  const activeStageCount = Object.values(resolvedWorkflow.stages || {}).filter(
+    (s) => s.required !== false
+  ).length;
+  const sourceColors =
+    source === "client_definition"
+      ? "border-indigo-200 bg-indigo-50 text-indigo-700"
+      : source === "profile_template"
+      ? "border-blue-200 bg-blue-50 text-blue-700"
+      : "border-slate-200 bg-slate-50 text-slate-500";
+
+  return (
+    <div className="rounded-lg border border-slate-200 bg-white px-4 py-3 shadow-sm">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-xs">
+          <div>
+            <div className="text-[10px] font-semibold uppercase tracking-widest text-slate-400">Client</div>
+            <div className="font-semibold text-slate-800">{profile.label}</div>
+          </div>
+          {profile.module ? (
+            <>
+              <div className="hidden h-6 w-px bg-slate-200 sm:block" />
+              <div>
+                <div className="text-[10px] font-semibold uppercase tracking-widest text-slate-400">Module</div>
+                <div className="text-slate-600 capitalize">{profile.module.replace(/_/g, " ")}</div>
+              </div>
+            </>
+          ) : null}
+          {resolvedWorkflow.display_name ? (
+            <>
+              <div className="hidden h-6 w-px bg-slate-200 sm:block" />
+              <div>
+                <div className="text-[10px] font-semibold uppercase tracking-widest text-slate-400">Workflow</div>
+                <div className="font-medium text-slate-800">{resolvedWorkflow.display_name}</div>
+              </div>
+            </>
+          ) : null}
+          <div className="hidden h-6 w-px bg-slate-200 sm:block" />
+          <div>
+            <div className="text-[10px] font-semibold uppercase tracking-widest text-slate-400">Active Stages</div>
+            <div className="font-semibold text-slate-800">{activeStageCount}</div>
+          </div>
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <span className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[10px] font-semibold ${sourceColors}`}>
+            <span className="h-1.5 w-1.5 rounded-full bg-current opacity-60" />
+            {sourceLabel}
+          </span>
+          {resolvedWorkflow._dbSlug ? (
+            <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-mono text-slate-500">
+              {resolvedWorkflow._dbSlug}
+            </span>
+          ) : null}
+          {overrideCount > 0 ? (
+            <span className="rounded-full border border-amber-200 bg-amber-100 px-2 py-0.5 text-[10px] font-semibold text-amber-700">
+              {overrideCount} customized stage{overrideCount !== 1 ? "s" : ""}
+            </span>
+          ) : null}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function CommandContextCard({ activeProfile, activeWorkspace, demoMode, nextStep, reviewNeeded, readyToSend, responses, openDeals, template }) {
   const profile = PROFILE_MAP[activeProfile] ?? PROFILE_MAP["custom"];
   const tpl = template ?? WORKFLOW_TEMPLATES[activeProfile] ?? DEFAULT_TEMPLATE;
-  const nextLabel = tpl.steps[nextStep]?.label ?? `Step ${nextStep}`;
+  const nextLabel = tpl.stages?.[nextStep]?.label ?? tpl.steps?.[nextStep]?.label ?? `Step ${nextStep}`;
   const chips = tpl.chips;
   return (
     <div className="rounded-lg border border-slate-200 bg-white px-5 py-4 shadow-sm">
@@ -788,8 +845,14 @@ export default function WorkflowPage({ activeProfile = "custom", demoMode = fals
   const [notes, setNotes] = useState({});
   // Phase 6A: persisted workflow definition for the active workspace
   const [clientWorkflowDef, setClientWorkflowDef] = useState(null);
-  // Phase 6B: resolved template — DB-normalized or static fallback
-  const [resolvedTemplate, setResolvedTemplate] = useState(() => WORKFLOW_TEMPLATES[activeProfile] ?? DEFAULT_TEMPLATE);
+  // Phase 6B/6G: resolved workflow — DB-normalized or static fallback, always uses stages shape
+  const [resolvedWorkflow, setResolvedWorkflow] = useState(() =>
+    normalizeWorkflowDefinition({
+      workflowDefinition: null,
+      fallbackTemplate: WORKFLOW_TEMPLATES[activeProfile] ?? DEFAULT_TEMPLATE,
+      defaultTemplate: DEFAULT_TEMPLATE,
+    })
+  );
   // Phase 6C: discovery insights
   const [discoveryInsights, setDiscoveryInsights] = useState([]);
   const [clientSources, setClientSources] = useState([]);
@@ -807,8 +870,8 @@ export default function WorkflowPage({ activeProfile = "custom", demoMode = fals
   const [expandedStep, setExpandedStep] = useState(1);
   const manualStepOverride = useRef(false);
 
-  // Sync resolvedTemplate with activeProfile when there is no DB definition loaded
-  const activeTemplate = resolvedTemplate; // alias kept for compatibility
+  // Sync resolvedWorkflow with activeProfile when there is no DB definition loaded
+  const activeTemplate = resolvedWorkflow; // alias kept for backward compat (runCards, chips)
 
   function selectStep(stepNumber) {
     manualStepOverride.current = true;
@@ -850,11 +913,17 @@ export default function WorkflowPage({ activeProfile = "custom", demoMode = fals
     loadWorkflow();
   }, []);
 
-  // Phase 6B: Try to resolve a persisted workflow definition for the active workspace.
+  // Phase 6B/6G: Try to resolve a persisted workflow definition for the active workspace.
   // Falls back silently — never blocks the existing workflow render.
   useEffect(() => {
     setClientWorkflowDef(null);
-    setResolvedTemplate(WORKFLOW_TEMPLATES[activeProfile] ?? DEFAULT_TEMPLATE);
+    setResolvedWorkflow(
+      normalizeWorkflowDefinition({
+        workflowDefinition: null,
+        fallbackTemplate: WORKFLOW_TEMPLATES[activeProfile] ?? DEFAULT_TEMPLATE,
+        defaultTemplate: DEFAULT_TEMPLATE,
+      })
+    );
     if (!activeWorkspace || activeWorkspace === "all") return;
     let cancelled = false;
     api.getWorkspace(activeWorkspace)
@@ -866,7 +935,16 @@ export default function WorkflowPage({ activeProfile = "custom", demoMode = fals
       .then((defData) => {
         if (!cancelled && defData?.item) {
           setClientWorkflowDef(defData.item);
-          setResolvedTemplate(normalizeWorkflowDefinition(defData.item, activeProfile));
+          setResolvedWorkflow(
+            normalizeWorkflowDefinition({
+              workflowDefinition: defData.item,
+              fallbackTemplate:
+                WORKFLOW_TEMPLATES[defData.item.system_profile_id] ??
+                WORKFLOW_TEMPLATES[activeProfile] ??
+                DEFAULT_TEMPLATE,
+              defaultTemplate: DEFAULT_TEMPLATE,
+            })
+          );
         }
       })
       .catch(() => {
@@ -904,10 +982,16 @@ export default function WorkflowPage({ activeProfile = "custom", demoMode = fals
       .catch(() => {});
   }, [activeWorkspace]);
 
-  // When profile changes without a workspace change, sync the fallback template
+  // When profile changes without a workspace change, sync the fallback workflow
   useEffect(() => {
     if (!clientWorkflowDef) {
-      setResolvedTemplate(WORKFLOW_TEMPLATES[activeProfile] ?? DEFAULT_TEMPLATE);
+      setResolvedWorkflow(
+        normalizeWorkflowDefinition({
+          workflowDefinition: null,
+          fallbackTemplate: WORKFLOW_TEMPLATES[activeProfile] ?? DEFAULT_TEMPLATE,
+          defaultTemplate: DEFAULT_TEMPLATE,
+        })
+      );
     }
   }, [activeProfile]);
 
@@ -1211,6 +1295,15 @@ export default function WorkflowPage({ activeProfile = "custom", demoMode = fals
     }) || null;
   }, [discoveryRunSummaries]);
 
+  // Phase 6G: count stages that differ from the fallback template
+  const overrideCount = useMemo(() => {
+    if (!clientWorkflowDef) return 0;
+    return getWorkflowOverrideCount({
+      workflowDefinition: clientWorkflowDef,
+      fallbackTemplate: WORKFLOW_TEMPLATES[activeProfile] ?? DEFAULT_TEMPLATE,
+    });
+  }, [clientWorkflowDef, activeProfile]);
+
   const nextStep = useMemo(() => {
     if (activeTask?.status === "running") return 3;
     if (readyToSend.length || activeDistributionWorkCount) return 5;
@@ -1239,12 +1332,12 @@ export default function WorkflowPage({ activeProfile = "custom", demoMode = fals
         readyToSend={readyToSend.length + activeDistributionWorkCount}
         responses={awaitingResponse.length + interested.length + booked.length}
         openDeals={openDeals.length}
-        template={resolvedTemplate}
+        template={resolvedWorkflow}
       />
       <WorkflowSourceIndicator
-        fromDB={!!resolvedTemplate._fromDB}
-        dbDisplayName={resolvedTemplate._dbDisplayName}
-        dbSlug={resolvedTemplate._dbSlug}
+        fromDB={!!resolvedWorkflow._fromDB}
+        dbDisplayName={resolvedWorkflow._dbDisplayName}
+        dbSlug={resolvedWorkflow._dbSlug}
       />
       <SourceReadinessCard clientSources={clientSources} />
       <DiscoveryRunCompletionCard runSummaries={discoveryRunSummaries} />
@@ -1273,7 +1366,12 @@ export default function WorkflowPage({ activeProfile = "custom", demoMode = fals
 
       {notice ? <div className="rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-800">{notice}</div> : null}
 
-      <StepSection step="1" title={activeTemplate.steps[1].label} subtitle={activeTemplate.steps[1].subtitle} active={nextStep === 1} expanded={expandedStep === 1} onExpand={() => selectStep(1)} stageStatus={stageStatuses[1]}>
+      <ClientWorkflowHeader
+        activeProfile={activeProfile}
+        resolvedWorkflow={resolvedWorkflow}
+        overrideCount={overrideCount}
+      />
+      <StepSection step="1" title={resolvedWorkflow.stages[1].label} subtitle={resolvedWorkflow.stages[1].subtitle} stageNote={resolvedWorkflow.stages[1].notes || undefined} required={resolvedWorkflow.stages[1].required} agentKey={resolvedWorkflow.stages[1].agent_key || undefined} runCardType={resolvedWorkflow.stages[1].run_card_type || undefined} active={nextStep === 1} expanded={expandedStep === 1} onExpand={() => selectStep(1)} stageStatus={stageStatuses[1]}>
         {(() => {
           const profile = PROFILE_MAP[activeProfile] ?? PROFILE_MAP["custom"];
           return (
@@ -1314,7 +1412,7 @@ export default function WorkflowPage({ activeProfile = "custom", demoMode = fals
         })()}
       </StepSection>
 
-      <StepSection step="2" title={activeTemplate.steps[2].label} subtitle={activeTemplate.steps[2].subtitle} active={nextStep === 2} count={tasks.length} expanded={expandedStep === 2} onExpand={() => selectStep(2)} stageStatus={stageStatuses[2]}>
+      <StepSection step="2" title={resolvedWorkflow.stages[2].label} subtitle={resolvedWorkflow.stages[2].subtitle} stageNote={resolvedWorkflow.stages[2].notes || undefined} required={resolvedWorkflow.stages[2].required} agentKey={resolvedWorkflow.stages[2].agent_key || undefined} runCardType={resolvedWorkflow.stages[2].run_card_type || undefined} active={nextStep === 2} count={tasks.length} expanded={expandedStep === 2} onExpand={() => selectStep(2)} stageStatus={stageStatuses[2]}>
         <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
           {activeTemplate.runCards.map((card) => {
             const Icon = ICON_MAP[card.icon] ?? Megaphone;
@@ -1441,7 +1539,7 @@ export default function WorkflowPage({ activeProfile = "custom", demoMode = fals
       </StepSection>
 
       <div ref={livePanelRef}>
-        <StepSection step="3" title={activeTemplate.steps[3].label} subtitle={activeTemplate.steps[3].subtitle} active={nextStep === 3} count={latestRun ? 1 : 0} expanded={expandedStep === 3} onExpand={() => selectStep(3)} stageStatus={stageStatuses[3]}>
+        <StepSection step="3" title={resolvedWorkflow.stages[3].label} subtitle={resolvedWorkflow.stages[3].subtitle} stageNote={resolvedWorkflow.stages[3].notes || undefined} required={resolvedWorkflow.stages[3].required} agentKey={resolvedWorkflow.stages[3].agent_key || undefined} runCardType={resolvedWorkflow.stages[3].run_card_type || undefined} active={nextStep === 3} count={latestRun ? 1 : 0} expanded={expandedStep === 3} onExpand={() => selectStep(3)} stageStatus={stageStatuses[3]}>
           {latestRun || activeTask ? (
             <LiveAgentRunPanel task={activeTask} runDetail={activeRunDetail} loading={panelLoading} onRefresh={() => refreshRunDetail(activeTask?.linked_run_id || latestRun?.run_id)} />
           ) : (
@@ -1479,7 +1577,7 @@ export default function WorkflowPage({ activeProfile = "custom", demoMode = fals
         </StepSection>
       </div>
 
-      <StepSection step="4" title={activeTemplate.steps[4].label} subtitle={activeTemplate.steps[4].subtitle} active={nextStep === 4} count={draftsNeedingReview.length + openApprovals.length} expanded={expandedStep === 4} onExpand={() => selectStep(4)} stageStatus={stageStatuses[4]}>
+      <StepSection step="4" title={resolvedWorkflow.stages[4].label} subtitle={resolvedWorkflow.stages[4].subtitle} stageNote={resolvedWorkflow.stages[4].notes || undefined} required={resolvedWorkflow.stages[4].required} agentKey={resolvedWorkflow.stages[4].agent_key || undefined} runCardType={resolvedWorkflow.stages[4].run_card_type || undefined} active={nextStep === 4} count={draftsNeedingReview.length + openApprovals.length} expanded={expandedStep === 4} onExpand={() => selectStep(4)} stageStatus={stageStatuses[4]}>
         <div className="space-y-6">
 
           {/* Run context banner */}
@@ -1712,7 +1810,7 @@ export default function WorkflowPage({ activeProfile = "custom", demoMode = fals
         </div>
       </StepSection>
 
-      <StepSection step="5" title={activeTemplate.steps[5].label} subtitle={activeTemplate.steps[5].subtitle} active={nextStep === 5} count={readyToSend.length + activeDistributionWorkCount} expanded={expandedStep === 5} onExpand={() => selectStep(5)} stageStatus={stageStatuses[5]}>
+      <StepSection step="5" title={resolvedWorkflow.stages[5].label} subtitle={resolvedWorkflow.stages[5].subtitle} stageNote={resolvedWorkflow.stages[5].notes || undefined} required={resolvedWorkflow.stages[5].required} agentKey={resolvedWorkflow.stages[5].agent_key || undefined} runCardType={resolvedWorkflow.stages[5].run_card_type || undefined} active={nextStep === 5} count={readyToSend.length + activeDistributionWorkCount} expanded={expandedStep === 5} onExpand={() => selectStep(5)} stageStatus={stageStatuses[5]}>
         <div className="space-y-6">
           {/* Phase 6F: Distribution Clarity Panel */}
           <div className="rounded-lg border border-slate-200 bg-slate-50 px-4 py-4 space-y-3">
@@ -1863,7 +1961,7 @@ export default function WorkflowPage({ activeProfile = "custom", demoMode = fals
         </div>
       </StepSection>
 
-      <StepSection step="6" title={activeTemplate.steps[6].label} subtitle={activeTemplate.steps[6].subtitle} active={nextStep === 6} count={awaitingResponse.length + interested.length + booked.length} expanded={expandedStep === 6} onExpand={() => selectStep(6)} stageStatus={stageStatuses[6]}>
+      <StepSection step="6" title={resolvedWorkflow.stages[6].label} subtitle={resolvedWorkflow.stages[6].subtitle} stageNote={resolvedWorkflow.stages[6].notes || undefined} required={resolvedWorkflow.stages[6].required} agentKey={resolvedWorkflow.stages[6].agent_key || undefined} runCardType={resolvedWorkflow.stages[6].run_card_type || undefined} active={nextStep === 6} count={awaitingResponse.length + interested.length + booked.length} expanded={expandedStep === 6} onExpand={() => selectStep(6)} stageStatus={stageStatuses[6]}>
         <div className="grid gap-4 lg:grid-cols-3">
           {[{ label: "Awaiting response", rows: awaitingResponse, icon: Clock3 }, { label: "Interested", rows: interested, icon: MessageCircle }, { label: "Call booked", rows: booked, icon: Check }].map((group) => {
             const Icon = group.icon;
@@ -1880,7 +1978,7 @@ export default function WorkflowPage({ activeProfile = "custom", demoMode = fals
         </div>
       </StepSection>
 
-      <StepSection step="7" title={activeTemplate.steps[7].label} subtitle={activeTemplate.steps[7].subtitle} active={nextStep === 7} count={openDeals.length + closedWon.length} expanded={expandedStep === 7} onExpand={() => selectStep(7)} stageStatus={stageStatuses[7]}>
+      <StepSection step="7" title={resolvedWorkflow.stages[7].label} subtitle={resolvedWorkflow.stages[7].subtitle} stageNote={resolvedWorkflow.stages[7].notes || undefined} required={resolvedWorkflow.stages[7].required} agentKey={resolvedWorkflow.stages[7].agent_key || undefined} runCardType={resolvedWorkflow.stages[7].run_card_type || undefined} active={nextStep === 7} count={openDeals.length + closedWon.length} expanded={expandedStep === 7} onExpand={() => selectStep(7)} stageStatus={stageStatuses[7]}>
         <div className="grid gap-4 xl:grid-cols-2">
           {[{ label: "Open deals", rows: openDeals }, { label: "Closed won", rows: closedWon }].map((group) => (
             <div key={group.label} className="rounded-lg border border-slate-200 bg-slate-50 p-4">
