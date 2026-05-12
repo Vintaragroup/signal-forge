@@ -143,7 +143,7 @@ export const api = {
   agentRunDetail: (id) => request(`/agent-runs/${encodeURIComponent(id)}`),
   deals: (params = {}) => (isDemoModeEnabled() ? Promise.resolve({ items: demoItems("deals") }) : request(`/deals?${new URLSearchParams({ ...wsParam(), ...params })}`)),
   reports: () => request("/reports"),
-  workspaces: () => (isDemoModeEnabled() ? Promise.resolve({ items: [] }) : request("/workspaces")),
+  workspaces: () => (isDemoModeEnabled() ? Promise.resolve({ items: demoItems("workspaces") }) : request("/workspaces")),
   createWorkspace: (payload) =>
     request("/workspaces", {
       method: "POST",

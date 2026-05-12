@@ -89,7 +89,18 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    const syncDemo = () => setDemoMode(api.demoEnabled());
+    const syncDemo = () => {
+      const enabled = api.demoEnabled();
+      setDemoMode(enabled);
+      loadWorkspaces();
+      if (enabled) {
+        setActiveWorkspace("john-maxwell-demo");
+        setAppWorkspace("john-maxwell-demo");
+      } else {
+        setActiveWorkspace("all");
+        setAppWorkspace("all");
+      }
+    };
     window.addEventListener("signalforge-demo-change", syncDemo);
     return () => window.removeEventListener("signalforge-demo-change", syncDemo);
   }, []);
@@ -105,10 +116,14 @@ export default function App() {
     if (switching === "demo") {
       await api.startDemo();
       setDemoMode(true);
+      setActiveWorkspace("john-maxwell-demo");
+      setAppWorkspace("john-maxwell-demo");
       window.location.hash = "demo";
     } else {
       await api.stopDemo();
       setDemoMode(false);
+      setActiveWorkspace("all");
+      setAppWorkspace("all");
       window.location.hash = "overview";
     }
   }

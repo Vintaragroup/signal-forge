@@ -20,6 +20,11 @@ import {
   resetDemoData,
   demoItems,
   getDemoProgress,
+  getExecutiveDemoState,
+  setExecutiveDemoPhase,
+  nextExecutiveDemoPhase,
+  prevExecutiveDemoPhase,
+  resetExecutiveDemoPhase,
   setDemoProgress,
   nextDemoStep,
   prevDemoStep,
@@ -94,6 +99,165 @@ describe("v10 seed collections", () => {
   it("has exactly 2 lead content correlation records in seed", () => {
     startDemoMode();
     expect(demoItems("lead_content_correlations").length).toBe(2);
+  });
+});
+
+describe("john maxwell executive demo seed", () => {
+  it("exposes a demo workspace for john maxwell", () => {
+    startDemoMode();
+    const items = demoItems("workspaces");
+    expect(items.some((item) => item.slug === "john-maxwell-demo")).toBe(true);
+  });
+
+  it("includes executive summary cards for the landing view", () => {
+    startDemoMode();
+    const state = getExecutiveDemoState();
+    expect(Array.isArray(state.summary_cards)).toBe(true);
+    expect(state.summary_cards).toHaveLength(5);
+    expect(state.summary_cards.map((item) => item.title)).toEqual([
+      "Content Engine",
+      "Audience Growth",
+      "Engagement Capture",
+      "Funnel Progression",
+      "Revenue Opportunity",
+    ]);
+  });
+
+  it("includes command mode presentation states and replay timeline data", () => {
+    startDemoMode();
+    const state = getExecutiveDemoState();
+    expect(state.presentation_states).toHaveLength(5);
+    expect(state.replay_timeline).toHaveLength(7);
+    expect(state.audience_journey.length).toBeGreaterThanOrEqual(8);
+    expect(state.orchestration_events.length).toBeGreaterThanOrEqual(4);
+    expect(state.wow_moments.length).toBeGreaterThanOrEqual(4);
+  });
+
+  it("includes grouped KPI categories for the executive command layer", () => {
+    startDemoMode();
+    const state = getExecutiveDemoState();
+    expect(state.kpi_categories).toHaveLength(4);
+    expect(state.kpi_categories.map((item) => item.label)).toEqual([
+      "Audience Growth",
+      "Engagement Metrics",
+      "Funnel Metrics",
+      "Revenue Metrics",
+    ]);
+  });
+
+  it("includes operational media workflow records for phase 5", () => {
+    startDemoMode();
+    const state = getExecutiveDemoState();
+    expect(state.audio_clips).toHaveLength(3);
+    expect(state.content_ideas).toHaveLength(6);
+    expect(state.generated_scripts.length).toBeGreaterThanOrEqual(6);
+    expect(state.prompt_generations.length).toBeGreaterThanOrEqual(3);
+    expect(state.asset_renders.length).toBeGreaterThanOrEqual(2);
+    expect(state.source_content.length).toBeGreaterThanOrEqual(2);
+    expect(state.transcript_segments.length).toBeGreaterThanOrEqual(4);
+    expect(state.content_snippets.length).toBeGreaterThanOrEqual(4);
+  });
+
+  it("includes a structured phase 4 runbook and export presets", () => {
+    startDemoMode();
+    const state = getExecutiveDemoState();
+    expect(state.runbook_scenes).toHaveLength(7);
+    expect(state.runbook_scenes.map((scene) => scene.title)).toEqual([
+      "Opening Statement",
+      "Content Discovery",
+      "AI Content Generation",
+      "Distribution Layer",
+      "Audience Engagement",
+      "Funnel Conversion",
+      "Executive Summary",
+    ]);
+    expect(state.screenshot_states).toHaveLength(5);
+    expect(state.export_modes.map((mode) => mode.id)).toEqual(["live", "investor", "client", "partner"]);
+    expect(state.pacing_presets.map((preset) => preset.id)).toEqual(["slow", "medium", "fast"]);
+  });
+
+  it("includes credibility guardrails and stakeholder question support", () => {
+    startDemoMode();
+    const state = getExecutiveDemoState();
+    expect(state.claim_guardrails.map((item) => item.label)).toEqual([
+      "Simulated Campaign Feed",
+      "Demo Funnel Progression",
+      "Projected Conversion Layer",
+    ]);
+    expect(state.stakeholder_qa.map((item) => item.question)).toEqual([
+      "Is this live today?",
+      "What parts are operational?",
+      "What is roadmap?",
+    ]);
+  });
+
+  it("includes growth accounts for the executive walkthrough", () => {
+    startDemoMode();
+    const items = demoItems("growth_accounts");
+    expect(items.length).toBeGreaterThanOrEqual(6);
+  });
+
+  it("includes seeded engagement and funnel events", () => {
+    startDemoMode();
+    expect(demoItems("engagement_events").length).toBeGreaterThan(0);
+    expect(demoItems("funnel_events").length).toBeGreaterThan(0);
+    expect(demoItems("audience_growth_snapshots").length).toBe(6);
+  });
+
+  it("replaces the legacy contractor demo records in the core creative studio collections", () => {
+    startDemoMode();
+    const collections = [
+      ...demoItems("contacts"),
+      ...demoItems("leads"),
+      ...demoItems("messages"),
+      ...demoItems("content_briefs"),
+      ...demoItems("content_drafts"),
+      ...demoItems("client_profiles"),
+      ...demoItems("source_content"),
+      ...demoItems("campaign_packs"),
+    ];
+    const haystack = JSON.stringify(collections);
+    expect(haystack).not.toContain("Apex Roofing");
+    expect(haystack).not.toContain("Northline HVAC");
+    expect(haystack).not.toContain("contractor_growth");
+    expect(haystack).toContain("John Maxwell");
+    expect(haystack).toContain("Leadership Momentum Pack");
+  });
+});
+
+describe("executive demo phase progression", () => {
+  it("starts on phase 1 with 6 phases available", () => {
+    startDemoMode();
+    const state = getExecutiveDemoState();
+    expect(state.active_phase).toBe(1);
+    expect(state.total_phases).toBe(6);
+    expect(state.timeline[0].status).toBe("active");
+  });
+
+  it("can advance to the next phase", () => {
+    startDemoMode();
+    nextExecutiveDemoPhase();
+    expect(getExecutiveDemoState().active_phase).toBe(2);
+  });
+
+  it("can move back a phase", () => {
+    startDemoMode();
+    setExecutiveDemoPhase(4);
+    prevExecutiveDemoPhase();
+    expect(getExecutiveDemoState().active_phase).toBe(3);
+  });
+
+  it("clamps phase selection to the supported range", () => {
+    startDemoMode();
+    setExecutiveDemoPhase(99);
+    expect(getExecutiveDemoState().active_phase).toBe(6);
+  });
+
+  it("reset returns the executive walkthrough to phase 1", () => {
+    startDemoMode();
+    setExecutiveDemoPhase(5);
+    resetExecutiveDemoPhase();
+    expect(getExecutiveDemoState().active_phase).toBe(1);
   });
 });
 

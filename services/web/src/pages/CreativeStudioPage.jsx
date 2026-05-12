@@ -12,6 +12,7 @@ import {
 } from "lucide-react";
 import { api, getAppWorkspace, API_BASE_URL } from "../api.js";
 import DemoPageBanner from "../components/DemoPageBanner.jsx";
+import ExecutiveDemoTab from "../components/ExecutiveDemoTab.jsx";
 import PocDemoTab from "../components/PocDemoTab.jsx";
 import StatusBadge from "../components/StatusBadge.jsx";
 
@@ -4504,6 +4505,7 @@ export default function CreativeStudioPage({ activeWorkspace, refreshTrigger = 0
           { id: "client-intelligence", label: `Intelligence (${clientIntelligenceRecords.length})` },
           { id: "media-ingestion", label: `Media Ingestion (${mediaFolderScans.length + approvedUrlDownloads.length})` },
           { id: "renderer-validation", label: `Renderer Validation (${rendererValidationRuns.length})` },
+          { id: "executive-demo", label: demoMode ? "Executive Demo ✦" : "Executive Demo" },
           { id: "poc-demo", label: demoMode ? "POC Demo ✦" : "POC Demo" },
         ].map(({ id, label }) => (
           <button
@@ -4997,6 +4999,13 @@ export default function CreativeStudioPage({ activeWorkspace, refreshTrigger = 0
           wsParam={wsParam}
           onRefresh={load}
           showNotice={showNotice}
+        />
+      )}
+
+      {activeSection === "executive-demo" && (
+        <ExecutiveDemoTab
+          demoMode={demoMode}
+          onNavigate={(section) => setActiveSection(section)}
         />
       )}
 
