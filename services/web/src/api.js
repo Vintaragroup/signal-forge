@@ -667,6 +667,37 @@ export const api = {
       method: "PATCH",
       body: JSON.stringify(payload),
     }),
+
+  // ── Phase 6C: Discovery Insights ─────────────────────────────────────────
+  discoveryInsights: (params = {}) =>
+    request(`/discovery-insights?${new URLSearchParams(params)}`),
+
+  getDiscoveryInsight: (id) =>
+    request(`/discovery-insights/${encodeURIComponent(id)}`),
+
+  createDiscoveryInsight: (payload) =>
+    request("/discovery-insights", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+
+  updateDiscoveryInsight: (id, payload) =>
+    request(`/discovery-insights/${encodeURIComponent(id)}`, {
+      method: "PATCH",
+      body: JSON.stringify(payload),
+    }),
+
+  updateDiscoveryInsightStatus: (id, status) =>
+    request(`/discovery-insights/${encodeURIComponent(id)}/status`, {
+      method: "PATCH",
+      body: JSON.stringify({ status }),
+    }),
+
+  linkAssetToInsight: (assetId, insightId) =>
+    request(`/workflow-assets/${encodeURIComponent(assetId)}/link-insight`, {
+      method: "PATCH",
+      body: JSON.stringify({ source_discovery_insight_id: insightId }),
+    }),
 };
 
 export { API_BASE_URL };

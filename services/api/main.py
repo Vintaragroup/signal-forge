@@ -8471,3 +8471,230 @@ def admin_update_workflow_definition(slug: str, payload: AdminWorkflowDefinition
         return {"item": serialize(updated), "message": "Workflow definition updated."}
     finally:
         client.close()
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Phase 6C — Discovery Intelligence
+# ══════════════════════════════════════════════════════════════════════════════
+
+class DiscoveryEvidence(BaseModel):
+    platform: str | None = None
+    signal_type: str | None = None
+    metric: str | None = None
+    value: float | None = None
+    keyword: str | None = None
+    growth_pct: float | None = None
+    source_url: str | None = None
+    notes: str | None = None
+
+
+class DiscoveryRecommendation(BaseModel):
+    recommended_asset_types: list[str] = []
+    recommended_platforms: list[str] = []
+    recommended_next_stage: str | None = None
+    rationale: str | None = None
+
+
+class DiscoveryInsightCreateRequest(BaseModel):
+    workspace_slug: str
+    client_profile_slug: str | None = None
+    insight_type: str
+    title: str
+    summary: str
+    confidence_score: float = 0.5
+    evidence: list[DiscoveryEvidence] = []
+    recommendation: DiscoveryRecommendation | None = None
+    source_agent: str | None = None
+    source_run_id: str | None = None
+    linked_workflow_asset_ids: list[str] = []
+    status: str = "pending_review"
+
+
+class DiscoveryInsightUpdateRequest(BaseModel):
+    insight_type: str | None = None
+    title: str | None = None
+    summary: str | None = None
+    confidence_score: float | None = None
+    evidence: list[DiscoveryEvidence] | None = None
+    recommendation: DiscoveryRecommendation | None = None
+    source_agent: str | None = None
+    source_run_id: str | None = None
+    linked_workflow_asset_ids: list[str] | None = None
+    status: str | None = None
+    approved_by: str | None = None
+
+
+class DiscoveryInsightStatusRequest(BaseModel):
+    status: Literal["pending_review", "approved", "deferred", "archived"]
+
+
+# ── Discovery Insights: helper ─────────────────────────────────────────────
+
+def _get_discovery_insight_or_404(db: Any, insight_id: str) -> dict:
+    """Fetch a discovery_insights document by ID or raise 404."""
+    try:
+        oid = ObjectId(insight_id)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid insight id format.")
+    doc = db.discovery_insights.find_one({"_id": oid})
+    if not doc:
+        raise HTTPException(status_code=404, detail="Discovery insight not found.")
+    return doc
+
+
+# ── Discovery Insights: endpoints ─────────────────────────────────────────
+
+@app.post("/discovery-insights")
+def create_discovery_insight(payload: DiscoveryInsightCreateRequest) -> dict:
+    if not payload.workspace_slug.strip():
+        raise HTTPException(status_code=400, detail="workspace_slug is required.")
+    if not payload.title.strip():
+        raise HTTPException(status_code=400, detail="title is required.")
+    if not payload.summary.strip():
+        raise HTTPException(status_code=400, detail="summary is required.")
+    if not payload.insight_type.strip():
+        raise HTTPException(status_code=400, detail="insight_type is required.")
+    valid_statuses = {"pending_review", "approved", "deferred", "archived"}
+    if payload.status not in valid_statuses:
+        raise HTTPException(status_code=422, detail=f"status must be one of: {sorted(valid_statuses)}")
+    if not (0.0 <= payload.confidence_score <= 1.0):
+        raise HTTPException(status_code=422, detail="confidence_score must be between 0.0 and 1.0.")
+
+    client = get_client()
+    now = utc_now()
+    try:
+        db = get_database(client)
+        doc: dict[str, Any] = {
+            "workspace_slug": payload.workspace_slug.strip(),
+            "client_profile_slug": (payload.client_profile_slug or "").strip() or None,
+            "insight_type": payload.insight_type.strip(),
+            "title": payload.title.strip(),
+            "summary": payload.summary.strip(),
+            "confidence_score": payload.confidence_score,
+            "evidence": [e.model_dump() for e in payload.evidence],
+            "recommendation": payload.recommendation.model_dump() if payload.recommendation else None,
+            "source_agent": (payload.source_agent or "").strip() or None,
+            "source_run_id": (payload.source_run_id or "").strip() or None,
+            "linked_workflow_asset_ids": list(payload.linked_workflow_asset_ids),
+            "status": payload.status,
+            "approved_by": None,
+            "approved_at": None,
+            "created_at": now,
+            "updated_at": now,
+        }
+        result = db.discovery_insights.insert_one(doc)
+        created = db.discovery_insights.find_one({"_id": result.inserted_id})
+        return {"item": serialize(created), "message": "Discovery insight created."}
+    finally:
+        client.close()
+
+
+@app.get("/discovery-insights")
+def list_discovery_insights(
+    workspace_slug: str = Query(""),
+    status: str = Query(""),
+    source_run_id: str = Query(""),
+    limit: int = Query(100, ge=1, le=500),
+) -> dict:
+    client = get_client()
+    try:
+        db = get_database(client)
+        query: dict[str, Any] = {}
+        if workspace_slug:
+            query["workspace_slug"] = workspace_slug
+        if status:
+            query["status"] = status
+        if source_run_id:
+            query["source_run_id"] = source_run_id
+        items = list(
+            db.discovery_insights.find(query).sort([("created_at", -1)]).limit(limit)
+        )
+        return {"items": serialize(items), "count": len(items)}
+    finally:
+        client.close()
+
+
+@app.get("/discovery-insights/{insight_id}")
+def get_discovery_insight(insight_id: str) -> dict:
+    client = get_client()
+    try:
+        db = get_database(client)
+        doc = _get_discovery_insight_or_404(db, insight_id)
+        return {"item": serialize(doc)}
+    finally:
+        client.close()
+
+
+@app.patch("/discovery-insights/{insight_id}")
+def update_discovery_insight(insight_id: str, payload: DiscoveryInsightUpdateRequest) -> dict:
+    client = get_client()
+    now = utc_now()
+    try:
+        db = get_database(client)
+        doc = _get_discovery_insight_or_404(db, insight_id)
+        updates: dict[str, Any] = {"updated_at": now}
+        for field in ["insight_type", "title", "summary", "source_agent", "source_run_id", "status", "approved_by"]:
+            val = getattr(payload, field, None)
+            if val is not None:
+                updates[field] = val.strip() if isinstance(val, str) else val
+        if payload.confidence_score is not None:
+            if not (0.0 <= payload.confidence_score <= 1.0):
+                raise HTTPException(status_code=422, detail="confidence_score must be between 0.0 and 1.0.")
+            updates["confidence_score"] = payload.confidence_score
+        if payload.evidence is not None:
+            updates["evidence"] = [e.model_dump() for e in payload.evidence]
+        if payload.recommendation is not None:
+            updates["recommendation"] = payload.recommendation.model_dump()
+        if payload.linked_workflow_asset_ids is not None:
+            updates["linked_workflow_asset_ids"] = list(payload.linked_workflow_asset_ids)
+        if payload.status == "approved" and not doc.get("approved_at"):
+            updates["approved_at"] = now
+        db.discovery_insights.update_one({"_id": doc["_id"]}, {"$set": updates})
+        updated = db.discovery_insights.find_one({"_id": doc["_id"]})
+        return {"item": serialize(updated), "message": "Discovery insight updated."}
+    finally:
+        client.close()
+
+
+@app.patch("/discovery-insights/{insight_id}/status")
+def update_discovery_insight_status(insight_id: str, payload: DiscoveryInsightStatusRequest) -> dict:
+    client = get_client()
+    now = utc_now()
+    try:
+        db = get_database(client)
+        doc = _get_discovery_insight_or_404(db, insight_id)
+        updates: dict[str, Any] = {"status": payload.status, "updated_at": now}
+        if payload.status == "approved" and not doc.get("approved_at"):
+            updates["approved_at"] = now
+        db.discovery_insights.update_one({"_id": doc["_id"]}, {"$set": updates})
+        updated = db.discovery_insights.find_one({"_id": doc["_id"]})
+        return {"item": serialize(updated), "message": f"Insight status updated to '{payload.status}'."}
+    finally:
+        client.close()
+
+
+# ── Workflow Asset Lineage: link endpoint ──────────────────────────────────
+
+@app.patch("/workflow-assets/{asset_id}/link-insight")
+def link_workflow_asset_to_insight(asset_id: str, payload: dict) -> dict:
+    """Set source_discovery_insight_id on a workflow asset (lineage-only, additive)."""
+    insight_id = (payload.get("source_discovery_insight_id") or "").strip()
+    client = get_client()
+    now = utc_now()
+    try:
+        db = get_database(client)
+        try:
+            oid = ObjectId(asset_id)
+        except Exception:
+            raise HTTPException(status_code=400, detail="Invalid asset_id format.")
+        asset = db.workflow_assets.find_one({"_id": oid})
+        if not asset:
+            raise HTTPException(status_code=404, detail="Workflow asset not found.")
+        db.workflow_assets.update_one(
+            {"_id": oid},
+            {"$set": {"source_discovery_insight_id": insight_id or None, "updated_at": now}},
+        )
+        updated = db.workflow_assets.find_one({"_id": oid})
+        return {"item": serialize([normalize_workflow_asset(updated)])[0], "message": "Asset lineage updated."}
+    finally:
+        client.close()

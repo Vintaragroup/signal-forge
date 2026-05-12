@@ -10,6 +10,9 @@ const { apiMock } = vi.hoisted(() => ({
     deals: vi.fn(),
     agentRuns: vi.fn(),
     workflowAssets: vi.fn(),
+    discoveryInsights: vi.fn(),
+    getWorkspace: vi.fn(),
+    clientProfileWorkflowDefinition: vi.fn(),
   },
 }));
 
@@ -35,6 +38,10 @@ vi.mock("../components/WorkflowAssetCard.jsx", () => ({
       {mode}:{asset.title}:{asset.distribution_state || "not_queued"}
     </div>
   ),
+}));
+
+vi.mock("../components/DiscoveryInsightModal.jsx", () => ({
+  default: ({ insight }) => insight ? <div>Insight Modal: {insight.title}</div> : null,
 }));
 
 import WorkflowPage from "../pages/WorkflowPage.jsx";
@@ -66,6 +73,9 @@ describe("WorkflowPage Step 5 grouping", () => {
     apiMock.agentTasks.mockResolvedValue({ items: [] });
     apiMock.approvalRequests.mockResolvedValue({ items: [] });
     apiMock.deals.mockResolvedValue({ items: [] });
+    apiMock.discoveryInsights.mockResolvedValue({ items: [] });
+    apiMock.getWorkspace.mockRejectedValue(new Error("no workspace"));
+    apiMock.clientProfileWorkflowDefinition.mockRejectedValue(new Error("no def"));
     apiMock.agentRuns.mockResolvedValue({ items: [{ _id: "run-1", run_id: "run-1", status: "completed" }] });
     apiMock.messages.mockResolvedValue({
       items: [
@@ -173,5 +183,167 @@ describe("WorkflowPage Step 5 grouping", () => {
     expect(container.textContent).toContain("4 items");
     expect(container.textContent).toContain("Ready to Send Message Drafts");
     expect(container.textContent).toContain("Ready draft");
+  });
+});
+
+// ── Phase 6C: Discovery insights ──────────────────────────────────────────────
+describe("WorkflowPage Phase 6C discovery insights", () => {
+  async function renderAndOpenStep2(props = {}) {
+    await renderPage({ activeWorkspace: "ws-1", ...props });
+    // Step 2 is collapsed by default — find and click it to expand
+    await act(async () => {
+      const step2Btn = Array.from(container.querySelectorAll("button")).find(
+        (b) => b.textContent.includes("Discover Opportunities")
+      );
+      if (step2Btn) step2Btn.click();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+  }
+  beforeEach(() => {
+    globalThis.IS_REACT_ACT_ENVIRONMENT = true;
+    vi.clearAllMocks();
+    container = document.createElement("div");
+    document.body.appendChild(container);
+    root = createRoot(container);
+
+    apiMock.agentTasks.mockResolvedValue({ items: [] });
+    apiMock.approvalRequests.mockResolvedValue({ items: [] });
+    apiMock.deals.mockResolvedValue({ items: [] });
+    apiMock.messages.mockResolvedValue({ items: [] });
+    apiMock.workflowAssets.mockResolvedValue({ items: [] });
+    apiMock.agentRuns.mockResolvedValue({ items: [] });
+    apiMock.getWorkspace.mockRejectedValue(new Error("no workspace"));
+    apiMock.clientProfileWorkflowDefinition.mockRejectedValue(new Error("no def"));
+  });
+
+  afterEach(async () => {
+    if (root) {
+      await act(async () => { root.unmount(); });
+    }
+    container?.remove();
+    container = null;
+    root = null;
+    globalThis.IS_REACT_ACT_ENVIRONMENT = false;
+  });
+
+  it("renders empty state when no discovery insights", async () => {
+    apiMock.discoveryInsights.mockResolvedValue({ items: [] });
+    await renderAndOpenStep2();
+
+    expect(container.textContent).toContain("Discovery Intelligence");
+    expect(container.textContent).toContain("No discovery insights yet");
+  });
+
+  it("renders pending_review insight card in Pending Review group", async () => {
+    apiMock.discoveryInsights.mockResolvedValue({
+      items: [
+        {
+          _id: "insight-1",
+          insight_type: "content_opportunity",
+          title: "Podcast Gap",
+          summary: "Strong demand for leadership content.",
+          confidence_score: 0.85,
+          status: "pending_review",
+          evidence: [{ platform: "YouTube", signal_type: "search_trend" }],
+          recommendation: {
+            recommended_platforms: ["YouTube", "LinkedIn"],
+            recommended_asset_types: ["script_draft"],
+          },
+          source_agent: "outreach",
+          created_at: new Date().toISOString(),
+        },
+      ],
+    });
+
+    await renderAndOpenStep2();
+
+    expect(container.textContent).toContain("Podcast Gap");
+    expect(container.textContent).toContain("Pending Review");
+    expect(container.textContent).toContain("85%");
+  });
+
+  it("renders approved insight in Approved group", async () => {
+    apiMock.discoveryInsights.mockResolvedValue({
+      items: [
+        {
+          _id: "insight-2",
+          insight_type: "market_signal",
+          title: "Approved Insight",
+          summary: "High confidence signal.",
+          confidence_score: 0.9,
+          status: "approved",
+          evidence: [],
+          recommendation: null,
+          created_at: new Date().toISOString(),
+        },
+      ],
+    });
+
+    await renderAndOpenStep2();
+
+    expect(container.textContent).toContain("Approved Insight");
+    expect(container.textContent).toContain("Approved");
+  });
+
+  it("shows pending count badge when pending insights exist", async () => {
+    apiMock.discoveryInsights.mockResolvedValue({
+      items: [
+        {
+          _id: "insight-3",
+          insight_type: "content_opportunity",
+          title: "Pending 1",
+          summary: "Test.",
+          confidence_score: 0.5,
+          status: "pending_review",
+          evidence: [],
+          recommendation: null,
+          created_at: new Date().toISOString(),
+        },
+      ],
+    });
+
+    await renderAndOpenStep2();
+
+    expect(container.textContent).toContain("1 pending review");
+  });
+
+  it("shows evidence count chip when evidence items exist", async () => {
+    apiMock.discoveryInsights.mockResolvedValue({
+      items: [
+        {
+          _id: "insight-4",
+          insight_type: "content_opportunity",
+          title: "Evidence Insight",
+          summary: "Test.",
+          confidence_score: 0.7,
+          status: "pending_review",
+          evidence: [
+            { platform: "YouTube", signal_type: "search_trend" },
+            { platform: "TikTok", signal_type: "hashtag_volume" },
+          ],
+          recommendation: null,
+          created_at: new Date().toISOString(),
+        },
+      ],
+    });
+
+    await renderAndOpenStep2();
+
+    expect(container.textContent).toContain("2 evidence items");
+  });
+
+  it("does not call discoveryInsights when workspace is 'all'", async () => {
+    apiMock.discoveryInsights.mockResolvedValue({ items: [] });
+    await renderPage({ activeWorkspace: "all" });
+
+    expect(apiMock.discoveryInsights).not.toHaveBeenCalled();
+  });
+
+  it("renders without error when discoveryInsights API is omitted from mock", async () => {
+    // Simulate api.discoveryInsights not existing (returns undefined)
+    apiMock.discoveryInsights.mockReturnValue(undefined);
+    // Should not crash — renders without error
+    await expect(renderAndOpenStep2()).resolves.not.toThrow();
   });
 });

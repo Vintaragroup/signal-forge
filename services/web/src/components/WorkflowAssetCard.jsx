@@ -64,6 +64,8 @@ export default function WorkflowAssetCard({
   onDistributionAction,
   showPublishFields = false,
   onTogglePublishFields,
+  discoveryInsightMap = {},
+  onViewInsight,
 }) {
   const type = asset.asset_type || "content_idea";
   const meta = ASSET_TYPE_META[type] ?? ASSET_TYPE_META.content_idea;
@@ -104,6 +106,27 @@ export default function WorkflowAssetCard({
 
       {/* Title */}
       <div className={`mt-3 font-semibold leading-snug ${colors.title}`}>{asset.title || "Untitled asset"}</div>
+
+      {/* Phase 6C: Discovery insight lineage badge */}
+      {asset.source_discovery_insight_id && discoveryInsightMap[asset.source_discovery_insight_id] && (() => {
+        const insight = discoveryInsightMap[asset.source_discovery_insight_id];
+        return (
+          <div className="mt-2 rounded border border-violet-200 bg-violet-50 px-2.5 py-1.5 text-[11px]">
+            <div className="flex items-center justify-between gap-2">
+              <span className="font-semibold text-violet-800">Generated From Discovery Insight</span>
+              <button type="button" onClick={() => onViewInsight?.(insight)}
+                className="text-violet-600 underline hover:text-violet-800">View</button>
+            </div>
+            <div className="mt-0.5 text-violet-700 truncate">{insight.title}</div>
+            <div className="mt-0.5 flex flex-wrap gap-1">
+              <span className="text-violet-500">{Math.round((insight.confidence_score || 0) * 100)}% confidence</span>
+              {(insight.recommendation?.recommended_platforms || []).slice(0, 2).map((p) => (
+                <span key={p} className="rounded-full bg-violet-100 px-1.5 text-violet-600">{p}</span>
+              ))}
+            </div>
+          </div>
+        );
+      })()}
 
       {/* Summary */}
       {asset.summary ? (

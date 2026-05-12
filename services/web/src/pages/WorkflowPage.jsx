@@ -24,6 +24,8 @@ import {
   TrendingUp,
   Users,
   X,
+  Lightbulb,
+  ChevronDown,
 } from "lucide-react";
 import { api } from "../api.js";
 import { PROFILE_MAP } from "../navigation/systemProfiles.js";
@@ -32,6 +34,7 @@ import DemoPageBanner from "../components/DemoPageBanner.jsx";
 import LiveAgentRunPanel from "../components/LiveAgentRunPanel.jsx";
 import StatusBadge from "../components/StatusBadge.jsx";
 import WorkflowAssetCard from "../components/WorkflowAssetCard.jsx";
+import DiscoveryInsightModal from "../components/DiscoveryInsightModal.jsx";
 
 const MODULES = ["contractor_growth", "insurance_growth", "artist_growth", "media_growth"];
 const PRIORITIES = ["low", "normal", "high"];
@@ -267,6 +270,119 @@ function CommandContextCard({ activeProfile, activeWorkspace, demoMode, nextStep
   );
 }
 
+// ── Phase 6C: InsightCard ─────────────────────────────────────────────────────
+const INSIGHT_ACCENT = {
+  amber: { chip: "bg-amber-100 text-amber-700", bar: "bg-amber-400" },
+  green: { chip: "bg-green-100 text-green-700", bar: "bg-green-500" },
+  slate: { chip: "bg-slate-100 text-slate-500", bar: "bg-slate-400" },
+};
+
+function InsightCard({ insight, evidenceOpen, onToggleEvidence, onViewFull, onStatusChange }) {
+  const pct = Math.round((insight.confidence_score ?? 0) * 100);
+  const rec = insight.recommendation;
+  const isPending = insight.status === "pending_review";
+  const accent =
+    insight.status === "approved" ? INSIGHT_ACCENT.green
+    : insight.status === "pending_review" ? INSIGHT_ACCENT.amber
+    : INSIGHT_ACCENT.slate;
+
+  return (
+    <div className="flex flex-col rounded-lg border border-slate-200 bg-white p-3 text-xs shadow-sm">
+      <div className="flex items-start justify-between gap-2 mb-1.5">
+        <span className={`shrink-0 rounded-full px-1.5 py-0.5 font-semibold capitalize ${accent.chip}`}>
+          {insight.insight_type?.replace(/_/g, " ")}
+        </span>
+        <button type="button" onClick={onViewFull} className="shrink-0 text-violet-600 underline hover:text-violet-800 whitespace-nowrap">
+          View Full
+        </button>
+      </div>
+      <div className="font-semibold text-slate-800 leading-snug mb-1">{insight.title}</div>
+      <p className="text-slate-500 line-clamp-2 leading-relaxed mb-2">{insight.summary}</p>
+
+      {/* Confidence bar */}
+      <div className="mb-2">
+        <div className="flex justify-between text-[10px] text-slate-400 mb-0.5">
+          <span>Confidence</span><span className="font-semibold text-slate-600">{pct}%</span>
+        </div>
+        <div className="h-1 w-full rounded-full bg-slate-100">
+          <div className={`h-1 rounded-full transition-all ${accent.bar}`} style={{ width: `${pct}%` }} />
+        </div>
+      </div>
+
+      {/* Recommended platforms / asset types */}
+      {rec?.recommended_platforms?.length > 0 && (
+        <div className="flex flex-wrap gap-1 mb-1.5">
+          {rec.recommended_platforms.slice(0, 3).map((p) => (
+            <span key={p} className="rounded-full bg-violet-50 border border-violet-200 px-1.5 text-violet-600">{p}</span>
+          ))}
+        </div>
+      )}
+      {rec?.recommended_asset_types?.length > 0 && (
+        <div className="flex flex-wrap gap-1 mb-1.5">
+          {rec.recommended_asset_types.slice(0, 3).map((t) => (
+            <span key={t} className="rounded-full bg-slate-100 px-1.5 text-slate-600">{t.replace(/_/g, " ")}</span>
+          ))}
+        </div>
+      )}
+
+      {/* Evidence toggle */}
+      {insight.evidence?.length > 0 && (
+        <button
+          type="button"
+          onClick={onToggleEvidence}
+          className="flex items-center gap-1 text-[10px] text-slate-400 hover:text-slate-700 mb-1.5 w-fit"
+        >
+          <ChevronDown size={11} className={evidenceOpen ? "rotate-180 transition-transform" : "transition-transform"} />
+          {insight.evidence.length} evidence item{insight.evidence.length !== 1 ? "s" : ""}
+        </button>
+      )}
+      {evidenceOpen && insight.evidence?.length > 0 && (
+        <div className="mb-2 space-y-1.5">
+          {insight.evidence.map((ev, idx) => (
+            <div key={idx} className="rounded border border-slate-100 bg-slate-50 px-2 py-1.5 space-y-0.5">
+              <div className="flex items-center gap-1.5 flex-wrap">
+                {ev.platform && <span className="font-semibold text-slate-700">{ev.platform}</span>}
+                {ev.signal_type && <span className="rounded-full bg-blue-50 border border-blue-100 px-1.5 text-blue-500">{ev.signal_type}</span>}
+              </div>
+              {ev.keyword && (
+                <div className="text-slate-500">
+                  {ev.keyword}
+                  {ev.growth_pct != null && <span className="ml-1 text-green-600 font-semibold">+{ev.growth_pct}%</span>}
+                </div>
+              )}
+              {ev.metric && ev.value != null && (
+                <div className="text-slate-500">{ev.metric}: <span className="font-medium">{ev.value.toLocaleString()}</span></div>
+              )}
+              {ev.notes && <div className="text-slate-400 italic">{ev.notes}</div>}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Footer: meta + actions */}
+      <div className="mt-auto pt-2 border-t border-slate-100 flex items-center justify-between gap-2">
+        <div className="text-[10px] text-slate-400 truncate">
+          {insight.source_agent && <span>{insight.source_agent}</span>}
+        </div>
+        {isPending && (
+          <div className="flex gap-1.5 shrink-0">
+            <button
+              type="button"
+              onClick={() => onStatusChange("approved")}
+              className="rounded px-2 py-0.5 bg-green-100 text-green-700 font-semibold hover:bg-green-200"
+            >Approve</button>
+            <button
+              type="button"
+              onClick={() => onStatusChange("deferred")}
+              className="rounded px-2 py-0.5 bg-slate-100 text-slate-500 font-semibold hover:bg-slate-200"
+            >Defer</button>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 export default function WorkflowPage({ activeProfile = "custom", demoMode = false, activeWorkspace }) {
   const livePanelRef = useRef(null);
   const [distributionDrafts, setDistributionDrafts] = useState({});
@@ -293,6 +409,10 @@ export default function WorkflowPage({ activeProfile = "custom", demoMode = fals
   const [clientWorkflowDef, setClientWorkflowDef] = useState(null);
   // Phase 6B: resolved template — DB-normalized or static fallback
   const [resolvedTemplate, setResolvedTemplate] = useState(() => WORKFLOW_TEMPLATES[activeProfile] ?? DEFAULT_TEMPLATE);
+  // Phase 6C: discovery insights
+  const [discoveryInsights, setDiscoveryInsights] = useState([]);
+  const [activeInsightModal, setActiveInsightModal] = useState(null);
+  const [insightEvidenceOpen, setInsightEvidenceOpen] = useState({});
   // Stepper state — tracks which step is expanded.
   // `manualStepOverride` is set true when the user clicks a step header;
   // it suppresses auto-advance until the next full loadWorkflow() completes.
@@ -365,6 +485,17 @@ export default function WorkflowPage({ activeProfile = "custom", demoMode = fals
         // 404 or any error — silently ignore, fallback is current behavior
       });
     return () => { cancelled = true; };
+  }, [activeWorkspace]);
+
+  // Phase 6C: load discovery insights for the active workspace
+  useEffect(() => {
+    setDiscoveryInsights([]);
+    if (!activeWorkspace || activeWorkspace === "all") return;
+    const result = api.discoveryInsights({ workspace_slug: activeWorkspace, limit: "100" });
+    if (!result?.then) return;
+    result
+      .then((data) => setDiscoveryInsights(data.items || []))
+      .catch(() => {});
   }, [activeWorkspace]);
 
   // When profile changes without a workspace change, sync the fallback template
@@ -611,9 +742,17 @@ export default function WorkflowPage({ activeProfile = "custom", demoMode = fals
   const completedTodayTasks = tasks.filter(
     (t) => t.status === "completed" && new Date(t.updated_at || t.created_at).toDateString() === today
   );
+  // Phase 6C: insight groups
+  const todayInsights = discoveryInsights.filter((i) => new Date(i.created_at).toDateString() === today);
+  const pendingInsights = discoveryInsights.filter((i) => i.status === "pending_review");
+  const approvedInsights = discoveryInsights.filter((i) => i.status === "approved");
+  const deferredInsights = discoveryInsights.filter((i) => i.status === "deferred");
+  const archivedInsights = discoveryInsights.filter((i) => i.status === "archived");
   const stageStatuses = {
     1: "ready",
-    2: completedTodayTasks.length > 0 ? "completed" : "ready",
+    2: (todayInsights.length > 0 && pendingInsights.length === 0)
+       ? "completed"
+       : (completedTodayTasks.length > 0 ? "completed" : "ready"),
     3: activeTask?.status === "running" ? "running"
        : latestRun ? "completed"
        : "not_started",
@@ -623,6 +762,13 @@ export default function WorkflowPage({ activeProfile = "custom", demoMode = fals
     6: (awaitingResponse.length + interested.length + booked.length > 0) ? "ready" : "not_started",
     7: (openDeals.length + closedWon.length > 0) ? "ready" : "not_started",
   };
+
+  // Phase 6C: map insight_id → insight for lineage display in WorkflowAssetCard
+  const discoveryInsightMap = useMemo(() => {
+    const map = {};
+    for (const i of discoveryInsights) { map[i._id] = i; }
+    return map;
+  }, [discoveryInsights]);
 
   const nextStep = useMemo(() => {
     if (activeTask?.status === "running") return 3;
@@ -764,6 +910,57 @@ export default function WorkflowPage({ activeProfile = "custom", demoMode = fals
             );
           })}
         </div>
+
+        {/* Phase 6C: Discovery Intelligence Panel */}
+        <div className="mt-6 space-y-4">
+          <div className="flex items-center gap-2">
+            <Lightbulb size={13} className="text-violet-500 shrink-0" />
+            <h3 className="text-sm font-semibold text-slate-950">Discovery Intelligence</h3>
+            <span className="rounded-full bg-violet-100 px-2 py-0.5 text-xs font-semibold text-violet-700">
+              {discoveryInsights.length}
+            </span>
+            {pendingInsights.length > 0 && (
+              <span className="rounded-full bg-amber-100 px-2 py-0.5 text-xs font-semibold text-amber-700">
+                {pendingInsights.length} pending review
+              </span>
+            )}
+          </div>
+          {discoveryInsights.length === 0 ? (
+            <EmptyState>
+              No discovery insights yet. Run a discovery agent to generate intelligence from signal sources.
+            </EmptyState>
+          ) : (
+            <div className="space-y-6">
+              {[
+                { label: "Pending Review", items: pendingInsights },
+                { label: "Approved", items: approvedInsights },
+                { label: "Deferred / Archived", items: [...deferredInsights, ...archivedInsights] },
+              ].filter((g) => g.items.length > 0).map((group) => (
+                <div key={group.label}>
+                  <h4 className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-400">{group.label}</h4>
+                  <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+                    {group.items.map((insight) => (
+                      <InsightCard
+                        key={insight._id}
+                        insight={insight}
+                        evidenceOpen={insightEvidenceOpen[insight._id]}
+                        onToggleEvidence={() => setInsightEvidenceOpen((prev) => ({ ...prev, [insight._id]: !prev[insight._id] }))}
+                        onViewFull={() => setActiveInsightModal(insight)}
+                        onStatusChange={(status) => {
+                          api.updateDiscoveryInsightStatus(insight._id, status)
+                            .then((data) => {
+                              if (data?.item) setDiscoveryInsights((prev) => prev.map((i) => i._id === data.item._id ? data.item : i));
+                            })
+                            .catch(() => {});
+                        }}
+                      />
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
       </StepSection>
 
       <div ref={livePanelRef}>
@@ -810,6 +1007,8 @@ export default function WorkflowPage({ activeProfile = "custom", demoMode = fals
                     asset={asset}
                     onDecide={decideWorkflowAsset}
                     busyId={busyId}
+                    discoveryInsightMap={discoveryInsightMap}
+                    onViewInsight={(insight) => setActiveInsightModal(insight)}
                   />
                 ))}
               </div>
@@ -1155,6 +1354,11 @@ export default function WorkflowPage({ activeProfile = "custom", demoMode = fals
           ))}
         </div>
       </StepSection>
+
+      {/* Phase 6C: Discovery Insight detail modal */}
+      {activeInsightModal ? (
+        <DiscoveryInsightModal insight={activeInsightModal} onClose={() => setActiveInsightModal(null)} />
+      ) : null}
 
       {activeAction ? (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/40 p-4">
