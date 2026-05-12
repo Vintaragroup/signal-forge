@@ -7,7 +7,7 @@ from collections import Counter, defaultdict
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, Optional
 
 from bson import ObjectId
 from fastapi import FastAPI, HTTPException, Query, Request
@@ -2284,6 +2284,34 @@ def _run_content_discovery_task(db, task: dict, started_at: Any) -> dict:
     except Exception:
         pass
 
+    # Phase 6H: persist workflow_run for structured execution lineage
+    try:
+        db.workflow_runs.insert_one({
+            "workspace_slug": ws,
+            "client_profile_id": None,
+            "workflow_stage": 2,
+            "run_type": "discovery",
+            "status": "completed" if completion_state in ("completed", "partial") else "failed",
+            "title": "Content Discovery Run",
+            "summary": summary_text,
+            "source_task_id": str(task["_id"]),
+            "source_agent_run_id": run_id,
+            "inputs": {"module": module, "max_insights": max_insights},
+            "outputs": {
+                "insights_generated": len(created_insights),
+                "high_confidence_count": high_conf,
+                "platforms_checked": platforms_from_insights,
+                "configured_sources_used": source_labels,
+                "recommended_next_step": "content_build",
+            },
+            "started_at": started_at,
+            "completed_at": disc_completed,
+            "created_at": disc_completed,
+            "updated_at": disc_completed,
+        })
+    except Exception:
+        pass
+
     # Update agent_run to completed
     db.agent_runs.update_one(
         {"run_id": run_id},
@@ -2338,6 +2366,270 @@ def _run_content_discovery_task(db, task: dict, started_at: Any) -> dict:
     })
 
 
+def _run_content_build_task(db, task: dict, started_at: Any) -> dict:
+    """Dedicated handler for card_id='content_build' agent tasks.
+
+    Generates reviewable content assets from approved discovery insights.
+    Creates workflow_run(run_type='content_build'), workflow_assets, and
+    approval_requests linked to this workflow_run. Does NOT create
+    approval_requests for discovery.
+    """
+    from bson import ObjectId as _ObjId
+
+    ws = clean_text(task.get("workspace_slug") or "")
+    module = clean_text(task.get("module") or "")
+    input_cfg = task.get("input_config") or {}
+    max_assets = max(1, min(int(input_cfg.get("limit") or 3), 10))
+    discovery_run_id = clean_text(input_cfg.get("discovery_run_id") or "")
+
+    run_id = str(_ObjId())
+    now = started_at
+
+    # Mark task running
+    db.agent_tasks.update_one(
+        {"_id": task["_id"]},
+        {"$set": {"status": "running", "started_at": now, "updated_at": now, "outbound_actions_taken": 0}},
+    )
+
+    # Create synthetic agent_run
+    run_doc: dict[str, Any] = {
+        "_id": _ObjId(run_id),
+        "run_id": run_id,
+        "task_id": str(task["_id"]),
+        "agent_name": "content_build",
+        "agent_role": "Generate reviewable content assets from discovery insights",
+        "module": module,
+        "status": "running",
+        "started_at": now,
+        "completed_at": None,
+        "input_summary": {"agent": "content_build", "module": module, "max_assets": max_assets},
+        "output_summary": {},
+        "steps": [],
+        "related_contacts": [],
+        "related_leads": [],
+        "related_messages": [],
+        "related_deals": [],
+        "warnings": [],
+        "errors": [],
+        "workspace_slug": ws,
+    }
+    db.agent_runs.insert_one(run_doc)
+
+    # Pull approved discovery insights to base content on
+    source_insights: list[dict] = []
+    try:
+        q: dict[str, Any] = {"workspace_slug": ws}
+        if module:
+            q["module"] = module
+        raw = list(db.discovery_insights.find(q).sort([("confidence_score", -1)]).limit(max_assets))
+        source_insights = raw
+    except Exception:
+        pass
+
+    # Build simulated content assets
+    CONTENT_TYPES = ["social_post", "outreach_script", "content_outline", "hook_set", "email_draft"]
+    PLATFORMS = ["LinkedIn", "Email", "Instagram", "TikTok", "YouTube"]
+    completed_at = utc_now()
+
+    created_assets: list[dict] = []
+    created_approval_ids: list[str] = []
+
+    # Insert workflow_run first so we have the workflow_run_id for linkage
+    wf_run_doc: dict[str, Any] = {
+        "workspace_slug": ws,
+        "client_profile_id": None,
+        "workflow_stage": 2,
+        "run_type": "content_build",
+        "status": "needs_review",
+        "title": "Content Build Run",
+        "summary": None,  # filled after assets are known
+        "source_task_id": str(task["_id"]),
+        "source_agent_run_id": run_id,
+        "inputs": {"module": module, "max_assets": max_assets, "discovery_run_id": discovery_run_id or None},
+        "outputs": {},
+        "started_at": now,
+        "completed_at": completed_at,
+        "created_at": completed_at,
+        "updated_at": completed_at,
+    }
+    wf_run_result = db.workflow_runs.insert_one(wf_run_doc)
+    workflow_run_id = str(wf_run_result.inserted_id)
+
+    for i, insight in enumerate(source_insights[:max_assets]):
+        content_type = CONTENT_TYPES[i % len(CONTENT_TYPES)]
+        platform = PLATFORMS[i % len(PLATFORMS)]
+        insight_id = str(insight.get("_id", ""))
+        insight_title = clean_text(insight.get("title") or insight.get("summary") or f"Insight {i+1}")
+
+        asset_body = (
+            f"[Simulated {content_type.replace('_', ' ').title()}]\n\n"
+            f"Based on insight: {insight_title}\n\n"
+            f"Platform: {platform}\n"
+            f"Module: {module}\n\n"
+            f"This is a generated draft ready for operator review. "
+            f"Edit before publishing."
+        )
+
+        asset_doc: dict[str, Any] = {
+            "workspace_slug": ws,
+            "module": module,
+            "run_id": run_id,
+            "workflow_run_id": workflow_run_id,
+            "source_insight_id": insight_id,
+            "asset_type": content_type,
+            "platform": platform,
+            "title": f"{platform} {content_type.replace('_', ' ').title()} — {insight_title[:40]}",
+            "body": asset_body,
+            "approval_state": "pending",
+            "distribution_state": "not_queued",
+            "distribution_channel": None,
+            "distribution_notes": None,
+            "published_at": None,
+            "published_url": None,
+            "created_at": completed_at,
+            "updated_at": completed_at,
+        }
+        asset_result = db.workflow_assets.insert_one(asset_doc)
+        asset_id = str(asset_result.inserted_id)
+        created_assets.append({"_id": asset_id, "title": asset_doc["title"], "asset_type": content_type})
+
+        # Create approval_request linked to this workflow_run
+        approval_doc: dict[str, Any] = {
+            "workspace_slug": ws,
+            "module": module,
+            "status": "open",
+            "request_type": "content_asset_review",
+            "agent_name": "content_build",
+            "run_id": run_id,
+            "workflow_run_id": workflow_run_id,
+            "source_card_id": "content_build",
+            "workflow_asset_id": asset_id,
+            "source_insight_id": insight_id,
+            "title": asset_doc["title"],
+            "summary": f"Review generated {content_type.replace('_', ' ')} for {platform}.",
+            "content_preview": asset_body[:200],
+            "created_at": completed_at,
+            "updated_at": completed_at,
+        }
+        approval_result = db.approval_requests.insert_one(approval_doc)
+        created_approval_ids.append(str(approval_result.inserted_id))
+
+    # If no insights found, generate generic placeholder asset
+    if not created_assets:
+        asset_doc = {
+            "workspace_slug": ws,
+            "module": module,
+            "run_id": run_id,
+            "workflow_run_id": workflow_run_id,
+            "source_insight_id": None,
+            "asset_type": "social_post",
+            "platform": "LinkedIn",
+            "title": f"LinkedIn Social Post — {module.replace('_', ' ').title()} Campaign",
+            "body": (
+                "[Simulated Content Draft]\n\n"
+                f"Generic content draft for {module.replace('_', ' ')} module.\n\n"
+                "No discovery insights found. Add client sources to improve content relevance."
+            ),
+            "approval_state": "pending",
+            "distribution_state": "not_queued",
+            "distribution_channel": None,
+            "distribution_notes": None,
+            "published_at": None,
+            "published_url": None,
+            "created_at": completed_at,
+            "updated_at": completed_at,
+        }
+        asset_result = db.workflow_assets.insert_one(asset_doc)
+        asset_id = str(asset_result.inserted_id)
+        created_assets.append({"_id": asset_id, "title": asset_doc["title"], "asset_type": "social_post"})
+
+        approval_doc = {
+            "workspace_slug": ws,
+            "module": module,
+            "status": "open",
+            "request_type": "content_asset_review",
+            "agent_name": "content_build",
+            "run_id": run_id,
+            "workflow_run_id": workflow_run_id,
+            "source_card_id": "content_build",
+            "workflow_asset_id": asset_id,
+            "source_insight_id": None,
+            "title": asset_doc["title"],
+            "summary": "Review generated social post content.",
+            "content_preview": asset_doc["body"][:200],
+            "created_at": completed_at,
+            "updated_at": completed_at,
+        }
+        approval_result = db.approval_requests.insert_one(approval_doc)
+        created_approval_ids.append(str(approval_result.inserted_id))
+
+    summary_text = (
+        f"Generated {len(created_assets)} content asset{'s' if len(created_assets) != 1 else ''} "
+        f"for review. {len(created_approval_ids)} approval request{'s' if len(created_approval_ids) != 1 else ''} created."
+    )
+
+    # Update workflow_run with final outputs
+    db.workflow_runs.update_one(
+        {"_id": wf_run_result.inserted_id},
+        {"$set": {
+            "summary": summary_text,
+            "outputs": {
+                "assets_generated": len(created_assets),
+                "approval_requests_created": len(created_approval_ids),
+                "asset_types": list({a["asset_type"] for a in created_assets}),
+                "workflow_run_id": workflow_run_id,
+            },
+            "updated_at": completed_at,
+        }},
+    )
+
+    # Update agent_run
+    db.agent_runs.update_one(
+        {"run_id": run_id},
+        {"$set": {
+            "status": "waiting_for_approval",
+            "completed_at": completed_at,
+            "output_summary": {
+                "assets_generated": len(created_assets),
+                "approval_requests_created": len(created_approval_ids),
+                "workflow_run_id": workflow_run_id,
+            },
+        }},
+    )
+
+    # Complete task
+    completed_update: dict[str, Any] = {
+        "status": "waiting_for_approval",
+        "completed_at": completed_at,
+        "updated_at": completed_at,
+        "linked_run_id": run_id,
+        "result_summary": {
+            "assets_generated": len(created_assets),
+            "approval_requests_created": len(created_approval_ids),
+            "workflow_run_id": workflow_run_id,
+        },
+        "error": None,
+    }
+    db.agent_tasks.update_one({"_id": task["_id"]}, {"$set": completed_update})
+    updated = db.agent_tasks.find_one({"_id": task["_id"]})
+    run = db.agent_runs.find_one({"run_id": run_id})
+
+    return serialize({
+        "item": updated,
+        "run": run,
+        "workflow_run_id": workflow_run_id,
+        "result": {
+            "run_id": run_id,
+            "assets_generated": len(created_assets),
+            "approval_requests_created": len(created_approval_ids),
+            "workflow_run_id": workflow_run_id,
+            "summary": summary_text,
+            "next_recommended_action": "Review generated content assets in Step 4.",
+        },
+        "message": f"Content build completed. {len(created_assets)} asset(s) queued for review.",
+    })
+
+
 @app.post("/agent-tasks/{task_id}/run")
 def run_agent_task(task_id: str) -> dict:
     client = get_client()
@@ -2362,6 +2654,10 @@ def run_agent_task(task_id: str) -> dict:
         _early_module = module
         if _early_card_id == "content_discovery" and _early_ws and _early_module:
             return _run_content_discovery_task(db, task, started_at)
+
+        # ── content_build: dedicated handler — creates workflow_run + assets + approvals ─
+        if _early_card_id == "content_build" and _early_ws and _early_module:
+            return _run_content_build_task(db, task, started_at)
 
         db.agent_tasks.update_one(
             {"_id": task["_id"]},
@@ -9453,5 +9749,145 @@ def update_discovery_run_summary(run_id: str, payload: DiscoveryRunSummaryUpdate
         db.discovery_run_summaries.update_one({"run_id": run_id}, {"$set": updates})
         updated = db.discovery_run_summaries.find_one({"run_id": run_id})
         return {"item": _serialize_run_summary(updated)}
+    finally:
+        client.close()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Phase 6H — workflow_runs: structured execution layer
+# ─────────────────────────────────────────────────────────────────────────────
+
+WORKFLOW_RUN_TYPES = {"discovery", "content_build", "media_prep", "engagement", "distribution", "crm"}
+WORKFLOW_RUN_STATUSES = {"queued", "running", "completed", "failed", "needs_review"}
+
+
+class WorkflowRunCreateRequest(BaseModel):
+    workspace_slug: str
+    client_profile_id: Optional[str] = None
+    workflow_stage: int = Field(ge=1, le=7)
+    run_type: Literal["discovery", "content_build", "media_prep", "engagement", "distribution", "crm"]
+    status: Literal["queued", "running", "completed", "failed", "needs_review"] = "queued"
+    title: str = ""
+    summary: Optional[str] = None
+    source_task_id: Optional[str] = None
+    source_agent_run_id: Optional[str] = None
+    inputs: dict[str, Any] = Field(default_factory=dict)
+    outputs: dict[str, Any] = Field(default_factory=dict)
+    started_at: Optional[datetime] = None
+    completed_at: Optional[datetime] = None
+
+
+class WorkflowRunPatchRequest(BaseModel):
+    status: Optional[Literal["queued", "running", "completed", "failed", "needs_review"]] = None
+    title: Optional[str] = None
+    summary: Optional[str] = None
+    outputs: Optional[dict[str, Any]] = None
+    completed_at: Optional[datetime] = None
+
+
+def _serialize_workflow_run(doc: dict) -> dict:
+    return serialize(dict(doc))
+
+
+@app.post("/workflow-runs")
+def create_workflow_run(payload: WorkflowRunCreateRequest) -> dict:
+    client = get_client()
+    now = utc_now()
+    try:
+        db = get_database(client)
+        doc: dict[str, Any] = {
+            "workspace_slug": clean_text(payload.workspace_slug),
+            "client_profile_id": clean_text(payload.client_profile_id or ""),
+            "workflow_stage": payload.workflow_stage,
+            "run_type": payload.run_type,
+            "status": payload.status,
+            "title": clean_text(payload.title) or f"{payload.run_type.replace('_', ' ').title()} Run",
+            "summary": clean_text(payload.summary or "") or None,
+            "source_task_id": clean_text(payload.source_task_id or "") or None,
+            "source_agent_run_id": clean_text(payload.source_agent_run_id or "") or None,
+            "inputs": payload.inputs,
+            "outputs": payload.outputs,
+            "started_at": payload.started_at or now,
+            "completed_at": payload.completed_at,
+            "created_at": now,
+            "updated_at": now,
+        }
+        result = db.workflow_runs.insert_one(doc)
+        created = db.workflow_runs.find_one({"_id": result.inserted_id})
+        return {"item": _serialize_workflow_run(created)}
+    finally:
+        client.close()
+
+
+@app.get("/workflow-runs")
+def list_workflow_runs(
+    workspace_slug: str = Query(""),
+    workflow_stage: int = Query(0, ge=0, le=7),
+    run_type: str = Query(""),
+    status: str = Query(""),
+    limit: int = Query(50, ge=1, le=500),
+) -> dict:
+    client = get_client()
+    try:
+        db = get_database(client)
+        query: dict[str, Any] = {}
+        if workspace_slug:
+            query["workspace_slug"] = workspace_slug
+        if workflow_stage:
+            query["workflow_stage"] = workflow_stage
+        if run_type and run_type in WORKFLOW_RUN_TYPES:
+            query["run_type"] = run_type
+        if status and status in WORKFLOW_RUN_STATUSES:
+            query["status"] = status
+        items = list(db.workflow_runs.find(query).sort([("created_at", -1)]).limit(limit))
+        return {"items": serialize(items), "count": len(items)}
+    finally:
+        client.close()
+
+
+@app.get("/workflow-runs/{run_id}")
+def get_workflow_run(run_id: str) -> dict:
+    client = get_client()
+    try:
+        db = get_database(client)
+        if is_object_id(run_id):
+            doc = db.workflow_runs.find_one({"_id": ObjectId(run_id)})
+        else:
+            doc = db.workflow_runs.find_one({"source_task_id": run_id})
+        if not doc:
+            raise HTTPException(status_code=404, detail=f"Workflow run '{run_id}' not found.")
+        return {"item": _serialize_workflow_run(doc)}
+    finally:
+        client.close()
+
+
+@app.patch("/workflow-runs/{run_id}")
+def patch_workflow_run(run_id: str, payload: WorkflowRunPatchRequest) -> dict:
+    client = get_client()
+    now = utc_now()
+    try:
+        db = get_database(client)
+        if is_object_id(run_id):
+            doc = db.workflow_runs.find_one({"_id": ObjectId(run_id)})
+        else:
+            doc = db.workflow_runs.find_one({"source_task_id": run_id})
+        if not doc:
+            raise HTTPException(status_code=404, detail=f"Workflow run '{run_id}' not found.")
+        updates: dict[str, Any] = {"updated_at": now}
+        if payload.status is not None:
+            updates["status"] = payload.status
+        if payload.title is not None:
+            updates["title"] = clean_text(payload.title)
+        if payload.summary is not None:
+            updates["summary"] = clean_text(payload.summary) or None
+        if payload.outputs is not None:
+            updates["outputs"] = payload.outputs
+        if payload.completed_at is not None:
+            updates["completed_at"] = payload.completed_at
+        elif payload.status in {"completed", "failed"} and not doc.get("completed_at"):
+            updates["completed_at"] = now
+        db.workflow_runs.update_one({"_id": doc["_id"]}, {"$set": updates})
+        updated = db.workflow_runs.find_one({"_id": doc["_id"]})
+        return {"item": _serialize_workflow_run(updated)}
     finally:
         client.close()

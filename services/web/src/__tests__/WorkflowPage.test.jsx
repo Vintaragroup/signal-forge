@@ -17,6 +17,7 @@ const { apiMock } = vi.hoisted(() => ({
     triggerDiscoveryInsights: vi.fn(),
     clientSources: vi.fn(),
     discoveryRunSummaries: vi.fn(),
+    workflowRuns: vi.fn(),
   },
 }));
 
@@ -82,6 +83,7 @@ describe("WorkflowPage Step 5 grouping", () => {
     apiMock.clientProfileWorkflowDefinition.mockRejectedValue(new Error("no def"));
     apiMock.clientSources.mockResolvedValue({ items: [] });
     apiMock.discoveryRunSummaries.mockResolvedValue({ items: [] });
+    apiMock.workflowRuns.mockResolvedValue({ items: [] });
     apiMock.agentRuns.mockResolvedValue({ items: [{ _id: "run-1", run_id: "run-1", status: "completed" }] });
     apiMock.messages.mockResolvedValue({
       items: [
@@ -223,6 +225,7 @@ describe("WorkflowPage Phase 6C discovery insights", () => {
     apiMock.clientProfileWorkflowDefinition.mockRejectedValue(new Error("no def"));
     apiMock.clientSources.mockResolvedValue({ items: [] });
     apiMock.discoveryRunSummaries.mockResolvedValue({ items: [] });
+    apiMock.workflowRuns.mockResolvedValue({ items: [] });
   });
 
   afterEach(async () => {
@@ -399,6 +402,7 @@ describe("WorkflowPage Phase 6D discovery engine", () => {
     apiMock.clientProfileWorkflowDefinition.mockRejectedValue(new Error("no def"));
     apiMock.clientSources.mockResolvedValue({ items: [] });
     apiMock.discoveryRunSummaries.mockResolvedValue({ items: [] });
+    apiMock.workflowRuns.mockResolvedValue({ items: [] });
   });
 
   afterEach(async () => {
@@ -573,6 +577,7 @@ describe("WorkflowPage Phase 6E source registry", () => {
     apiMock.triggerDiscoveryInsights.mockResolvedValue({ status: "ok" });
     apiMock.clientSources.mockResolvedValue({ items: [] });
     apiMock.discoveryRunSummaries.mockResolvedValue({ items: [] });
+    apiMock.workflowRuns.mockResolvedValue({ items: [] });
   });
 
   afterEach(() => {
@@ -584,6 +589,7 @@ describe("WorkflowPage Phase 6E source registry", () => {
     const { default: WorkflowPage } = await import("../pages/WorkflowPage.jsx");
     apiMock.clientSources.mockResolvedValue({ items: sources });
     apiMock.discoveryRunSummaries.mockResolvedValue({ items: [] });
+    apiMock.workflowRuns.mockResolvedValue({ items: [] });
     await act(async () => {
       const root = createRoot(container);
       container._root = root;
@@ -624,6 +630,7 @@ describe("WorkflowPage Phase 6E source registry", () => {
   it("does not crash when clientSources returns empty", async () => {
     apiMock.clientSources.mockResolvedValue({ items: [] });
     apiMock.discoveryRunSummaries.mockResolvedValue({ items: [] });
+    apiMock.workflowRuns.mockResolvedValue({ items: [] });
     await render([]);
     expect(container.textContent).toContain("Source Readiness");
   });
@@ -694,6 +701,7 @@ describe("WorkflowPage Phase 6F discovery run completion + distribution", () => 
     apiMock.clientProfileWorkflowDefinition.mockRejectedValue(new Error("no def"));
     apiMock.clientSources.mockResolvedValue({ items: [] });
     apiMock.discoveryRunSummaries.mockResolvedValue({ items: [] });
+    apiMock.workflowRuns.mockResolvedValue({ items: [] });
     apiMock.agentRuns.mockResolvedValue({ items: [] });
     apiMock.messages.mockResolvedValue({ items: [] });
     apiMock.workflowAssets.mockResolvedValue({ items: [] });
@@ -726,6 +734,7 @@ describe("WorkflowPage Phase 6F discovery run completion + distribution", () => 
 
   it("shows neutral no-run state when no run summaries for today", async () => {
     apiMock.discoveryRunSummaries.mockResolvedValue({ items: [] });
+    apiMock.workflowRuns.mockResolvedValue({ items: [] });
     await render6f();
     expect(container6f.textContent).toContain("No discovery runs completed today");
   });
@@ -851,6 +860,7 @@ describe("WorkflowPage Phase 6G client workflow definition rendering", () => {
     apiMock.workflowAssets.mockResolvedValue({ items: [] });
     apiMock.clientSources.mockResolvedValue({ items: [] });
     apiMock.discoveryRunSummaries.mockResolvedValue({ items: [] });
+    apiMock.workflowRuns.mockResolvedValue({ items: [] });
   };
 
   const dbWorkflowDef = {

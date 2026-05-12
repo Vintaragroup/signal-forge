@@ -705,13 +705,183 @@ function DiscoveryExecutionTimeline({ runSummaries, discoveryInsights }) {
   );
 }
 
+// ── Phase 6H: WorkflowRunStatusPill ──────────────────────────────────────────
+
+const WF_RUN_STATUS_CONFIG = {
+  queued:       { label: "Queued",        className: "bg-slate-100 text-slate-500" },
+  running:      { label: "Running",       className: "bg-amber-100 text-amber-700 animate-pulse" },
+  completed:    { label: "Completed",     className: "bg-green-100 text-green-700" },
+  failed:       { label: "Failed",        className: "bg-red-100 text-red-600" },
+  needs_review: { label: "Needs Review",  className: "bg-violet-100 text-violet-700" },
+};
+
+function WorkflowRunStatusPill({ status }) {
+  const cfg = WF_RUN_STATUS_CONFIG[status] || { label: status, className: "bg-slate-100 text-slate-500" };
+  return (
+    <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-semibold ${cfg.className}`}>
+      {cfg.label}
+    </span>
+  );
+}
+
+// ── Phase 6H: WorkflowRunSummaryCard ─────────────────────────────────────────
+
+function WorkflowRunSummaryCard({ run, onContinue, continueLabel }) {
+  if (!run) return null;
+  const timeAgo = run.completed_at ? (() => {
+    const diff = Date.now() - new Date(run.completed_at).getTime();
+    const mins = Math.floor(diff / 60000);
+    if (mins < 1) return "just now";
+    if (mins < 60) return `${mins}m ago`;
+    const hrs = Math.floor(mins / 60);
+    if (hrs < 24) return `${hrs}h ago`;
+    return `${Math.floor(hrs / 24)}d ago`;
+  })() : null;
+
+  const outputs = run.outputs || {};
+
+  return (
+    <div className="rounded-lg border border-slate-200 bg-slate-50 p-4 space-y-3">
+      {/* Header row */}
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <div className="flex items-center gap-2">
+            <span className="text-sm font-semibold text-slate-800">{run.title || run.run_type}</span>
+            <WorkflowRunStatusPill status={run.status} />
+          </div>
+          {timeAgo && (
+            <div className="text-xs text-slate-400 mt-0.5">Completed {timeAgo}</div>
+          )}
+        </div>
+        {onContinue && (
+          <button
+            type="button"
+            onClick={onContinue}
+            className="shrink-0 inline-flex items-center gap-1.5 rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-blue-700 transition"
+          >
+            {continueLabel || "Continue"}
+            <ArrowRight className="h-3.5 w-3.5" />
+          </button>
+        )}
+      </div>
+
+      {/* Summary */}
+      {run.summary && (
+        <p className="text-xs text-slate-600 leading-relaxed">{run.summary}</p>
+      )}
+
+      {/* Outputs */}
+      {Object.keys(outputs).length > 0 && (
+        <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs sm:grid-cols-3">
+          {outputs.insights_generated != null && (
+            <div><span className="text-slate-400">Insights:</span> <strong className="text-slate-700">{outputs.insights_generated}</strong></div>
+          )}
+          {outputs.high_confidence_count != null && (
+            <div><span className="text-slate-400">High confidence:</span> <strong className="text-slate-700">{outputs.high_confidence_count}</strong></div>
+          )}
+          {outputs.assets_generated != null && (
+            <div><span className="text-slate-400">Assets:</span> <strong className="text-slate-700">{outputs.assets_generated}</strong></div>
+          )}
+          {outputs.approval_requests_created != null && (
+            <div><span className="text-slate-400">For review:</span> <strong className="text-slate-700">{outputs.approval_requests_created}</strong></div>
+          )}
+          {outputs.platforms_checked?.length > 0 && (
+            <div className="col-span-2 sm:col-span-3">
+              <span className="text-slate-400">Platforms:</span>{" "}
+              <span className="text-slate-600">{outputs.platforms_checked.join(", ")}</span>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Phase 6H: ContinueWorkflowCTA ────────────────────────────────────────────
+
+function ContinueWorkflowCTA({ discoveryRun, contentBuildRun, onRunContentBuild, onGoToReview, onGoToDistribution, readyToSendCount }) {
+  // Determine the primary CTA based on workflow progression
+  if (readyToSendCount > 0) {
+    return (
+      <div className="rounded-lg border border-green-200 bg-green-50 p-4">
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <div className="text-sm font-semibold text-green-800">Content approved and ready</div>
+            <div className="text-xs text-green-600 mt-0.5">{readyToSendCount} asset{readyToSendCount !== 1 ? "s" : ""} ready for distribution in Step 5.</div>
+          </div>
+          <button
+            type="button"
+            onClick={onGoToDistribution}
+            className="shrink-0 inline-flex items-center gap-1.5 rounded-lg bg-green-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-green-700 transition"
+          >
+            Go to Distribution <ArrowRight className="h-3.5 w-3.5" />
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  if (contentBuildRun) {
+    return (
+      <div className="rounded-lg border border-violet-200 bg-violet-50 p-4">
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <div className="text-sm font-semibold text-violet-800">Content build complete</div>
+            <div className="text-xs text-violet-600 mt-0.5">Review generated assets in Step 4 before distribution.</div>
+          </div>
+          <button
+            type="button"
+            onClick={onGoToReview}
+            className="shrink-0 inline-flex items-center gap-1.5 rounded-lg bg-violet-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-violet-700 transition"
+          >
+            Review Content <ArrowRight className="h-3.5 w-3.5" />
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  if (discoveryRun?.status === "completed" && !contentBuildRun) {
+    return (
+      <div className="rounded-lg border border-blue-200 bg-blue-50 p-4">
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <div className="text-sm font-semibold text-blue-800">Discovery complete — run Content Build next</div>
+            <div className="text-xs text-blue-600 mt-0.5">
+              {discoveryRun.outputs?.insights_generated
+                ? `${discoveryRun.outputs.insights_generated} insight${discoveryRun.outputs.insights_generated !== 1 ? "s" : ""} ready to convert into content assets.`
+                : "Convert discovery insights into reviewable content assets."}
+            </div>
+          </div>
+          {onRunContentBuild && (
+            <button
+              type="button"
+              onClick={onRunContentBuild}
+              className="shrink-0 inline-flex items-center gap-1.5 rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-blue-700 transition"
+            >
+              Run Content Build <ArrowRight className="h-3.5 w-3.5" />
+            </button>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  return null;
+}
+
 // ── Phase 6F: WorkflowAssetPreviewModal ───────────────────────────────────────
 
-function WorkflowAssetPreviewModal({ asset, discoveryInsightMap, onClose }) {
+function WorkflowAssetPreviewModal({ asset, discoveryInsightMap, workflowRunsById, onClose }) {
   if (!asset) return null;
 
   const linkedInsight = asset.source_discovery_insight_id
     ? discoveryInsightMap?.[asset.source_discovery_insight_id]
+    : asset.source_insight_id
+    ? discoveryInsightMap?.[asset.source_insight_id]
+    : null;
+  const linkedWorkflowRun = asset.workflow_run_id
+    ? workflowRunsById?.[asset.workflow_run_id]
     : null;
   const hasAudio = asset.audio_url || asset.source_audio_url;
 
@@ -768,8 +938,69 @@ function WorkflowAssetPreviewModal({ asset, discoveryInsightMap, onClose }) {
             </div>
           )}
 
-          {/* Discovery lineage */}
-          {linkedInsight && (
+          {/* Phase 6H: full lineage — Discovery Insight → Workflow Run → Asset */}
+          {(linkedInsight || linkedWorkflowRun) && (
+            <div>
+              <h4 className="text-[10px] font-semibold uppercase tracking-wide text-slate-400 mb-2">Content Lineage</h4>
+              <div className="space-y-2">
+                {/* Insight node */}
+                {linkedInsight && (
+                  <div className="rounded-lg border border-violet-200 bg-violet-50 p-3 space-y-1 text-xs">
+                    <div className="flex items-center gap-1.5 font-semibold text-violet-700">
+                      <Lightbulb className="h-3 w-3" />
+                      Discovery Insight
+                    </div>
+                    <div className="text-violet-800 font-medium">{linkedInsight.title}</div>
+                    {linkedInsight.confidence_score != null && (
+                      <div className="text-violet-600">Confidence: {Math.round(linkedInsight.confidence_score * 100)}%</div>
+                    )}
+                    {linkedInsight.recommendation?.rationale && (
+                      <p className="text-violet-600 leading-relaxed">{linkedInsight.recommendation.rationale}</p>
+                    )}
+                  </div>
+                )}
+                {(linkedInsight && linkedWorkflowRun) && (
+                  <div className="flex items-center gap-2 text-xs text-slate-400 pl-4">
+                    <ArrowRight className="h-3 w-3" /> used in
+                  </div>
+                )}
+                {/* Workflow run node */}
+                {linkedWorkflowRun && (
+                  <div className="rounded-lg border border-blue-200 bg-blue-50 p-3 space-y-1 text-xs">
+                    <div className="flex items-center gap-1.5 font-semibold text-blue-700">
+                      <Play className="h-3 w-3" />
+                      Workflow Run
+                    </div>
+                    <div className="text-blue-800 font-medium">{linkedWorkflowRun.title || linkedWorkflowRun.run_type}</div>
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <WorkflowRunStatusPill status={linkedWorkflowRun.status} />
+                      <span className="text-blue-500">Stage {linkedWorkflowRun.workflow_stage}</span>
+                      {linkedWorkflowRun.completed_at && (
+                        <span className="text-blue-400">{new Date(linkedWorkflowRun.completed_at).toLocaleString()}</span>
+                      )}
+                    </div>
+                  </div>
+                )}
+                {linkedWorkflowRun && (
+                  <div className="flex items-center gap-2 text-xs text-slate-400 pl-4">
+                    <ArrowRight className="h-3 w-3" /> generated
+                  </div>
+                )}
+                {/* Asset node (current) */}
+                <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-xs">
+                  <div className="flex items-center gap-1.5 font-semibold text-slate-600">
+                    <FileText className="h-3 w-3" />
+                    Content Asset (this item)
+                  </div>
+                  <div className="text-slate-700 font-medium mt-0.5">{asset.title || "Untitled Asset"}</div>
+                  <div className="text-slate-400 mt-0.5">{asset.asset_type?.replace(/_/g, " ")} · {asset.platform}</div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Legacy: discovery lineage for assets without workflow_run linkage */}
+          {!linkedWorkflowRun && linkedInsight && (
             <div className="rounded-lg border border-violet-200 bg-violet-50 p-3 space-y-2 text-xs">
               <div className="font-semibold text-violet-800">Generated from Discovery Insight</div>
               <div className="text-violet-700 font-medium">{linkedInsight.title}</div>
@@ -864,6 +1095,8 @@ export default function WorkflowPage({ activeProfile = "custom", demoMode = fals
   const [distributionPlatforms, setDistributionPlatforms] = useState([]);
   // Phase 6D: generating assets state
   const [generatingAssetForInsight, setGeneratingAssetForInsight] = useState("");
+  // Phase 6H: structured workflow runs
+  const [workflowRuns, setWorkflowRuns] = useState([]);
   // Stepper state — tracks which step is expanded.
   // `manualStepOverride` is set true when the user clicks a step header;
   // it suppresses auto-advance until the next full loadWorkflow() completes.
@@ -982,6 +1215,15 @@ export default function WorkflowPage({ activeProfile = "custom", demoMode = fals
       .catch(() => {});
   }, [activeWorkspace]);
 
+  // Phase 6H: load structured workflow runs
+  useEffect(() => {
+    setWorkflowRuns([]);
+    if (!activeWorkspace || activeWorkspace === "all") return;
+    api.workflowRuns({ workspaceSlug: activeWorkspace, limit: 50 })
+      .then((data) => setWorkflowRuns(data.items || []))
+      .catch(() => {});
+  }, [activeWorkspace]);
+
   // When profile changes without a workspace change, sync the fallback workflow
   useEffect(() => {
     if (!clientWorkflowDef) {
@@ -1082,6 +1324,12 @@ export default function WorkflowPage({ activeProfile = "custom", demoMode = fals
       setNotice(runResult.message || "Agent task dry-run completed. No outbound action taken.");
       if (updatedTask.linked_run_id) await refreshRunDetail(updatedTask.linked_run_id);
       await loadWorkflow();
+      // Phase 6H: refresh workflow runs after any task run
+      if (activeWorkspace && activeWorkspace !== "all") {
+        api.workflowRuns({ workspaceSlug: activeWorkspace, limit: 50 })
+          .then((data) => setWorkflowRuns(data.items || []))
+          .catch(() => {});
+      }
       // Phase 6D: refresh discovery insights after a content_discovery run
       if (activeAction?.id === "content_discovery" && activeWorkspace && activeWorkspace !== "all") {
         const insightResult = api.discoveryInsights({ workspace_slug: activeWorkspace, limit: "100" });
@@ -1268,12 +1516,35 @@ export default function WorkflowPage({ activeProfile = "custom", demoMode = fals
   // Filter them out of Step 4 and nextStep so discovery doesn't jump to Review & Approve.
   const contentApprovals = openApprovals.filter((a) => a.source_card_id !== "content_discovery");
 
+  // Phase 6H: derive step completion from workflow_run lineage
+  const latestDiscoveryRun = useMemo(() =>
+    workflowRuns.find((r) => r.run_type === "discovery") || null,
+  [workflowRuns]);
+
+  const latestContentBuildRun = useMemo(() =>
+    workflowRuns.find((r) => r.run_type === "content_build") || null,
+  [workflowRuns]);
+
+  // Content-build approval_requests (linked to a content_build workflow_run)
+  const contentBuildApprovals = useMemo(() =>
+    contentApprovals.filter((a) => a.source_card_id === "content_build" || a.workflow_run_id),
+  [contentApprovals]);
+
+  // Step 2 completed: latest discovery workflow_run exists and is completed
+  const discoveryRunCompleted = latestDiscoveryRun?.status === "completed";
+
+  // Step 3 completed: latest content_build workflow_run exists
+  const contentBuildRunCompleted = latestContentBuildRun?.status === "needs_review" || latestContentBuildRun?.status === "completed";
+
   const stageStatuses = {
     1: "ready",
-    2: (todayInsights.length > 0 && pendingInsights.length === 0)
+    2: discoveryRunCompleted
        ? "completed"
-       : (completedTodayTasks.length > 0 ? "completed" : "ready"),
+       : (todayInsights.length > 0 && pendingInsights.length === 0)
+         ? "completed"
+         : (completedTodayTasks.length > 0 ? "completed" : "ready"),
     3: activeTask?.status === "running" ? "running"
+       : contentBuildRunCompleted ? "completed"
        : latestRun ? "completed"
        : "not_started",
     4: (draftsNeedingReview.length + contentApprovals.length + currentRunAssets.length > 0) ? "needs_review"
@@ -1290,6 +1561,13 @@ export default function WorkflowPage({ activeProfile = "custom", demoMode = fals
     return map;
   }, [discoveryInsights]);
 
+  // Phase 6H: map workflow_run_id → workflow_run for asset lineage
+  const workflowRunsById = useMemo(() => {
+    const map = {};
+    for (const r of workflowRuns) { map[r._id] = r; }
+    return map;
+  }, [workflowRuns]);
+
   // Phase 6F: today's most recent run summary
   const todayRunSummary = useMemo(() => {
     const today = new Date().toDateString();
@@ -1299,8 +1577,12 @@ export default function WorkflowPage({ activeProfile = "custom", demoMode = fals
     }) || null;
   }, [discoveryRunSummaries]);
 
-  // Whether a discovery run completed today (used for Step 2 badge and nextStep routing).
-  const discoveryDoneToday = !!todayRunSummary;
+  // Whether a discovery run completed today — from workflow_run lineage (preferred) or
+  // legacy discoveryRunSummaries (fallback for runs before Phase 6H).
+  const discoveryDoneToday = useMemo(() => {
+    if (discoveryRunCompleted) return true;
+    return !!todayRunSummary;
+  }, [discoveryRunCompleted, todayRunSummary]);
 
   // Update Stage 2 to "completed" once discovery has run today
   if (discoveryDoneToday && stageStatuses[2] !== "completed") {
@@ -1321,13 +1603,15 @@ export default function WorkflowPage({ activeProfile = "custom", demoMode = fals
     if (readyToSend.length || activeDistributionWorkCount) return 5;
     // After discovery completes today, stay on Step 2 so operator reviews insights
     // (takes priority over pending approvals to avoid wrongly jumping to Step 4 after discovery)
-    if (discoveryDoneToday) return 2;
-    // Only content-creation approvals (not discovery artifacts) trigger Step 4
-    if (draftsNeedingReview.length || contentApprovals.length) return 4;
+    if (discoveryDoneToday && !contentBuildRunCompleted) return 2;
+    // After content_build, route to Step 4 for review
+    if (contentBuildRunCompleted || draftsNeedingReview.length || contentApprovals.length) return 4;
     if (awaitingResponse.length || interested.length || booked.length) return 6;
     if (openDeals.length || closedWon.length) return 7;
+    // Discovery done but no content build yet — show Step 2 to prompt Content Build run
+    if (discoveryDoneToday) return 2;
     return 1;
-  }, [activeTask?.status, draftsNeedingReview.length, contentApprovals.length, readyToSend.length, activeDistributionWorkCount, awaitingResponse.length, interested.length, booked.length, openDeals.length, closedWon.length, discoveryDoneToday]);
+  }, [activeTask?.status, draftsNeedingReview.length, contentApprovals.length, readyToSend.length, activeDistributionWorkCount, awaitingResponse.length, interested.length, booked.length, openDeals.length, closedWon.length, discoveryDoneToday, contentBuildRunCompleted]);
 
   // Sync expandedStep with nextStep unless the user has manually selected a step
   useEffect(() => {
@@ -1429,7 +1713,45 @@ export default function WorkflowPage({ activeProfile = "custom", demoMode = fals
       </StepSection>
 
       <StepSection step="2" title={resolvedWorkflow.stages[2].label} subtitle={resolvedWorkflow.stages[2].subtitle} stageNote={resolvedWorkflow.stages[2].notes || undefined} required={resolvedWorkflow.stages[2].required} agentKey={resolvedWorkflow.stages[2].agent_key || undefined} runCardType={resolvedWorkflow.stages[2].run_card_type || undefined} active={nextStep === 2} count={tasks.length} expanded={expandedStep === 2} onExpand={() => selectStep(2)} stageStatus={stageStatuses[2]}>
-        <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+        {/* Phase 6H: Workflow Run Summary Cards */}
+        {(latestDiscoveryRun || latestContentBuildRun) && (
+          <div className="mb-5 grid gap-4 sm:grid-cols-2">
+            {latestDiscoveryRun && (
+              <div>
+                <div className="text-[10px] font-semibold uppercase tracking-wide text-slate-400 mb-1.5">Last Discovery Run</div>
+                <WorkflowRunSummaryCard
+                  run={latestDiscoveryRun}
+                  onContinue={latestDiscoveryRun.status === "completed" && !latestContentBuildRun
+                    ? () => openModal({ id: "content_build", label: "Content Build", agent_name: "content", task_type: "content_build", defaultModule: activeProfile !== "custom" ? activeProfile : "contractor_growth", defaultLimit: 10, defaultPriority: "normal", modalFields: [] })
+                    : undefined}
+                  continueLabel="Run Content Build"
+                />
+              </div>
+            )}
+            {latestContentBuildRun && (
+              <div>
+                <div className="text-[10px] font-semibold uppercase tracking-wide text-slate-400 mb-1.5">Last Content Build Run</div>
+                <WorkflowRunSummaryCard
+                  run={latestContentBuildRun}
+                  onContinue={() => openModal({ id: "content_build", label: "Content Build", agent_name: "content", task_type: "content_build", defaultModule: activeProfile !== "custom" ? activeProfile : "contractor_growth", defaultLimit: 10, defaultPriority: "normal", modalFields: [] })}
+                  continueLabel="Run Again"
+                />
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Phase 6H: Continue Workflow CTA */}
+        <ContinueWorkflowCTA
+          discoveryRun={latestDiscoveryRun}
+          contentBuildRun={latestContentBuildRun}
+          onRunContentBuild={() => openModal({ id: "content_build", label: "Content Build", agent_name: "content", task_type: "content_build", defaultModule: activeProfile !== "custom" ? activeProfile : "contractor_growth", defaultLimit: 10, defaultPriority: "normal", modalFields: [] })}
+          onGoToReview={() => selectStep(4)}
+          onGoToDistribution={() => selectStep(5)}
+          readyToSendCount={readyToSend.length}
+        />
+
+        <div className={`grid gap-4 sm:grid-cols-2 xl:grid-cols-3 ${latestDiscoveryRun || latestContentBuildRun ? "mt-5" : ""}`}>
           {activeTemplate.runCards.map((card) => {
             const Icon = ICON_MAP[card.icon] ?? Megaphone;
             return (
@@ -2030,6 +2352,7 @@ export default function WorkflowPage({ activeProfile = "custom", demoMode = fals
         <WorkflowAssetPreviewModal
           asset={activeAssetPreview}
           discoveryInsightMap={discoveryInsightMap}
+          workflowRunsById={workflowRunsById}
           onClose={() => setActiveAssetPreview(null)}
         />
       ) : null}

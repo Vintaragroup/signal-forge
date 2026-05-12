@@ -736,6 +736,26 @@ export const api = {
       method: "PATCH",
       body: JSON.stringify(payload),
     }),
+
+  // Phase 6H: workflow runs (structured execution layer)
+  workflowRuns: ({ workspaceSlug = "", workflowStage = 0, runType = "", status = "", limit = 50 } = {}) => {
+    const params = new URLSearchParams();
+    if (workspaceSlug) params.set("workspace_slug", workspaceSlug);
+    if (workflowStage) params.set("workflow_stage", String(workflowStage));
+    if (runType) params.set("run_type", runType);
+    if (status) params.set("status", status);
+    params.set("limit", String(limit));
+    return request(`/workflow-runs?${params.toString()}`);
+  },
+  getWorkflowRun: (runId) =>
+    request(`/workflow-runs/${encodeURIComponent(runId)}`),
+  createWorkflowRun: (payload) =>
+    request("/workflow-runs", { method: "POST", body: JSON.stringify(payload) }),
+  patchWorkflowRun: (runId, payload) =>
+    request(`/workflow-runs/${encodeURIComponent(runId)}`, {
+      method: "PATCH",
+      body: JSON.stringify(payload),
+    }),
 };
 
 export { API_BASE_URL };
