@@ -710,6 +710,19 @@ export const api = {
     request(`/discovery-insights/${encodeURIComponent(insightId)}/generate-assets`, {
       method: "POST",
     }),
+
+  // Phase 6E: client source registry
+  clientSources: (params = {}) =>
+    request(`/admin/client-sources?${new URLSearchParams(params)}`),
+  createClientSource: (payload) =>
+    request("/admin/client-sources", { method: "POST", body: JSON.stringify(payload) }),
+  updateClientSource: (id, payload) =>
+    request(`/admin/client-sources/${encodeURIComponent(id)}`, {
+      method: "PATCH",
+      body: JSON.stringify(payload),
+    }),
+  deleteClientSource: (id) =>
+    request(`/admin/client-sources/${encodeURIComponent(id)}`, { method: "DELETE" }),
 };
 
 export { API_BASE_URL };

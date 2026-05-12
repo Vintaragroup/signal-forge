@@ -8805,3 +8805,218 @@ def generate_assets_from_insight(insight_id: str) -> dict:
         }
     finally:
         client.close()
+
+
+# ===========================================================================
+# Phase 6E — Client Source Registry
+# ===========================================================================
+
+VALID_SOURCE_TYPES: list[str] = [
+    "website",
+    "linkedin",
+    "instagram",
+    "youtube",
+    "tiktok",
+    "x",
+    "facebook",
+    "google_drive",
+    "dropbox",
+    "rss_feed",
+    "podcast",
+    "media_library",
+]
+
+
+class ClientSourceCreateRequest(BaseModel):
+    workspace_slug: str
+    client_profile_slug: str
+    source_type: str
+    label: str
+    uri: str
+    platform: str | None = None
+    status: str = "active"
+    notes: str | None = None
+
+
+class ClientSourceUpdateRequest(BaseModel):
+    label: str | None = None
+    uri: str | None = None
+    platform: str | None = None
+    status: str | None = None
+    notes: str | None = None
+
+
+def normalize_source_uri(uri: str) -> str:
+    """Normalize a source URI.
+
+    * Strips leading/trailing whitespace.
+    * Adds ``https://`` scheme to bare domain-like strings.
+    * Does NOT validate connectivity.
+    """
+    uri = uri.strip()
+    if not uri:
+        return uri
+    # If it already has a recognised scheme, leave it.
+    if re.match(r"^[a-zA-Z][a-zA-Z0-9+\-.]*://", uri):
+        return uri
+    # Looks like a bare domain / path — prepend https://
+    if re.match(r"^[a-zA-Z0-9]", uri):
+        return "https://" + uri
+    return uri
+
+
+def _compute_source_health(uri: str, status: str) -> str:
+    if status == "inactive":
+        return "inactive"
+    if not uri:
+        return "invalid"
+    try:
+        from urllib.parse import urlparse
+        parsed = urlparse(uri)
+        if parsed.scheme in ("http", "https", "ftp", "ftps") and parsed.netloc:
+            return "ready"
+        return "invalid"
+    except Exception:
+        return "invalid"
+
+
+def _get_client_source_or_404(db, source_id: str) -> dict:
+    try:
+        oid = ObjectId(source_id)
+    except Exception:
+        raise HTTPException(status_code=422, detail="Invalid source id format.")
+    doc = db.client_sources.find_one({"_id": oid})
+    if not doc:
+        raise HTTPException(status_code=404, detail="Client source not found.")
+    return doc
+
+
+def _serialize_source(doc: dict) -> dict:
+    out = serialize(doc)
+    out["health_status"] = _compute_source_health(
+        str(doc.get("uri", "") or ""),
+        str(doc.get("status", "active") or "active"),
+    )
+    return out
+
+
+@app.post("/admin/client-sources")
+def admin_create_client_source(payload: ClientSourceCreateRequest) -> dict:
+    workspace_slug = clean_text(payload.workspace_slug)
+    client_profile_slug = clean_text(payload.client_profile_slug)
+    source_type = clean_text(payload.source_type)
+    label = clean_text(payload.label)
+    uri = normalize_source_uri(clean_text(payload.uri))
+
+    if not workspace_slug:
+        raise HTTPException(status_code=400, detail="workspace_slug is required.")
+    if not client_profile_slug:
+        raise HTTPException(status_code=400, detail="client_profile_slug is required.")
+    if source_type not in VALID_SOURCE_TYPES:
+        raise HTTPException(status_code=422, detail=f"source_type must be one of: {', '.join(VALID_SOURCE_TYPES)}")
+    if not label:
+        raise HTTPException(status_code=400, detail="label is required.")
+    if not uri:
+        raise HTTPException(status_code=400, detail="uri is required.")
+
+    now = utc_now()
+    client = get_client()
+    try:
+        db = get_database(client)
+        doc: dict[str, Any] = {
+            "workspace_slug": workspace_slug,
+            "client_profile_slug": client_profile_slug,
+            "source_type": source_type,
+            "label": label,
+            "uri": uri,
+            "platform": clean_text(payload.platform) or None,
+            "status": clean_text(payload.status) or "active",
+            "notes": clean_text(payload.notes) or None,
+            "created_at": now,
+            "updated_at": now,
+        }
+        result = db.client_sources.insert_one(doc)
+        inserted = db.client_sources.find_one({"_id": result.inserted_id})
+        return {"item": _serialize_source(inserted)}
+    finally:
+        client.close()
+
+
+@app.get("/admin/client-sources")
+def admin_list_client_sources(
+    workspace_slug: str = Query(""),
+    client_profile_slug: str = Query(""),
+    source_type: str = Query(""),
+    status: str = Query(""),
+    limit: int = Query(100),
+) -> dict:
+    query: dict[str, Any] = {}
+    if workspace_slug:
+        query["workspace_slug"] = workspace_slug
+    if client_profile_slug:
+        query["client_profile_slug"] = client_profile_slug
+    if source_type:
+        query["source_type"] = source_type
+    if status:
+        query["status"] = status
+    client = get_client()
+    try:
+        db = get_database(client)
+        docs = list(db.client_sources.find(query).sort("created_at", -1).limit(max(1, min(limit, 500))))
+        return {"items": [_serialize_source(d) for d in docs], "count": len(docs)}
+    finally:
+        client.close()
+
+
+@app.get("/admin/client-sources/{source_id}")
+def admin_get_client_source(source_id: str) -> dict:
+    client = get_client()
+    try:
+        db = get_database(client)
+        doc = _get_client_source_or_404(db, source_id)
+        return {"item": _serialize_source(doc)}
+    finally:
+        client.close()
+
+
+@app.patch("/admin/client-sources/{source_id}")
+def admin_update_client_source(source_id: str, payload: ClientSourceUpdateRequest) -> dict:
+    client = get_client()
+    now = utc_now()
+    try:
+        db = get_database(client)
+        doc = _get_client_source_or_404(db, source_id)
+        updates: dict[str, Any] = {"updated_at": now}
+        if payload.label is not None:
+            val = clean_text(payload.label)
+            if not val:
+                raise HTTPException(status_code=400, detail="label cannot be empty.")
+            updates["label"] = val
+        if payload.uri is not None:
+            val = normalize_source_uri(clean_text(payload.uri))
+            if not val:
+                raise HTTPException(status_code=400, detail="uri cannot be empty.")
+            updates["uri"] = val
+        if payload.platform is not None:
+            updates["platform"] = clean_text(payload.platform) or None
+        if payload.status is not None:
+            updates["status"] = clean_text(payload.status) or "active"
+        if payload.notes is not None:
+            updates["notes"] = clean_text(payload.notes) or None
+        db.client_sources.update_one({"_id": doc["_id"]}, {"$set": updates})
+        updated = db.client_sources.find_one({"_id": doc["_id"]})
+        return {"item": _serialize_source(updated)}
+    finally:
+        client.close()
+
+
+@app.delete("/admin/client-sources/{source_id}")
+def admin_delete_client_source(source_id: str) -> dict:
+    client = get_client()
+    try:
+        db = get_database(client)
+        doc = _get_client_source_or_404(db, source_id)
+        db.client_sources.delete_one({"_id": doc["_id"]})
+        return {"deleted": True, "id": source_id}
+    finally:
+        client.close()

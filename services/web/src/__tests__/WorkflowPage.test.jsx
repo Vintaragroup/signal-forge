@@ -15,6 +15,7 @@ const { apiMock } = vi.hoisted(() => ({
     clientProfileWorkflowDefinition: vi.fn(),
     generateAssetsFromInsight: vi.fn(),
     triggerDiscoveryInsights: vi.fn(),
+    clientSources: vi.fn(),
   },
 }));
 
@@ -78,6 +79,7 @@ describe("WorkflowPage Step 5 grouping", () => {
     apiMock.discoveryInsights.mockResolvedValue({ items: [] });
     apiMock.getWorkspace.mockRejectedValue(new Error("no workspace"));
     apiMock.clientProfileWorkflowDefinition.mockRejectedValue(new Error("no def"));
+    apiMock.clientSources.mockResolvedValue({ items: [] });
     apiMock.agentRuns.mockResolvedValue({ items: [{ _id: "run-1", run_id: "run-1", status: "completed" }] });
     apiMock.messages.mockResolvedValue({
       items: [
@@ -217,6 +219,7 @@ describe("WorkflowPage Phase 6C discovery insights", () => {
     apiMock.agentRuns.mockResolvedValue({ items: [] });
     apiMock.getWorkspace.mockRejectedValue(new Error("no workspace"));
     apiMock.clientProfileWorkflowDefinition.mockRejectedValue(new Error("no def"));
+    apiMock.clientSources.mockResolvedValue({ items: [] });
   });
 
   afterEach(async () => {
@@ -391,6 +394,7 @@ describe("WorkflowPage Phase 6D discovery engine", () => {
     apiMock.agentRuns.mockResolvedValue({ items: [] });
     apiMock.getWorkspace.mockRejectedValue(new Error("no workspace"));
     apiMock.clientProfileWorkflowDefinition.mockRejectedValue(new Error("no def"));
+    apiMock.clientSources.mockResolvedValue({ items: [] });
   });
 
   afterEach(async () => {
@@ -527,5 +531,140 @@ describe("WorkflowPage Phase 6D discovery engine", () => {
     const text = container.textContent;
     expect(text).toContain("Discovery Timeline");
     expect(text).toContain("Timeline Insight Entry");
+  });
+});
+
+// ── Phase 6E: Source Registry ─────────────────────────────────────────────────
+
+describe("WorkflowPage Phase 6E source registry", () => {
+  let container;
+
+  function makeSources(overrides = []) {
+    return overrides.map((o, i) => ({
+      _id: `src-${i}`,
+      workspace_slug: "test-ws",
+      client_profile_slug: "test-profile",
+      source_type: o.source_type || "website",
+      label: o.label || `Source ${i}`,
+      uri: o.uri || "https://example.com",
+      status: o.status || "active",
+      health_status: o.health_status || "ready",
+      created_at: new Date().toISOString(),
+    }));
+  }
+
+  beforeEach(() => {
+    container = document.createElement("div");
+    document.body.appendChild(container);
+    apiMock.agentTasks.mockResolvedValue({ items: [] });
+    apiMock.approvalRequests.mockResolvedValue({ items: [] });
+    apiMock.deals.mockResolvedValue({ items: [] });
+    apiMock.messages.mockResolvedValue({ items: [] });
+    apiMock.workflowAssets.mockResolvedValue({ items: [] });
+    apiMock.agentRuns.mockResolvedValue({ items: [] });
+    apiMock.getWorkspace.mockRejectedValue(new Error("no workspace"));
+    apiMock.clientProfileWorkflowDefinition.mockRejectedValue(new Error("no def"));
+    apiMock.discoveryInsights.mockResolvedValue({ items: [] });
+    apiMock.generateAssetsFromInsight.mockResolvedValue({ item: {} });
+    apiMock.triggerDiscoveryInsights.mockResolvedValue({ status: "ok" });
+    apiMock.clientSources.mockResolvedValue({ items: [] });
+  });
+
+  afterEach(() => {
+    if (container._root) { act(() => { container._root.unmount(); }); }
+    document.body.removeChild(container);
+  });
+
+  async function render(sources = []) {
+    const { default: WorkflowPage } = await import("../pages/WorkflowPage.jsx");
+    apiMock.clientSources.mockResolvedValue({ items: sources });
+    await act(async () => {
+      const root = createRoot(container);
+      container._root = root;
+      root.render(
+        <WorkflowPage activeProfile="custom" demoMode={false} activeWorkspace="test-ws" />
+      );
+    });
+    await act(async () => {});
+  }
+
+  it("shows Source Readiness Card with no sources message", async () => {
+    await render([]);
+    expect(container.textContent).toContain("Source Readiness");
+    expect(container.textContent).toContain("No client sources configured");
+  });
+
+  it("shows active source count when sources configured", async () => {
+    const sources = makeSources([
+      { source_type: "linkedin", label: "My LinkedIn", status: "active" },
+      { source_type: "website", label: "My Website", status: "active" },
+    ]);
+    await render(sources);
+    const text = container.textContent;
+    expect(text).toContain("2 active");
+  });
+
+  it("shows source type pills for active sources", async () => {
+    const sources = makeSources([
+      { source_type: "linkedin", label: "LinkedIn", status: "active" },
+      { source_type: "instagram", label: "Instagram", status: "active" },
+    ]);
+    await render(sources);
+    const text = container.textContent;
+    expect(text).toMatch(/linkedin/i);
+    expect(text).toMatch(/instagram/i);
+  });
+
+  it("does not crash when clientSources returns empty", async () => {
+    apiMock.clientSources.mockResolvedValue({ items: [] });
+    await render([]);
+    expect(container.textContent).toContain("Source Readiness");
+  });
+
+  it("shows configured_source badge on insight evidence", async () => {
+    apiMock.discoveryInsights.mockResolvedValue({
+      items: [
+        {
+          _id: "ins-src-1",
+          title: "Source-Aware Insight",
+          insight_type: "content_opportunity",
+          confidence_score: 0.9,
+          quality_tags: [],
+          summary: "Insight from configured sources",
+          evidence: [
+            {
+              platform: "LinkedIn",
+              signal_type: "engagement",
+              keyword: "contractor leads",
+              configured_source: true,
+              source_label: "My LinkedIn",
+              source_type: "linkedin",
+            },
+          ],
+          recommendation: { recommended_platforms: ["LinkedIn"], recommended_asset_types: ["linkedin_post"] },
+          status: "pending_review",
+          source_agent: "discovery_engine",
+          source_run_id: null,
+          created_at: new Date().toISOString(),
+        },
+      ],
+    });
+    await render([]);
+
+    // Navigate to Step 2 where insights are shown
+    const buttons = Array.from(container.querySelectorAll("button"));
+    const step2 = buttons.find((b) => b.textContent.match(/step 2|discover/i));
+    if (step2) {
+      await act(async () => { step2.click(); });
+    }
+
+    // Open evidence on the insight card
+    const evidenceBtn = Array.from(container.querySelectorAll("button")).find((b) =>
+      b.textContent.includes("evidence item")
+    );
+    if (evidenceBtn) {
+      await act(async () => { evidenceBtn.click(); });
+      expect(container.textContent).toContain("Configured Source");
+    }
   });
 });

@@ -357,6 +357,11 @@ function InsightCard({ insight, evidenceOpen, onToggleEvidence, onViewFull, onSt
               <div className="flex items-center gap-1.5 flex-wrap">
                 {ev.platform && <span className="font-semibold text-slate-700">{ev.platform}</span>}
                 {ev.signal_type && <span className="rounded-full bg-blue-50 border border-blue-100 px-1.5 text-blue-500">{ev.signal_type}</span>}
+                {ev.configured_source && (
+                  <span className="rounded-full bg-teal-50 border border-teal-200 px-1.5 py-0.5 text-[9px] font-semibold text-teal-700">
+                    ✓ Configured Source{ev.source_label ? `: ${ev.source_label}` : ""}
+                  </span>
+                )}
               </div>
               {ev.keyword && (
                 <div className="text-slate-500">
@@ -409,6 +414,48 @@ function InsightCard({ insight, evidenceOpen, onToggleEvidence, onViewFull, onSt
   );
 }
 
+// ── Phase 6E: SourceReadinessCard ────────────────────────────────────────────
+
+const RECOMMENDED_SOURCES = ["website", "linkedin"];
+
+function SourceReadinessCard({ clientSources }) {
+  const activeSources = clientSources.filter((s) => s.status === "active");
+  const connectedTypes = [...new Set(activeSources.map((s) => s.source_type))];
+  const missing = RECOMMENDED_SOURCES.filter((t) => !connectedTypes.includes(t));
+
+  if (clientSources.length === 0) {
+    return (
+      <div className="rounded-lg border border-slate-200 bg-white px-4 py-3 text-xs text-slate-500">
+        <span className="font-semibold text-slate-700 mr-2">Source Readiness</span>
+        No client sources configured. Add sources in Admin Onboarding to make discovery client-aware.
+      </div>
+    );
+  }
+
+  return (
+    <div className="rounded-lg border border-teal-200 bg-teal-50 px-4 py-3 text-xs space-y-2">
+      <div className="flex items-center justify-between">
+        <span className="font-semibold text-teal-800">Source Readiness</span>
+        <span className="text-teal-700">{activeSources.length} active / {clientSources.length} total</span>
+      </div>
+      {connectedTypes.length > 0 && (
+        <div className="flex flex-wrap gap-1">
+          {connectedTypes.map((t) => (
+            <span key={t} className="rounded-full bg-teal-100 border border-teal-300 px-2 py-0.5 text-[10px] font-medium text-teal-700 capitalize">
+              {t.replace(/_/g, " ")}
+            </span>
+          ))}
+        </div>
+      )}
+      {missing.length > 0 && (
+        <div className="text-amber-700">
+          Missing recommended: {missing.map((t) => t.replace(/_/g, " ")).join(", ")}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function WorkflowPage({ activeProfile = "custom", demoMode = false, activeWorkspace }) {
   const livePanelRef = useRef(null);
   const [distributionDrafts, setDistributionDrafts] = useState({});
@@ -437,6 +484,7 @@ export default function WorkflowPage({ activeProfile = "custom", demoMode = fals
   const [resolvedTemplate, setResolvedTemplate] = useState(() => WORKFLOW_TEMPLATES[activeProfile] ?? DEFAULT_TEMPLATE);
   // Phase 6C: discovery insights
   const [discoveryInsights, setDiscoveryInsights] = useState([]);
+  const [clientSources, setClientSources] = useState([]);
   const [activeInsightModal, setActiveInsightModal] = useState(null);
   const [insightEvidenceOpen, setInsightEvidenceOpen] = useState({});
   // Phase 6D: generating assets state
@@ -523,6 +571,15 @@ export default function WorkflowPage({ activeProfile = "custom", demoMode = fals
     if (!result?.then) return;
     result
       .then((data) => setDiscoveryInsights(data.items || []))
+      .catch(() => {});
+  }, [activeWorkspace]);
+
+  // Phase 6E: load client sources for the active workspace
+  useEffect(() => {
+    setClientSources([]);
+    if (!activeWorkspace || activeWorkspace === "all") return;
+    api.clientSources({ workspace_slug: activeWorkspace, limit: "100" })
+      .then((data) => setClientSources(data.items || []))
       .catch(() => {});
   }, [activeWorkspace]);
 
@@ -859,6 +916,7 @@ export default function WorkflowPage({ activeProfile = "custom", demoMode = fals
         dbDisplayName={resolvedTemplate._dbDisplayName}
         dbSlug={resolvedTemplate._dbSlug}
       />
+      <SourceReadinessCard clientSources={clientSources} />
       <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div>

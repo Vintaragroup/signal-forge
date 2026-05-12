@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Plus, X, ChevronDown, ChevronUp } from "lucide-react";
+import { Plus, X, ChevronDown, ChevronUp, Link, Trash2 } from "lucide-react";
 import { api } from "../api.js";
 import { SYSTEM_PROFILES } from "../navigation/systemProfiles.js";
 
@@ -560,6 +560,388 @@ function ProfileRow({ profile, onArchive }) {
   );
 }
 
+// ── Source Registry constants ─────────────────────────────────────────────────
+
+const SOURCE_TYPES = [
+  { value: "website", label: "Website" },
+  { value: "linkedin", label: "LinkedIn" },
+  { value: "instagram", label: "Instagram" },
+  { value: "youtube", label: "YouTube" },
+  { value: "tiktok", label: "TikTok" },
+  { value: "x", label: "X (Twitter)" },
+  { value: "facebook", label: "Facebook" },
+  { value: "google_drive", label: "Google Drive" },
+  { value: "dropbox", label: "Dropbox" },
+  { value: "rss_feed", label: "RSS Feed" },
+  { value: "podcast", label: "Podcast" },
+  { value: "media_library", label: "Media Library" },
+];
+
+const HEALTH_COLORS = {
+  ready: "bg-green-100 text-green-700",
+  inactive: "bg-slate-100 text-slate-500",
+  invalid: "bg-red-100 text-red-700",
+};
+
+// ── ClientSourceForm ──────────────────────────────────────────────────────────
+
+function ClientSourceForm({ profiles, onCreated, onCancel }) {
+  const [sourceType, setSourceType] = useState("website");
+  const [label, setLabel] = useState("");
+  const [uri, setUri] = useState("");
+  const [notes, setNotes] = useState("");
+  const [status, setStatus] = useState("active");
+  const [profileSlug, setProfileSlug] = useState(profiles[0]?.slug || "");
+  const [workspaceSlug, setWorkspaceSlug] = useState(profiles[0]?.workspace_slug || "");
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+
+  function handleProfileChange(slug) {
+    setProfileSlug(slug);
+    const p = profiles.find((pr) => pr.slug === slug);
+    setWorkspaceSlug(p?.workspace_slug || "");
+  }
+
+  async function handleSubmit(e) {
+    e.preventDefault();
+    if (!label.trim() || !uri.trim()) {
+      setError("Label and URI are required.");
+      return;
+    }
+    if (!profileSlug) {
+      setError("Select a client profile.");
+      return;
+    }
+    setLoading(true);
+    setError("");
+    try {
+      const result = await api.createClientSource({
+        workspace_slug: workspaceSlug,
+        client_profile_slug: profileSlug,
+        source_type: sourceType,
+        label: label.trim(),
+        uri: uri.trim(),
+        notes: notes.trim() || null,
+        status,
+      });
+      onCreated(result.item);
+    } catch (err) {
+      setError(err.message || "Failed to add source.");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return (
+    <form
+      onSubmit={handleSubmit}
+      className="rounded-lg border border-teal-200 bg-teal-50 p-4 space-y-3"
+    >
+      <div className="flex items-center justify-between">
+        <h4 className="text-sm font-semibold text-slate-800">Add Source</h4>
+        <button type="button" onClick={onCancel} className="text-slate-400 hover:text-slate-600">
+          <X className="h-4 w-4" />
+        </button>
+      </div>
+
+      <div className="grid grid-cols-2 gap-3">
+        <div>
+          <label className="mb-1 block text-xs font-medium text-slate-700">Client Profile *</label>
+          <select
+            value={profileSlug}
+            onChange={(e) => handleProfileChange(e.target.value)}
+            className="w-full rounded border border-slate-200 bg-white px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-teal-300"
+          >
+            {profiles.map((p) => (
+              <option key={p.slug} value={p.slug}>{p.display_name}</option>
+            ))}
+          </select>
+        </div>
+        <div>
+          <label className="mb-1 block text-xs font-medium text-slate-700">Source Type *</label>
+          <select
+            value={sourceType}
+            onChange={(e) => setSourceType(e.target.value)}
+            className="w-full rounded border border-slate-200 bg-white px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-teal-300"
+          >
+            {SOURCE_TYPES.map((t) => (
+              <option key={t.value} value={t.value}>{t.label}</option>
+            ))}
+          </select>
+        </div>
+        <div>
+          <label className="mb-1 block text-xs font-medium text-slate-700">Label *</label>
+          <input
+            type="text"
+            value={label}
+            onChange={(e) => setLabel(e.target.value)}
+            placeholder="John's LinkedIn"
+            className="w-full rounded border border-slate-200 bg-white px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-teal-300"
+          />
+        </div>
+        <div>
+          <label className="mb-1 block text-xs font-medium text-slate-700">URI *</label>
+          <input
+            type="text"
+            value={uri}
+            onChange={(e) => setUri(e.target.value)}
+            placeholder="https://linkedin.com/in/..."
+            className="w-full rounded border border-slate-200 bg-white px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-teal-300"
+          />
+        </div>
+      </div>
+
+      <div className="grid grid-cols-2 gap-3">
+        <div>
+          <label className="mb-1 block text-xs font-medium text-slate-700">Notes</label>
+          <input
+            type="text"
+            value={notes}
+            onChange={(e) => setNotes(e.target.value)}
+            placeholder="Optional context"
+            className="w-full rounded border border-slate-200 bg-white px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-teal-300"
+          />
+        </div>
+        <div className="flex items-end gap-3">
+          <label className="flex items-center gap-2 text-xs font-medium text-slate-700 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={status === "active"}
+              onChange={(e) => setStatus(e.target.checked ? "active" : "inactive")}
+              className="h-3.5 w-3.5 rounded"
+            />
+            Active
+          </label>
+        </div>
+      </div>
+
+      {error && <p className="text-xs text-red-600">{error}</p>}
+
+      <div className="flex gap-2">
+        <button
+          type="submit"
+          disabled={loading}
+          className="rounded bg-teal-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-teal-700 disabled:opacity-50"
+        >
+          {loading ? "Adding…" : "Add Source"}
+        </button>
+        <button
+          type="button"
+          onClick={onCancel}
+          className="rounded border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-50"
+        >
+          Cancel
+        </button>
+      </div>
+    </form>
+  );
+}
+
+// ── SourceRow ─────────────────────────────────────────────────────────────────
+
+function SourceRow({ source, onDelete, onToggleStatus }) {
+  const [deleting, setDeleting] = useState(false);
+  const [toggling, setToggling] = useState(false);
+
+  const typeLabel = SOURCE_TYPES.find((t) => t.value === source.source_type)?.label || source.source_type;
+  const healthClass = HEALTH_COLORS[source.health_status] || "bg-slate-100 text-slate-500";
+
+  async function handleDelete() {
+    if (!window.confirm(`Remove source "${source.label}"?`)) return;
+    setDeleting(true);
+    try {
+      await onDelete(source._id);
+    } finally {
+      setDeleting(false);
+    }
+  }
+
+  async function handleToggle() {
+    setToggling(true);
+    try {
+      await onToggleStatus(source._id, source.status === "active" ? "inactive" : "active");
+    } finally {
+      setToggling(false);
+    }
+  }
+
+  return (
+    <tr className="border-t border-slate-100 text-xs">
+      <td className="py-2 px-3">
+        <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-medium text-slate-600">{typeLabel}</span>
+      </td>
+      <td className="py-2 px-3 font-medium text-slate-800">{source.label}</td>
+      <td className="py-2 px-3 max-w-[200px] truncate text-slate-500">
+        <a href={source.uri} target="_blank" rel="noreferrer" className="hover:text-teal-600 hover:underline flex items-center gap-1">
+          <Link className="h-3 w-3 shrink-0" />
+          <span className="truncate">{source.uri}</span>
+        </a>
+      </td>
+      <td className="py-2 px-3">
+        <span className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${STATUS_COLORS[source.status] || "bg-slate-100 text-slate-500"}`}>
+          {source.status}
+        </span>
+      </td>
+      <td className="py-2 px-3">
+        <span className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${healthClass}`}>
+          {source.health_status}
+        </span>
+      </td>
+      <td className="py-2 px-3">
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={handleToggle}
+            disabled={toggling}
+            className="text-[10px] text-slate-500 hover:text-slate-800 disabled:opacity-40"
+          >
+            {source.status === "active" ? "Deactivate" : "Activate"}
+          </button>
+          <button
+            type="button"
+            onClick={handleDelete}
+            disabled={deleting}
+            className="text-red-400 hover:text-red-600 disabled:opacity-40"
+          >
+            <Trash2 className="h-3.5 w-3.5" />
+          </button>
+        </div>
+      </td>
+    </tr>
+  );
+}
+
+// ── ClientSourceSection ───────────────────────────────────────────────────────
+
+function ClientSourceSection({ profiles }) {
+  const [sources, setSources] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [showAdd, setShowAdd] = useState(false);
+  const [error, setError] = useState("");
+
+  async function loadSources() {
+    setLoading(true);
+    setError("");
+    try {
+      const data = await api.clientSources();
+      setSources(data.items || []);
+    } catch (err) {
+      setError(err.message || "Failed to load sources.");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    loadSources();
+  }, []);
+
+  async function handleDelete(id) {
+    try {
+      await api.deleteClientSource(id);
+      setSources((prev) => prev.filter((s) => s._id !== id));
+    } catch (err) {
+      alert(`Delete failed: ${err.message}`);
+    }
+  }
+
+  async function handleToggleStatus(id, newStatus) {
+    try {
+      const result = await api.updateClientSource(id, { status: newStatus });
+      setSources((prev) => prev.map((s) => (s._id === id ? result.item : s)));
+    } catch (err) {
+      alert(`Update failed: ${err.message}`);
+    }
+  }
+
+  function handleCreated(newSource) {
+    setSources((prev) => [newSource, ...prev]);
+    setShowAdd(false);
+  }
+
+  const activeSources = sources.filter((s) => s.status === "active");
+  const connectedTypes = [...new Set(activeSources.map((s) => s.source_type))];
+
+  return (
+    <div className="space-y-3">
+      <div className="flex items-center justify-between">
+        <div>
+          <h3 className="text-sm font-semibold text-slate-900">Client Sources</h3>
+          <p className="mt-0.5 text-xs text-slate-500">
+            Configure websites, social profiles, and content sources for each client.
+            Used to make discovery recommendations client-aware.
+          </p>
+        </div>
+        {!showAdd && (
+          <button
+            type="button"
+            onClick={() => setShowAdd(true)}
+            className="inline-flex items-center gap-1.5 rounded bg-teal-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-teal-700"
+          >
+            <Plus className="h-3.5 w-3.5" />
+            Add Source
+          </button>
+        )}
+      </div>
+
+      {activeSources.length > 0 && (
+        <div className="flex flex-wrap gap-x-4 gap-y-1 rounded-lg border border-teal-100 bg-teal-50 px-3 py-2 text-xs text-teal-800">
+          <span><strong>{activeSources.length}</strong> active source{activeSources.length !== 1 ? "s" : ""}</span>
+          {connectedTypes.length > 0 && (
+            <span>Connected: {connectedTypes.map((t) => SOURCE_TYPES.find((st) => st.value === t)?.label || t).join(", ")}</span>
+          )}
+        </div>
+      )}
+
+      {showAdd && profiles.length > 0 && (
+        <ClientSourceForm
+          profiles={profiles}
+          onCreated={handleCreated}
+          onCancel={() => setShowAdd(false)}
+        />
+      )}
+      {showAdd && profiles.length === 0 && (
+        <p className="rounded border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-700">
+          Create a client profile first before adding sources.
+        </p>
+      )}
+
+      {error && <p className="text-xs text-red-600">{error}</p>}
+
+      {loading ? (
+        <p className="text-xs text-slate-500">Loading sources…</p>
+      ) : sources.length === 0 ? (
+        <p className="text-xs text-slate-500">No sources configured yet.</p>
+      ) : (
+        <div className="overflow-x-auto rounded-lg border border-slate-200 bg-white">
+          <table className="w-full min-w-[600px]">
+            <thead>
+              <tr className="text-left text-[10px] font-semibold uppercase tracking-wide text-slate-400">
+                <th className="px-3 py-2">Type</th>
+                <th className="px-3 py-2">Label</th>
+                <th className="px-3 py-2">URI</th>
+                <th className="px-3 py-2">Status</th>
+                <th className="px-3 py-2">Health</th>
+                <th className="px-3 py-2">Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {sources.map((s) => (
+                <SourceRow
+                  key={s._id}
+                  source={s}
+                  onDelete={handleDelete}
+                  onToggleStatus={handleToggleStatus}
+                />
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── AdminOnboardingPage ───────────────────────────────────────────────────────
 
 export default function AdminOnboardingPage() {
@@ -653,6 +1035,10 @@ export default function AdminOnboardingPage() {
           ))}
         </div>
       )}
+
+      <div className="mt-8 border-t border-slate-200 pt-6">
+        <ClientSourceSection profiles={profiles} />
+      </div>
     </div>
   );
 }

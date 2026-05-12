@@ -1,8 +1,8 @@
-"""
-Phase 6D — Discovery Intelligence Engine
+"""Phase 6D/6E — Discovery Intelligence Engine
 
 Generates discovery insights from mock signal sources, existing workflow data,
-and heuristic scoring. No external APIs, scraping, or credentials required.
+heuristic scoring, and (Phase 6E) configured client sources.
+No external APIs, scraping, or credentials required.
 All trend signals are deterministic and seeded by module + workspace context.
 Safe to call multiple times — each call generates a fresh batch tagged with source_run_id.
 """
@@ -382,6 +382,40 @@ def get_recent_approved_content(workspace_slug: str, db: Any) -> list[dict]:
         return []
 
 
+# Phase 6E: map from source_type to canonical platform name used in recommendations
+_SOURCE_TYPE_TO_PLATFORM: dict[str, str] = {
+    "linkedin": "LinkedIn",
+    "instagram": "Instagram",
+    "youtube": "YouTube Shorts",
+    "tiktok": "TikTok",
+    "x": "X (Twitter)",
+    "facebook": "Facebook",
+    "podcast": "Podcast",
+    "rss_feed": "Podcast",
+    "website": "Website",
+    "google_drive": "Google Drive",
+    "dropbox": "Dropbox",
+    "media_library": "Media Library",
+}
+
+
+def get_configured_sources(workspace_slug: str, client_profile_slug: str | None, db: Any) -> list[dict]:
+    """Return active configured client_sources for this workspace/profile.
+
+    Used to make discovery recommendations client-aware by injecting real
+    platform context into evidence and recommendation fields.
+    Returns empty list on any failure (non-blocking).
+    """
+    try:
+        query: dict[str, Any] = {"workspace_slug": workspace_slug, "status": "active"}
+        if client_profile_slug:
+            query["client_profile_slug"] = client_profile_slug
+        cursor = db.client_sources.find(query).limit(50)
+        return list(cursor)
+    except Exception:
+        return []
+
+
 def get_existing_insight_keywords(workspace_slug: str, db: Any) -> set[str]:
     """Return lowercase keywords from existing discovery insights (for recurrence tagging)."""
     try:
@@ -487,22 +521,81 @@ def derive_quality_tags(
 
 # ── Recommendation builder ────────────────────────────────────────────────────
 
-def build_recommendation(trend: dict, module: str) -> dict:
-    """Build a DiscoveryRecommendation-shaped dict from a trend signal."""
+def build_recommendation(
+    trend: dict,
+    module: str,
+    configured_sources: list[dict] | None = None,
+) -> dict:
+    """Build a DiscoveryRecommendation-shaped dict from a trend signal.
+
+    Phase 6E: when configured_sources are provided, the recommended_platforms
+    list is augmented to prioritise platforms the client actually has connected,
+    and a note is added to the rationale when sources match.
+    """
+    base_platforms: list[str] = list(trend.get("platforms", []))
+    rationale: str = trend.get("rationale", "")
+
+    if configured_sources:
+        connected_platforms: list[str] = []
+        for src in configured_sources:
+            canonical = _SOURCE_TYPE_TO_PLATFORM.get(src.get("source_type", ""), "")
+            if canonical and canonical not in connected_platforms:
+                connected_platforms.append(canonical)
+
+        # Boost platforms the client actually has — move them to front
+        boosted: list[str] = [p for p in connected_platforms if p in base_platforms]
+        remaining: list[str] = [p for p in base_platforms if p not in boosted]
+        final_platforms = boosted + remaining
+
+        # Add podcast context if RSS/podcast source present and relevant
+        podcast_src = next(
+            (s for s in configured_sources if s.get("source_type") in ("podcast", "rss_feed")), None
+        )
+        if podcast_src and "Podcast" not in final_platforms and trend.get("insight_type") in (
+            "content_opportunity",
+            "authority_signal",
+        ):
+            final_platforms.append("Podcast")
+            rationale = rationale + " Client has a configured podcast/RSS source — long-form clips are recommended."
+
+        if connected_platforms:
+            rationale = (
+                rationale
+                + f" Configured sources connected: {', '.join(connected_platforms[:3])}."
+            ).strip()
+    else:
+        final_platforms = base_platforms
+
     return {
         "recommended_asset_types": list(trend.get("asset_types", [])),
-        "recommended_platforms": list(trend.get("platforms", [])),
+        "recommended_platforms": final_platforms,
         "recommended_next_stage": trend.get("next_stage", "generate_content"),
-        "rationale": trend.get("rationale", ""),
+        "rationale": rationale,
     }
 
 
 # ── Evidence builder ──────────────────────────────────────────────────────────
 
-def build_evidence(trend: dict) -> list[dict]:
-    """Build evidence items from a trend signal."""
+def build_evidence(
+    trend: dict,
+    configured_sources: list[dict] | None = None,
+) -> list[dict]:
+    """Build evidence items from a trend signal.
+
+    Phase 6E: when configured_sources are provided, matching active sources
+    are annotated onto evidence items with source_label, source_type, and
+    configured_source=True so the UI can show 'Derived From Configured Sources'.
+    """
     evidence: list[dict] = []
     platforms = trend.get("platforms", [])
+
+    # Build a quick lookup: canonical_platform -> first matching source
+    source_by_platform: dict[str, dict] = {}
+    if configured_sources:
+        for src in configured_sources:
+            canonical = _SOURCE_TYPE_TO_PLATFORM.get(src.get("source_type", ""), "")
+            if canonical and canonical not in source_by_platform:
+                source_by_platform[canonical] = src
 
     # Primary signal evidence
     primary: dict[str, Any] = {
@@ -513,6 +606,9 @@ def build_evidence(trend: dict) -> list[dict]:
             f"Simulated signal — {trend.get('insight_type', 'opportunity')} "
             "detected via discovery analysis."
         ),
+        "source_label": None,
+        "source_type": None,
+        "configured_source": False,
     }
     if trend.get("metric"):
         primary["metric"] = trend["metric"]
@@ -520,17 +616,31 @@ def build_evidence(trend: dict) -> list[dict]:
         primary["value"] = float(trend["value"])
     if platforms:
         primary["platform"] = platforms[0]
+        matched_src = source_by_platform.get(platforms[0])
+        if matched_src:
+            primary["source_label"] = matched_src.get("label")
+            primary["source_type"] = matched_src.get("source_type")
+            primary["configured_source"] = True
 
     evidence.append(primary)
 
     # Secondary platform evidence when multi-platform
     if len(platforms) >= 2:
-        evidence.append({
+        sec: dict[str, Any] = {
             "platform": platforms[1],
             "signal_type": "platform_overlap",
             "keyword": trend.get("keyword"),
             "notes": f"Signal confirmed on {platforms[1]} — multi-platform opportunity.",
-        })
+            "source_label": None,
+            "source_type": None,
+            "configured_source": False,
+        }
+        matched_src2 = source_by_platform.get(platforms[1])
+        if matched_src2:
+            sec["source_label"] = matched_src2.get("label")
+            sec["source_type"] = matched_src2.get("source_type")
+            sec["configured_source"] = True
+        evidence.append(sec)
 
     return evidence
 
@@ -602,6 +712,8 @@ def generate_discovery_insights(
     trends = get_mock_social_trends(module)
     approved_content = get_recent_approved_content(workspace_slug, db)
     existing_kws = get_existing_insight_keywords(workspace_slug, db)
+    # Phase 6E: fetch configured client sources to make discovery client-aware
+    configured_sources = get_configured_sources(workspace_slug, client_profile_slug, db)
 
     # Score all trends and take the top N
     scored = sorted(
@@ -614,8 +726,8 @@ def generate_discovery_insights(
     created: list[dict] = []
     for confidence, trend in top_trends:
         tags = derive_quality_tags(trend, confidence, approved_content, existing_kws)
-        evidence = build_evidence(trend)
-        recommendation = build_recommendation(trend, module)
+        evidence = build_evidence(trend, configured_sources=configured_sources)
+        recommendation = build_recommendation(trend, module, configured_sources=configured_sources)
 
         doc: dict[str, Any] = {
             "workspace_slug": workspace_slug,
