@@ -144,6 +144,7 @@ export const api = {
   deals: (params = {}) => (isDemoModeEnabled() ? Promise.resolve({ items: demoItems("deals") }) : request(`/deals?${new URLSearchParams({ ...wsParam(), ...params })}`)),
   reports: () => request("/reports"),
   workspaces: () => (isDemoModeEnabled() ? Promise.resolve({ items: demoItems("workspaces") }) : request("/workspaces")),
+  getWorkspace: (slug) => request(`/workspaces/${encodeURIComponent(slug)}`),
   createWorkspace: (payload) =>
     request("/workspaces", {
       method: "POST",
@@ -618,6 +619,47 @@ export const api = {
     request(`/asset-performance-records/${recordId}/intelligence`, {
       method: "PATCH",
       body: JSON.stringify({ ...wsParam(), ...payload }),
+    }),
+
+  // ── Phase 6A: Admin Client Profiles ────────────────────────────────────
+  clientProfiles: (params = {}) =>
+    request(`/admin/client-profiles?${new URLSearchParams(params)}`),
+
+  createClientProfile: (payload) =>
+    request("/admin/client-profiles", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+
+  updateClientProfile: (slug, payload) =>
+    request(`/admin/client-profiles/${encodeURIComponent(slug)}`, {
+      method: "PATCH",
+      body: JSON.stringify(payload),
+    }),
+
+  updateClientProfileStatus: (slug, status) =>
+    request(`/admin/client-profiles/${encodeURIComponent(slug)}/status`, {
+      method: "PATCH",
+      body: JSON.stringify({ status }),
+    }),
+
+  clientProfileWorkflowDefinition: (slug) =>
+    request(`/admin/client-profiles/${encodeURIComponent(slug)}/workflow-definition`),
+
+  // ── Phase 6A: Admin Workflow Definitions ────────────────────────────────
+  workflowDefinitions: (params = {}) =>
+    request(`/admin/workflow-definitions?${new URLSearchParams(params)}`),
+
+  createWorkflowDefinition: (payload) =>
+    request("/admin/workflow-definitions", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+
+  updateWorkflowDefinition: (slug, payload) =>
+    request(`/admin/workflow-definitions/${encodeURIComponent(slug)}`, {
+      method: "PATCH",
+      body: JSON.stringify(payload),
     }),
 };
 

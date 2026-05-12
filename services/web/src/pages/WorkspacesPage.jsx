@@ -113,8 +113,16 @@ function CreateWorkspaceForm({ onCreate, onCancel }) {
   const [type, setType] = useState("client");
   const [module, setModule] = useState("");
   const [notes, setNotes] = useState("");
+  const [clientProfileId, setClientProfileId] = useState("");
+  const [clientProfiles, setClientProfiles] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+
+  useEffect(() => {
+    api.clientProfiles({ status: "active" })
+      .then((data) => setClientProfiles(data.items || []))
+      .catch(() => setClientProfiles([]));
+  }, []);
 
   async function handleSubmit(e) {
     e.preventDefault();
@@ -125,7 +133,9 @@ function CreateWorkspaceForm({ onCreate, onCancel }) {
     setLoading(true);
     setError("");
     try {
-      await api.createWorkspace({ name: name.trim(), type, module, notes });
+      const payload = { name: name.trim(), type, module, notes };
+      if (clientProfileId) payload.client_profile_id = clientProfileId;
+      await api.createWorkspace(payload);
       onCreate();
     } catch (err) {
       setError(err.message || "Failed to create workspace.");
@@ -204,6 +214,24 @@ function CreateWorkspaceForm({ onCreate, onCancel }) {
             className="w-full rounded-md border border-slate-200 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-300"
           />
         </div>
+
+        {clientProfiles.length > 0 && (
+          <div>
+            <label className="mb-1 block text-xs font-medium text-slate-700">
+              Client Profile <span className="text-slate-400 font-normal">(optional)</span>
+            </label>
+            <select
+              value={clientProfileId}
+              onChange={(e) => setClientProfileId(e.target.value)}
+              className="w-full rounded-md border border-slate-200 bg-white px-2 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-300"
+            >
+              <option value="">— none —</option>
+              {clientProfiles.map((p) => (
+                <option key={p.slug} value={p.slug}>{p.display_name} ({p.slug})</option>
+              ))}
+            </select>
+          </div>
+        )}
       </div>
 
       {error && <p className="mt-2 text-xs text-red-600">{error}</p>}

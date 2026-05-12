@@ -151,10 +151,82 @@ class WorkspaceCreateRequest(BaseModel):
     type: Literal["internal", "client", "demo", "test"] = "client"
     module: str = ""
     notes: str = ""
+    client_profile_id: str = ""
 
 
 class WorkspaceStatusRequest(BaseModel):
     status: Literal["active", "paused", "archived"]
+
+
+# ---------------------------------------------------------------------------
+# Phase 6A — Client Profiles & Workflow Definitions models
+# ---------------------------------------------------------------------------
+
+class WorkflowStageDefinition(BaseModel):
+    stage_number: int
+    label: str
+    agent_key: str = ""
+    run_card_type: str = ""
+    chips: list[str] = Field(default_factory=list)
+    required: bool = True
+    notes: str = ""
+
+
+class AdminClientProfileCreateRequest(BaseModel):
+    slug: str
+    display_name: str
+    workspace_slug: str = ""
+    system_profile_id: str = ""
+    module: str = ""
+    industry: str = ""
+    tier: str = ""
+    primary_goal: str = ""
+    target_audience: str = ""
+    tone_preference: str = ""
+    content_cadence: str = ""
+    workflow_definition_id: str = ""
+    scoring_rule_set: str = "default"
+    notes: str = ""
+    status: str = "active"
+
+
+class AdminClientProfileUpdateRequest(BaseModel):
+    display_name: str | None = None
+    workspace_slug: str | None = None
+    system_profile_id: str | None = None
+    module: str | None = None
+    industry: str | None = None
+    tier: str | None = None
+    primary_goal: str | None = None
+    target_audience: str | None = None
+    tone_preference: str | None = None
+    content_cadence: str | None = None
+    workflow_definition_id: str | None = None
+    scoring_rule_set: str | None = None
+    notes: str | None = None
+
+
+class AdminClientProfileStatusRequest(BaseModel):
+    status: Literal["active", "paused", "archived"]
+
+
+class AdminWorkflowDefinitionCreateRequest(BaseModel):
+    slug: str
+    display_name: str
+    system_profile_id: str = ""
+    module: str = ""
+    stages: list[WorkflowStageDefinition] = Field(default_factory=list)
+    notes: str = ""
+    status: str = "active"
+
+
+class AdminWorkflowDefinitionUpdateRequest(BaseModel):
+    display_name: str | None = None
+    system_profile_id: str | None = None
+    module: str | None = None
+    stages: list[WorkflowStageDefinition] | None = None
+    notes: str | None = None
+    status: str | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -2536,6 +2608,8 @@ def create_workspace(payload: WorkspaceCreateRequest) -> dict:
             "created_at": now,
             "updated_at": now,
         }
+        if payload.client_profile_id:
+            workspace["client_profile_id"] = payload.client_profile_id.strip()
         result = db.workspaces.insert_one(workspace)
         created = db.workspaces.find_one({"_id": result.inserted_id})
         return {"item": serialize(created), "message": "Workspace created."}
@@ -8149,3 +8223,251 @@ def renderer_validation_diagnostics() -> dict:
         "simulation_only": True,
         "outbound_actions_taken": 0,
     }
+
+
+# ---------------------------------------------------------------------------
+# Phase 6A — Client Profiles endpoints
+# ---------------------------------------------------------------------------
+
+def _validate_client_profile_refs(db, payload_workspace_slug: str, payload_workflow_def_id: str) -> None:
+    """Raise 422 if referenced workspace or workflow_definition does not exist."""
+    if payload_workspace_slug:
+        ws = db.workspaces.find_one({"slug": payload_workspace_slug})
+        if not ws:
+            raise HTTPException(status_code=422, detail=f"Workspace '{payload_workspace_slug}' not found.")
+    if payload_workflow_def_id:
+        wdef = db.workflow_definitions.find_one({"slug": payload_workflow_def_id})
+        if not wdef:
+            raise HTTPException(status_code=422, detail=f"Workflow definition '{payload_workflow_def_id}' not found.")
+
+
+@app.post("/admin/client-profiles")
+def admin_create_client_profile(payload: AdminClientProfileCreateRequest) -> dict:
+    slug = slugify(payload.slug) if payload.slug else ""
+    if not slug:
+        raise HTTPException(status_code=400, detail="Client profile slug is required.")
+    if not payload.display_name.strip():
+        raise HTTPException(status_code=400, detail="Client profile display_name is required.")
+    client = get_client()
+    now = utc_now()
+    try:
+        db = get_database(client)
+        if db.admin_client_profiles.find_one({"slug": slug}):
+            raise HTTPException(status_code=409, detail=f"A client profile with slug '{slug}' already exists.")
+        _validate_client_profile_refs(db, payload.workspace_slug, payload.workflow_definition_id)
+        doc: dict[str, Any] = {
+            "slug": slug,
+            "display_name": payload.display_name.strip(),
+            "workspace_slug": payload.workspace_slug.strip(),
+            "system_profile_id": payload.system_profile_id.strip(),
+            "module": payload.module.strip(),
+            "industry": payload.industry.strip(),
+            "tier": payload.tier.strip(),
+            "primary_goal": payload.primary_goal.strip(),
+            "target_audience": payload.target_audience.strip(),
+            "tone_preference": payload.tone_preference.strip(),
+            "content_cadence": payload.content_cadence.strip(),
+            "workflow_definition_id": payload.workflow_definition_id.strip(),
+            "scoring_rule_set": payload.scoring_rule_set.strip() or "default",
+            "notes": payload.notes.strip(),
+            "status": payload.status or "active",
+            "created_at": now,
+            "updated_at": now,
+        }
+        result = db.admin_client_profiles.insert_one(doc)
+        created = db.admin_client_profiles.find_one({"_id": result.inserted_id})
+        return {"item": serialize(created), "message": "Client profile created."}
+    finally:
+        client.close()
+
+
+@app.get("/admin/client-profiles")
+def admin_list_client_profiles(status: str = "") -> dict:
+    client = get_client()
+    try:
+        db = get_database(client)
+        query: dict[str, Any] = {}
+        if status:
+            query["status"] = status
+        items = list(db.admin_client_profiles.find(query).sort([("created_at", 1)]))
+        return {"items": serialize(items)}
+    finally:
+        client.close()
+
+
+@app.get("/admin/client-profiles/{slug}")
+def admin_get_client_profile(slug: str) -> dict:
+    client = get_client()
+    try:
+        db = get_database(client)
+        profile = db.admin_client_profiles.find_one({"slug": slug})
+        if not profile:
+            raise HTTPException(status_code=404, detail="Client profile not found.")
+        return {"item": serialize(profile)}
+    finally:
+        client.close()
+
+
+@app.patch("/admin/client-profiles/{slug}")
+def admin_update_client_profile(slug: str, payload: AdminClientProfileUpdateRequest) -> dict:
+    client = get_client()
+    now = utc_now()
+    try:
+        db = get_database(client)
+        profile = db.admin_client_profiles.find_one({"slug": slug})
+        if not profile:
+            raise HTTPException(status_code=404, detail="Client profile not found.")
+        updates: dict[str, Any] = {"updated_at": now}
+        for field in [
+            "display_name", "workspace_slug", "system_profile_id", "module", "industry",
+            "tier", "primary_goal", "target_audience", "tone_preference", "content_cadence",
+            "workflow_definition_id", "scoring_rule_set", "notes",
+        ]:
+            value = getattr(payload, field, None)
+            if value is not None:
+                updates[field] = value.strip() if isinstance(value, str) else value
+        ws_slug = updates.get("workspace_slug", "")
+        wdef_id = updates.get("workflow_definition_id", "")
+        _validate_client_profile_refs(db, ws_slug, wdef_id)
+        db.admin_client_profiles.update_one({"slug": slug}, {"$set": updates})
+        updated = db.admin_client_profiles.find_one({"slug": slug})
+        return {"item": serialize(updated), "message": "Client profile updated."}
+    finally:
+        client.close()
+
+
+@app.patch("/admin/client-profiles/{slug}/status")
+def admin_update_client_profile_status(slug: str, payload: AdminClientProfileStatusRequest) -> dict:
+    client = get_client()
+    now = utc_now()
+    try:
+        db = get_database(client)
+        profile = db.admin_client_profiles.find_one({"slug": slug})
+        if not profile:
+            raise HTTPException(status_code=404, detail="Client profile not found.")
+        db.admin_client_profiles.update_one(
+            {"slug": slug},
+            {"$set": {"status": payload.status, "updated_at": now}},
+        )
+        updated = db.admin_client_profiles.find_one({"slug": slug})
+        return {"item": serialize(updated), "message": f"Client profile status updated to '{payload.status}'."}
+    finally:
+        client.close()
+
+
+@app.get("/admin/client-profiles/{slug}/workflow-definition")
+def admin_get_client_profile_workflow_definition(slug: str) -> dict:
+    client = get_client()
+    try:
+        db = get_database(client)
+        profile = db.admin_client_profiles.find_one({"slug": slug})
+        if not profile:
+            raise HTTPException(status_code=404, detail="Client profile not found.")
+        wdef_id = profile.get("workflow_definition_id", "")
+        if not wdef_id:
+            raise HTTPException(status_code=404, detail="No workflow definition linked to this client profile.")
+        wdef = db.workflow_definitions.find_one({"slug": wdef_id})
+        if not wdef:
+            raise HTTPException(status_code=404, detail="Linked workflow definition not found.")
+        return {"item": serialize(wdef)}
+    finally:
+        client.close()
+
+
+# ---------------------------------------------------------------------------
+# Phase 6A — Workflow Definitions endpoints
+# ---------------------------------------------------------------------------
+
+_VALID_STAGE_NUMBERS = set(range(1, 8))  # 1–7 inclusive
+
+
+def _validate_stages(stages: list[WorkflowStageDefinition]) -> None:
+    for stage in stages:
+        if stage.stage_number not in _VALID_STAGE_NUMBERS:
+            raise HTTPException(
+                status_code=422,
+                detail=f"stage_number {stage.stage_number} is invalid. Must be 1–7.",
+            )
+
+
+@app.post("/admin/workflow-definitions")
+def admin_create_workflow_definition(payload: AdminWorkflowDefinitionCreateRequest) -> dict:
+    slug = slugify(payload.slug) if payload.slug else ""
+    if not slug:
+        raise HTTPException(status_code=400, detail="Workflow definition slug is required.")
+    if not payload.display_name.strip():
+        raise HTTPException(status_code=400, detail="Workflow definition display_name is required.")
+    _validate_stages(payload.stages)
+    client = get_client()
+    now = utc_now()
+    try:
+        db = get_database(client)
+        if db.workflow_definitions.find_one({"slug": slug}):
+            raise HTTPException(status_code=409, detail=f"A workflow definition with slug '{slug}' already exists.")
+        doc: dict[str, Any] = {
+            "slug": slug,
+            "display_name": payload.display_name.strip(),
+            "system_profile_id": payload.system_profile_id.strip(),
+            "module": payload.module.strip(),
+            "stages": [s.model_dump() for s in payload.stages],
+            "notes": payload.notes.strip(),
+            "status": payload.status or "active",
+            "created_at": now,
+            "updated_at": now,
+        }
+        result = db.workflow_definitions.insert_one(doc)
+        created = db.workflow_definitions.find_one({"_id": result.inserted_id})
+        return {"item": serialize(created), "message": "Workflow definition created."}
+    finally:
+        client.close()
+
+
+@app.get("/admin/workflow-definitions")
+def admin_list_workflow_definitions(status: str = "") -> dict:
+    client = get_client()
+    try:
+        db = get_database(client)
+        query: dict[str, Any] = {}
+        if status:
+            query["status"] = status
+        items = list(db.workflow_definitions.find(query).sort([("created_at", 1)]))
+        return {"items": serialize(items)}
+    finally:
+        client.close()
+
+
+@app.get("/admin/workflow-definitions/{slug}")
+def admin_get_workflow_definition(slug: str) -> dict:
+    client = get_client()
+    try:
+        db = get_database(client)
+        wdef = db.workflow_definitions.find_one({"slug": slug})
+        if not wdef:
+            raise HTTPException(status_code=404, detail="Workflow definition not found.")
+        return {"item": serialize(wdef)}
+    finally:
+        client.close()
+
+
+@app.patch("/admin/workflow-definitions/{slug}")
+def admin_update_workflow_definition(slug: str, payload: AdminWorkflowDefinitionUpdateRequest) -> dict:
+    client = get_client()
+    now = utc_now()
+    try:
+        db = get_database(client)
+        wdef = db.workflow_definitions.find_one({"slug": slug})
+        if not wdef:
+            raise HTTPException(status_code=404, detail="Workflow definition not found.")
+        updates: dict[str, Any] = {"updated_at": now}
+        for field in ["display_name", "system_profile_id", "module", "notes", "status"]:
+            value = getattr(payload, field, None)
+            if value is not None:
+                updates[field] = value.strip() if isinstance(value, str) else value
+        if payload.stages is not None:
+            _validate_stages(payload.stages)
+            updates["stages"] = [s.model_dump() for s in payload.stages]
+        db.workflow_definitions.update_one({"slug": slug}, {"$set": updates})
+        updated = db.workflow_definitions.find_one({"slug": slug})
+        return {"item": serialize(updated), "message": "Workflow definition updated."}
+    finally:
+        client.close()

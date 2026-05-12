@@ -198,6 +198,8 @@ export default function WorkflowPage({ activeProfile = "custom", demoMode = fals
   const [busyId, setBusyId] = useState("");
   const [panelLoading, setPanelLoading] = useState(false);
   const [notes, setNotes] = useState({});
+  // Resolved client workflow definition (read-only banner only — no stage replacement in 6A)
+  const [clientWorkflowDef, setClientWorkflowDef] = useState(null);
   // Stepper state — tracks which step is expanded.
   // `manualStepOverride` is set true when the user clicks a step header;
   // it suppresses auto-advance until the next full loadWorkflow() completes.
@@ -246,6 +248,29 @@ export default function WorkflowPage({ activeProfile = "custom", demoMode = fals
   useEffect(() => {
     loadWorkflow();
   }, []);
+
+  // Phase 6A: Try to resolve a persisted workflow definition for the active workspace.
+  // Falls back silently — never blocks the existing workflow render.
+  useEffect(() => {
+    setClientWorkflowDef(null);
+    if (!activeWorkspace || activeWorkspace === "all") return;
+    let cancelled = false;
+    api.getWorkspace(activeWorkspace)
+      .then((wsData) => {
+        const profileSlug = wsData?.item?.client_profile_id;
+        if (!profileSlug || cancelled) return null;
+        return api.clientProfileWorkflowDefinition(profileSlug);
+      })
+      .then((defData) => {
+        if (!cancelled && defData?.item) {
+          setClientWorkflowDef(defData.item);
+        }
+      })
+      .catch(() => {
+        // 404 or any error — silently ignore, fallback is current behavior
+      });
+    return () => { cancelled = true; };
+  }, [activeWorkspace]);
 
   useEffect(() => {
     if (!activeTask?.linked_run_id) return;
@@ -508,6 +533,13 @@ export default function WorkflowPage({ activeProfile = "custom", demoMode = fals
         responses={awaitingResponse.length + interested.length + booked.length}
         openDeals={openDeals.length}
       />
+      {clientWorkflowDef && (
+        <div className="rounded-lg border border-indigo-200 bg-indigo-50 px-4 py-2 text-xs text-indigo-800 flex items-center gap-2">
+          <span className="font-semibold">Client workflow definition loaded:</span>
+          <span>{clientWorkflowDef.display_name}</span>
+          <span className="font-mono text-indigo-500">({clientWorkflowDef.slug})</span>
+        </div>
+      )}
       <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div>
