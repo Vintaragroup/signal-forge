@@ -102,7 +102,7 @@ class AgentRunRequest(BaseModel):
 class AgentTaskCreateRequest(BaseModel):
     agent_name: Literal["outreach", "followup", "content", "fan_engagement"]
     module: str
-    task_type: Literal["run_outreach", "run_followup", "generate_content", "engage_fans"] | None = None
+    task_type: Literal["run_outreach", "run_followup", "generate_content", "engage_fans", "content_build"] | None = None
     priority: Literal["low", "normal", "high"] = "normal"
     input_config: dict[str, Any] = Field(default_factory=dict)
     workspace_slug: str = ""
@@ -565,7 +565,9 @@ def validate_agent_task(agent_name: str, module: str) -> None:
 
 def validate_agent_task_type(agent_name: str, task_type: str) -> None:
     expected = AGENT_TASK_TYPES.get(agent_name)
-    if expected and task_type != expected:
+    # content agent also accepts content_build (Phase 6H/6I) for direct workflow_run dispatch
+    extra_allowed: dict[str, set[str]] = {"content": {"content_build"}}
+    if expected and task_type != expected and task_type not in extra_allowed.get(agent_name, set()):
         raise HTTPException(status_code=400, detail=f"Task type '{task_type}' is not supported for agent '{agent_name}'.")
 
 

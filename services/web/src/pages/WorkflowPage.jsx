@@ -1142,9 +1142,11 @@ export default function WorkflowPage({ activeProfile = "custom", demoMode = fals
     manualStepOverride.current = false;
   }
 
+  // Phase 6J: re-run loadWorkflow on workspace change to prevent cross-workspace
+  // approval/message/task state contamination (fixes "32 Review needed" stale count).
   useEffect(() => {
     loadWorkflow();
-  }, []);
+  }, [activeWorkspace]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Phase 6B/6G: Try to resolve a persisted workflow definition for the active workspace.
   // Falls back silently — never blocks the existing workflow render.
@@ -1538,14 +1540,11 @@ export default function WorkflowPage({ activeProfile = "custom", demoMode = fals
 
   const stageStatuses = {
     1: "ready",
-    2: discoveryRunCompleted
-       ? "completed"
-       : (todayInsights.length > 0 && pendingInsights.length === 0)
-         ? "completed"
-         : (completedTodayTasks.length > 0 ? "completed" : "ready"),
+    // Phase 6I: driven exclusively by workflow_runs — no legacy insight/task fallbacks
+    2: discoveryRunCompleted ? "completed" : "ready",
+    // Phase 6I: content_build completion driven exclusively by workflow_runs
     3: activeTask?.status === "running" ? "running"
        : contentBuildRunCompleted ? "completed"
-       : latestRun ? "completed"
        : "not_started",
     4: (draftsNeedingReview.length + contentApprovals.length + currentRunAssets.length > 0) ? "needs_review"
        : (latestRun ? "ready" : "not_started"),
@@ -1568,26 +1567,9 @@ export default function WorkflowPage({ activeProfile = "custom", demoMode = fals
     return map;
   }, [workflowRuns]);
 
-  // Phase 6F: today's most recent run summary
-  const todayRunSummary = useMemo(() => {
-    const today = new Date().toDateString();
-    return discoveryRunSummaries.find((r) => {
-      const ts = r.completed_at || r.created_at;
-      return ts && new Date(ts).toDateString() === today;
-    }) || null;
-  }, [discoveryRunSummaries]);
-
-  // Whether a discovery run completed today — from workflow_run lineage (preferred) or
-  // legacy discoveryRunSummaries (fallback for runs before Phase 6H).
-  const discoveryDoneToday = useMemo(() => {
-    if (discoveryRunCompleted) return true;
-    return !!todayRunSummary;
-  }, [discoveryRunCompleted, todayRunSummary]);
-
-  // Update Stage 2 to "completed" once discovery has run today
-  if (discoveryDoneToday && stageStatuses[2] !== "completed") {
-    stageStatuses[2] = "completed";
-  }
+  // Phase 6I: discoveryDoneToday derives exclusively from workflow_run lineage.
+  // discovery_run_summaries are kept for display components only — they do not drive routing.
+  const discoveryDoneToday = discoveryRunCompleted;
 
   // Phase 6G: count stages that differ from the fallback template
   const overrideCount = useMemo(() => {
@@ -1604,14 +1586,15 @@ export default function WorkflowPage({ activeProfile = "custom", demoMode = fals
     // After discovery completes today, stay on Step 2 so operator reviews insights
     // (takes priority over pending approvals to avoid wrongly jumping to Step 4 after discovery)
     if (discoveryDoneToday && !contentBuildRunCompleted) return 2;
-    // After content_build, route to Step 4 for review
-    if (contentBuildRunCompleted || draftsNeedingReview.length || contentApprovals.length) return 4;
+    // After content_build, route to Step 4 for review — driven by workflow_run lineage
+    // Phase 6I: contentBuildApprovals (workflow_run-linked) replaces legacy contentApprovals routing
+    if (contentBuildRunCompleted || contentBuildApprovals.length) return 4;
     if (awaitingResponse.length || interested.length || booked.length) return 6;
     if (openDeals.length || closedWon.length) return 7;
     // Discovery done but no content build yet — show Step 2 to prompt Content Build run
     if (discoveryDoneToday) return 2;
     return 1;
-  }, [activeTask?.status, draftsNeedingReview.length, contentApprovals.length, readyToSend.length, activeDistributionWorkCount, awaitingResponse.length, interested.length, booked.length, openDeals.length, closedWon.length, discoveryDoneToday, contentBuildRunCompleted]);
+  }, [activeTask?.status, draftsNeedingReview.length, contentBuildApprovals.length, readyToSend.length, activeDistributionWorkCount, awaitingResponse.length, interested.length, booked.length, openDeals.length, closedWon.length, discoveryDoneToday, contentBuildRunCompleted]);
 
   // Sync expandedStep with nextStep unless the user has manually selected a step
   useEffect(() => {
@@ -1641,7 +1624,7 @@ export default function WorkflowPage({ activeProfile = "custom", demoMode = fals
       />
       <SourceReadinessCard clientSources={clientSources} />
       <DiscoveryRunCompletionCard runSummaries={discoveryRunSummaries} />
-      {(todayRunSummary || discoveryInsights.length > 0) && (
+      {(discoveryRunCompleted || discoveryInsights.length > 0) && (
         <div className="rounded-lg border border-slate-200 bg-slate-50 px-4 py-3">
           <DiscoveryExecutionTimeline runSummaries={discoveryRunSummaries} discoveryInsights={discoveryInsights} />
         </div>
@@ -1879,7 +1862,7 @@ export default function WorkflowPage({ activeProfile = "custom", demoMode = fals
       <div ref={livePanelRef}>
         <StepSection step="3" title={resolvedWorkflow.stages[3].label} subtitle={resolvedWorkflow.stages[3].subtitle} stageNote={resolvedWorkflow.stages[3].notes || undefined} required={resolvedWorkflow.stages[3].required} agentKey={resolvedWorkflow.stages[3].agent_key || undefined} runCardType={resolvedWorkflow.stages[3].run_card_type || undefined} active={nextStep === 3} count={latestRun ? 1 : 0} expanded={expandedStep === 3} onExpand={() => selectStep(3)} stageStatus={stageStatuses[3]}>
           {/* Discovery run completion card — shown when latest run was a content_discovery */}
-          {latestRun?.agent_name === "content_discovery" && todayRunSummary ? (
+          {latestRun?.agent_name === "content_discovery" && discoveryRunCompleted ? (
             <div className="space-y-4">
               <DiscoveryRunCompletionCard runSummaries={discoveryRunSummaries} />
               <DiscoveryExecutionTimeline runSummaries={discoveryRunSummaries} discoveryInsights={discoveryInsights} />

@@ -979,3 +979,130 @@ describe("WorkflowPage Phase 6G client workflow definition rendering", () => {
     expect(hasTemplate).toBe(true);
   });
 });
+
+describe("WorkflowPage Phase 6J workspace isolation", () => {
+  let container6j;
+  let root6j;
+
+  async function render6j(props = {}) {
+    await act(async () => {
+      root6j.render(<WorkflowPage activeProfile="executive_growth" demoMode={false} activeWorkspace="ws-6j" {...props} />);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+  }
+
+  beforeEach(() => {
+    globalThis.IS_REACT_ACT_ENVIRONMENT = true;
+    vi.clearAllMocks();
+    container6j = document.createElement("div");
+    document.body.appendChild(container6j);
+    root6j = createRoot(container6j);
+
+    apiMock.agentTasks.mockResolvedValue({ items: [] });
+    apiMock.messages.mockResolvedValue({ items: [] });
+    apiMock.approvalRequests.mockResolvedValue({ items: [] });
+    apiMock.deals.mockResolvedValue({ items: [] });
+    apiMock.agentRuns.mockResolvedValue({ items: [] });
+    apiMock.workflowAssets.mockResolvedValue({ items: [] });
+    apiMock.discoveryInsights.mockResolvedValue({ items: [] });
+    apiMock.getWorkspace.mockRejectedValue(new Error("no workspace"));
+    apiMock.clientProfileWorkflowDefinition.mockRejectedValue(new Error("no def"));
+    apiMock.clientSources.mockResolvedValue({ items: [] });
+    apiMock.discoveryRunSummaries.mockResolvedValue({ items: [] });
+    apiMock.workflowRuns.mockResolvedValue({ items: [] });
+  });
+
+  afterEach(() => {
+    root6j.unmount();
+    container6j.remove();
+  });
+
+  it("calls approvalRequests on initial workspace render", async () => {
+    await render6j();
+    expect(apiMock.approvalRequests).toHaveBeenCalled();
+  });
+
+  it("re-fetches approvalRequests when activeWorkspace prop changes", async () => {
+    await render6j({ activeWorkspace: "workspace-alpha" });
+    const firstCallCount = apiMock.approvalRequests.mock.calls.length;
+
+    apiMock.approvalRequests.mockResolvedValue({ items: [] });
+    await act(async () => {
+      root6j.render(<WorkflowPage activeProfile="executive_growth" demoMode={false} activeWorkspace="workspace-beta" />);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(apiMock.approvalRequests.mock.calls.length).toBeGreaterThan(firstCallCount);
+  });
+
+  it("replaces stale cross-workspace approval state on workspace change", async () => {
+    apiMock.approvalRequests.mockResolvedValueOnce({
+      items: Array.from({ length: 5 }, (_, i) => ({ _id: `ar-${i}`, status: "open", source_card_id: "run_outreach" })),
+    });
+    await render6j({ activeWorkspace: "workspace-alpha" });
+    // 5 open approvals shown in "Review needed" chip
+    expect(container6j.textContent).toContain("5");
+
+    // Switch to clean workspace — no approvals
+    apiMock.approvalRequests.mockResolvedValue({ items: [] });
+    apiMock.messages.mockResolvedValue({ items: [] });
+    await act(async () => {
+      root6j.render(<WorkflowPage activeProfile="executive_growth" demoMode={false} activeWorkspace="clean-workspace" />);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    // "Review needed" chip should show 0, stale "5" from previous workspace should be gone
+    const reviewChipText = container6j.textContent;
+    expect(reviewChipText).toContain("0");
+    expect(reviewChipText).not.toMatch(/5\s*Review needed/);
+  });
+
+  it("nextStep = 4 when content_build workflow_run is needs_review", async () => {
+    apiMock.workflowRuns.mockResolvedValue({
+      items: [
+        { _id: "wr-disc", run_type: "discovery", status: "completed", workspace_slug: "ws-6j" },
+        { _id: "wr-cb", run_type: "content_build", status: "needs_review", workspace_slug: "ws-6j" },
+      ],
+    });
+    apiMock.approvalRequests.mockResolvedValue({
+      items: [{ _id: "ar-1", status: "open", source_card_id: "content_build", workflow_run_id: "wr-cb" }],
+    });
+    await render6j();
+    // CommandContextCard "Next Action" section shows "Step 4 — Review & Approve"
+    expect(container6j.textContent).toContain("Step 4");
+    expect(container6j.textContent).toContain("Review & Approve");
+  });
+
+  it("nextStep = 2 when discovery complete but no content_build run", async () => {
+    apiMock.workflowRuns.mockResolvedValue({
+      items: [
+        { _id: "wr-disc", run_type: "discovery", status: "completed", workspace_slug: "ws-6j" },
+      ],
+    });
+    await render6j();
+    // CommandContextCard "Next Action" shows "Step 2 — Discover Opportunities"
+    expect(container6j.textContent).toContain("Step 2");
+    expect(container6j.textContent).toContain("Discover Opportunities");
+  });
+
+  it("cross-workspace legacy approvals without workflow_run_id do not activate nextStep = 4", async () => {
+    // No workflow_runs for this workspace
+    apiMock.workflowRuns.mockResolvedValue({ items: [] });
+    // Open approvals with non-content_build source and no workflow_run_id
+    apiMock.approvalRequests.mockResolvedValue({
+      items: Array.from({ length: 10 }, (_, i) => ({
+        _id: `legacy-${i}`,
+        status: "open",
+        source_card_id: "run_outreach",
+        workflow_run_id: null,
+      })),
+    });
+    await render6j();
+    // nextStep = 1 (no discovery, no content_build) — not contaminated by legacy approvals
+    expect(container6j.textContent).toContain("Step 1");
+    expect(container6j.textContent).not.toContain("Step 4 — Review");
+  });
+});
