@@ -1745,6 +1745,62 @@ def update_workflow_asset_distribution(asset_id: str, payload: WorkflowAssetDist
 
         db.workflow_assets.update_one({"_id": ObjectId(asset_id)}, {"$set": updates})
         updated = db.workflow_assets.find_one({"_id": ObjectId(asset_id)})
+
+        # Phase 6K: when an asset is published, create a distribution workflow_run record
+        # and check if the parent content_build workflow_run is now fully complete.
+        if action == "mark_published" and updated:
+            _wf_run_id = updated.get("workflow_run_id")
+            _ws = updated.get("workspace_slug") or ""
+            _now = utc_now()
+            # Create a distribution workflow_run linked to the content_build run
+            dist_run: dict[str, Any] = {
+                "workspace_slug": _ws,
+                "client_profile_id": None,
+                "workflow_stage": 5,
+                "run_type": "distribution",
+                "status": "completed",
+                "title": "Distribution Run",
+                "summary": f"Asset published: {updated.get('title', 'Untitled')}",
+                "source_task_id": None,
+                "source_agent_run_id": None,
+                "source_workflow_run_id": _wf_run_id or None,
+                "inputs": {
+                    "asset_id": asset_id,
+                    "distribution_channel": updates.get("distribution_channel"),
+                    "published_url": updates.get("published_url"),
+                },
+                "outputs": {
+                    "assets_published": 1,
+                    "workflow_run_id": None,  # filled after insert
+                },
+                "started_at": _now,
+                "completed_at": _now,
+                "created_at": _now,
+                "updated_at": _now,
+            }
+            dist_result = db.workflow_runs.insert_one(dist_run)
+            db.workflow_runs.update_one(
+                {"_id": dist_result.inserted_id},
+                {"$set": {"outputs.workflow_run_id": str(dist_result.inserted_id)}},
+            )
+            # Check if all assets for this content_build workflow_run are published/archived
+            if _wf_run_id:
+                _terminal = {"published", "archived"}
+                all_assets = list(db.workflow_assets.find({"workflow_run_id": _wf_run_id}))
+                all_done = all_assets and all(
+                    (a.get("distribution_state") or "not_queued") in _terminal
+                    for a in all_assets
+                )
+                if all_done:
+                    try:
+                        from bson import ObjectId as _ObjId6kd
+                        db.workflow_runs.update_one(
+                            {"_id": _ObjId6kd(_wf_run_id)},
+                            {"$set": {"status": "completed", "updated_at": _now}},
+                        )
+                    except Exception:
+                        pass  # non-fatal
+
         message_map = {
             "queue": "Asset queued for manual distribution.",
             "unqueue": "Asset removed from distribution queue.",
@@ -2807,6 +2863,21 @@ def decide_approval_request(approval_id: str, payload: ApprovalDecisionRequest) 
             {"_id": request["_id"]},
             {"$set": update, "$push": {"decision_events": event}},
         )
+
+        # Phase 6K: when approving an approval_request that is linked to a workflow_asset,
+        # automatically approve the asset so the operator doesn't need a separate action.
+        if payload.decision == "approve":
+            asset_id_str = request.get("workflow_asset_id")
+            if asset_id_str:
+                try:
+                    from bson import ObjectId as _ObjId6k
+                    db.workflow_assets.update_one(
+                        {"_id": _ObjId6k(asset_id_str)},
+                        {"$set": {"approval_state": "approved", "updated_at": decided_at}},
+                    )
+                except Exception:
+                    pass  # non-fatal — asset may not exist or id may be invalid
+
         updated = db.approval_requests.find_one({"_id": request["_id"]})
         enriched = enrich_approval_requests([updated], db)[0] if updated else None
         return serialize(

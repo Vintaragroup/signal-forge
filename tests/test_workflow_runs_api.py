@@ -344,3 +344,242 @@ def test_patch_workflow_run_not_found():
         client = TestClient(main.app)
         resp = client.patch(f"/workflow-runs/{ObjectId()}", json={"status": "completed"})
     assert resp.status_code == 404
+
+
+# ── Phase 6K: approval_request approve → auto-approves linked workflow_asset ─
+
+
+def _make_db_6k(approval_docs=None, asset_docs=None, workflow_run_docs=None):
+    """Enhanced mock db for Phase 6K tests (approval + distribution endpoints)."""
+    from bson import ObjectId
+
+    db = _make_db(workflow_runs=workflow_run_docs or [])
+
+    # --- approval_requests ---
+    _approvals: list[dict] = []
+    for a in (approval_docs or []):
+        entry = dict(a)
+        if "_id" not in entry:
+            entry["_id"] = ObjectId()
+        _approvals.append(entry)
+
+    _approval_update_calls: list[tuple] = []
+
+    def ar_find_one(q):
+        for a in _approvals:
+            match = True
+            for k, v in q.items():
+                if k == "$or":
+                    if not any(all(str(a.get(sk)) == str(sv) or a.get(sk) == sv for sk, sv in cond.items()) for cond in v):
+                        match = False
+                        break
+                elif str(a.get(k)) != str(v) and a.get(k) != v:
+                    match = False
+                    break
+            if match:
+                return dict(a)
+        return None
+
+    def ar_update_one(q, update):
+        _approval_update_calls.append((q, update))
+        for a in _approvals:
+            if str(a.get("_id")) == str(list(q.values())[0]):
+                a.update(update.get("$set", {}))
+        return MagicMock()
+
+    db.approval_requests.find_one = ar_find_one
+    db.approval_requests.update_one = ar_update_one
+    db._approval_update_calls = _approval_update_calls
+
+    # --- workflow_assets ---
+    _assets: list[dict] = []
+    for a in (asset_docs or []):
+        entry = dict(a)
+        if "_id" not in entry:
+            entry["_id"] = ObjectId()
+        _assets.append(entry)
+
+    _asset_update_calls: list[tuple] = []
+
+    def wa_find_one(q):
+        from bson import ObjectId as OID
+        for a in _assets:
+            match = True
+            for k, v in q.items():
+                if isinstance(v, OID):
+                    if str(a.get(k)) != str(v):
+                        match = False
+                        break
+                elif a.get(k) != v:
+                    match = False
+                    break
+            if match:
+                return dict(a)
+        return None
+
+    def wa_find(q=None, *args, **kwargs):
+        q = q or {}
+        results = []
+        for a in _assets:
+            if all(a.get(k) == v for k, v in q.items()):
+                results.append(dict(a))
+        return iter(results)
+
+    def wa_update_one(q, update):
+        _asset_update_calls.append((q, update))
+        from bson import ObjectId as OID
+        for a in _assets:
+            for k, v in q.items():
+                if isinstance(v, OID):
+                    if str(a.get(k)) == str(v):
+                        a.update(update.get("$set", {}))
+                elif a.get(k) == v:
+                    a.update(update.get("$set", {}))
+        return MagicMock()
+
+    db.workflow_assets.find_one = wa_find_one
+    db.workflow_assets.find = wa_find
+    db.workflow_assets.update_one = wa_update_one
+    db._asset_update_calls = _asset_update_calls
+    db._assets = _assets
+
+    # stub contacts/leads/message_drafts for enrich_approval_requests
+    for col in ["contacts", "leads", "message_drafts"]:
+        m = MagicMock()
+        m.find_one.return_value = None
+        setattr(db, col, m)
+
+    return db
+
+
+def test_6k_approve_approval_request_auto_approves_asset():
+    """Approving an approval_request with workflow_asset_id auto-approves the linked asset."""
+    from bson import ObjectId
+    asset_id = ObjectId()
+    approval_id = ObjectId()
+    db = _make_db_6k(
+        approval_docs=[{
+            "_id": approval_id,
+            "workspace_slug": "ws-6k",
+            "status": "open",
+            "decision": None,
+            "workflow_asset_id": str(asset_id),
+            "request_type": "content_review",
+        }],
+        asset_docs=[{
+            "_id": asset_id,
+            "workspace_slug": "ws-6k",
+            "approval_state": "pending",
+            "distribution_state": "not_queued",
+        }],
+    )
+    p1, p2 = _patch_db(db)
+    with p1, p2:
+        client = TestClient(main.app)
+        resp = client.post(f"/approval-requests/{approval_id}/decision", json={"decision": "approve", "note": ""})
+    assert resp.status_code == 200
+
+    # The linked asset should have been updated to approval_state="approved"
+    asset_updates = [u for (_, u) in db._asset_update_calls if u.get("$set", {}).get("approval_state") == "approved"]
+    assert len(asset_updates) >= 1, "Expected workflow_assets.update_one called with approval_state='approved'"
+
+
+def test_6k_reject_approval_request_does_not_touch_asset():
+    """Rejecting an approval_request should NOT change the linked asset's approval_state."""
+    from bson import ObjectId
+    asset_id = ObjectId()
+    approval_id = ObjectId()
+    db = _make_db_6k(
+        approval_docs=[{
+            "_id": approval_id,
+            "workspace_slug": "ws-6k-rej",
+            "status": "open",
+            "decision": None,
+            "workflow_asset_id": str(asset_id),
+            "request_type": "content_review",
+        }],
+        asset_docs=[{
+            "_id": asset_id,
+            "workspace_slug": "ws-6k-rej",
+            "approval_state": "pending",
+            "distribution_state": "not_queued",
+        }],
+    )
+    p1, p2 = _patch_db(db)
+    with p1, p2:
+        client = TestClient(main.app)
+        resp = client.post(f"/approval-requests/{approval_id}/decision", json={"decision": "reject", "note": ""})
+    assert resp.status_code == 200
+
+    asset_approval_updates = [u for (_, u) in db._asset_update_calls if "approval_state" in u.get("$set", {})]
+    assert len(asset_approval_updates) == 0, "Rejecting should not auto-approve the asset"
+
+
+def test_6k_mark_published_creates_distribution_workflow_run():
+    """mark_published on a workflow asset creates a distribution workflow_run record."""
+    from bson import ObjectId
+    wf_run_id = str(ObjectId())
+    asset_id = ObjectId()
+    db = _make_db_6k(
+        asset_docs=[{
+            "_id": asset_id,
+            "workspace_slug": "ws-6k-dist",
+            "approval_state": "approved",
+            "distribution_state": "queued",
+            "workflow_run_id": wf_run_id,
+            "title": "Test Post",
+        }],
+    )
+    inserted_runs: list[dict] = []
+    _orig_insert = db.workflow_runs.insert_one
+    def tracking_insert(doc):
+        inserted_runs.append(dict(doc))
+        return _orig_insert(doc)
+    db.workflow_runs.insert_one = tracking_insert
+
+    p1, p2 = _patch_db(db)
+    with p1, p2:
+        client = TestClient(main.app)
+        resp = client.patch(f"/workflow-assets/{asset_id}/distribution", json={"action": "mark_published"})
+    assert resp.status_code == 200
+
+    dist_runs = [r for r in inserted_runs if r.get("run_type") == "distribution"]
+    assert len(dist_runs) == 1, "Expected one distribution workflow_run to be created"
+    assert dist_runs[0]["status"] == "completed"
+    assert dist_runs[0]["source_workflow_run_id"] == wf_run_id
+
+
+def test_6k_mark_published_last_asset_completes_content_build_run():
+    """When the last asset for a content_build run is published, the run transitions to 'completed'."""
+    from bson import ObjectId
+    cb_run_id = ObjectId()
+    asset_id = ObjectId()
+    db = _make_db_6k(
+        asset_docs=[{
+            "_id": asset_id,
+            "workspace_slug": "ws-6k-done",
+            "approval_state": "approved",
+            "distribution_state": "queued",
+            "workflow_run_id": str(cb_run_id),
+            "title": "Final Post",
+        }],
+        workflow_run_docs=[{
+            "_id": cb_run_id,
+            "workspace_slug": "ws-6k-done",
+            "run_type": "content_build",
+            "workflow_stage": 3,
+            "status": "needs_review",
+            "created_at": _utc_now(),
+        }],
+    )
+    p1, p2 = _patch_db(db)
+    with p1, p2:
+        client = TestClient(main.app)
+        resp = client.patch(f"/workflow-assets/{asset_id}/distribution", json={"action": "mark_published"})
+    assert resp.status_code == 200
+
+    # The content_build workflow_run should have been patched to "completed"
+    cb_run = db.workflow_runs.find_one({"_id": cb_run_id})
+    assert cb_run is not None
+    assert cb_run.get("status") == "completed", f"Expected 'completed', got {cb_run.get('status')!r}"
+

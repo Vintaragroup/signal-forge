@@ -801,6 +801,21 @@ function WorkflowRunSummaryCard({ run, onContinue, continueLabel }) {
 
 function ContinueWorkflowCTA({ discoveryRun, contentBuildRun, onRunContentBuild, onGoToReview, onGoToDistribution, readyToSendCount }) {
   // Determine the primary CTA based on workflow progression
+
+  // Phase 6K: all assets published — content_build run is fully completed
+  if (contentBuildRun?.status === "completed" && readyToSendCount === 0) {
+    return (
+      <div className="rounded-lg border border-slate-200 bg-slate-50 p-4">
+        <div className="flex items-center gap-3">
+          <div>
+            <div className="text-sm font-semibold text-slate-700">Workflow cycle complete</div>
+            <div className="text-xs text-slate-500 mt-0.5">All content assets from this build have been published or archived.</div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   if (readyToSendCount > 0) {
     return (
       <div className="rounded-lg border border-green-200 bg-green-50 p-4">
@@ -1366,6 +1381,15 @@ export default function WorkflowPage({ activeProfile = "custom", demoMode = fals
     try {
       const result = await api.decideApprovalRequest(item._id, { decision, note: notes[item._id] || "" });
       setNotice(result.message || "Approval decision saved. No outbound action taken.");
+      // Phase 6K: when approving an approval_request linked to a workflow_asset, optimistically
+      // set that asset's approval_state so Step 5 activates without waiting for loadWorkflow().
+      if (decision === "approve" && item.workflow_asset_id) {
+        setWorkflowAssets((prev) =>
+          prev.map((a) =>
+            a._id === item.workflow_asset_id ? { ...a, approval_state: "approved" } : a
+          )
+        );
+      }
       await loadWorkflow();
     } catch (error) {
       setNotice(error.message);
