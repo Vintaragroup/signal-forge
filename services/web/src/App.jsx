@@ -19,6 +19,9 @@ import ReportsPage from "./pages/ReportsPage.jsx";
 import WorkspacesPage from "./pages/WorkspacesPage.jsx";
 import CreativeStudioPage from "./pages/CreativeStudioPage.jsx";
 import AdminOnboardingPage from "./pages/AdminOnboardingPage.jsx";
+import ClientMemoryPage from "./pages/ClientMemoryPage.jsx";
+import OperationalDashboardPage from "./pages/OperationalDashboardPage.jsx";
+import RecommendationsDashboardPage from "./pages/RecommendationsDashboardPage.jsx";
 import { api, setAppWorkspace } from "./api.js";
 import { ROUTE_MAP } from "./navigation/routeRegistry.js";
 import { NAV_GROUPS } from "./navigation/navGroups.js";
@@ -40,6 +43,9 @@ const PAGE_COMPONENTS = {
   reports:          ReportsPage,
   workspaces:       WorkspacesPage,
   "admin-onboarding": AdminOnboardingPage,
+  "client-memory":    ClientMemoryPage,
+  "analytics-dashboard": OperationalDashboardPage,
+    "recommendations": RecommendationsDashboardPage,
 };
 
 export default function App() {

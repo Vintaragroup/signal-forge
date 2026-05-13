@@ -756,6 +756,104 @@ export const api = {
       method: "PATCH",
       body: JSON.stringify(payload),
     }),
+  // Phase 6N: memory context snapshot frozen at run time
+  workflowRunMemoryContext: (runId) =>
+    request(`/workflow-runs/${encodeURIComponent(runId)}/memory-context`),
+
+  // Phase 6M: Adaptive Client Operating Memory & Template Recommendation
+  foundationTemplates: () => request("/foundation-templates"),
+  getFoundationTemplate: (slug) => request(`/foundation-templates/${encodeURIComponent(slug)}`),
+
+  recommendTemplate: (payload) =>
+    request("/template-recommendation", { method: "POST", body: JSON.stringify(payload) }),
+
+  clientMemories: ({ workspaceSlug = "", clientProfileId = "", limit = 20 } = {}) => {
+    const params = new URLSearchParams();
+    if (workspaceSlug) params.set("workspace_slug", workspaceSlug);
+    if (clientProfileId) params.set("client_profile_id", clientProfileId);
+    params.set("limit", String(limit));
+    return request(`/client-memory?${params.toString()}`);
+  },
+  createClientMemory: (payload) =>
+    request("/client-memory", { method: "POST", body: JSON.stringify(payload) }),
+  updateClientMemory: (memoryId, payload) =>
+    request(`/client-memory/${encodeURIComponent(memoryId)}`, {
+      method: "PATCH",
+      body: JSON.stringify(payload),
+    }),
+  clientMemoryBrief: (memoryId) =>
+    request(`/client-memory/${encodeURIComponent(memoryId)}/brief`),
+
+  memoryUpdateProposals: ({ workspaceSlug = "", clientMemoryId = "", status = "", limit = 50 } = {}) => {
+    const params = new URLSearchParams();
+    if (workspaceSlug) params.set("workspace_slug", workspaceSlug);
+    if (clientMemoryId) params.set("client_memory_id", clientMemoryId);
+    if (status) params.set("status", status);
+    params.set("limit", String(limit));
+    return request(`/memory-update-proposals?${params.toString()}`);
+  },
+  createMemoryUpdateProposal: (payload) =>
+    request("/memory-update-proposals", { method: "POST", body: JSON.stringify(payload) }),
+  decideMemoryUpdateProposal: (proposalId, payload) =>
+    request(`/memory-update-proposals/${encodeURIComponent(proposalId)}`, {
+      method: "PATCH",
+      body: JSON.stringify(payload),
+    }),
+
+  // Phase 6O: Memory Governance, History & Health
+  clientMemoryHistory: (memoryId, limit = 50) =>
+    request(`/client-memory/${encodeURIComponent(memoryId)}/history?limit=${limit}`),
+  clientMemoryHealth: (memoryId) =>
+    request(`/client-memory/${encodeURIComponent(memoryId)}/health`),
+  rollbackClientMemory: (memoryId, payload) =>
+    request(`/client-memory/${encodeURIComponent(memoryId)}/rollback`, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  proposalDiff: (proposalId) =>
+    request(`/memory-update-proposals/${encodeURIComponent(proposalId)}/diff`),
+  proposalConflicts: (proposalId) =>
+    request(`/memory-update-proposals/${encodeURIComponent(proposalId)}/conflicts`),
+
+  // Phase 6P: Operational Analytics & Learning Dashboard
+  analyticsWorkflows: (workspaceSlug = "", days = 30) =>
+    request(`/analytics/workflows?workspace_slug=${encodeURIComponent(workspaceSlug)}&days=${days}`),
+  analyticsMemory: (workspaceSlug = "", days = 30) =>
+    request(`/analytics/memory?workspace_slug=${encodeURIComponent(workspaceSlug)}&days=${days}`),
+  analyticsDistribution: (workspaceSlug = "", days = 30) =>
+    request(`/analytics/distribution?workspace_slug=${encodeURIComponent(workspaceSlug)}&days=${days}`),
+  analyticsApprovals: (workspaceSlug = "", days = 30) =>
+    request(`/analytics/approvals?workspace_slug=${encodeURIComponent(workspaceSlug)}&days=${days}`),
+  analyticsTemplates: (workspaceSlug = "", days = 30) =>
+    request(`/analytics/templates?workspace_slug=${encodeURIComponent(workspaceSlug)}&days=${days}`),
+  analyticsClientHealth: (workspaceSlug = "", days = 30) =>
+    request(`/analytics/client-health?workspace_slug=${encodeURIComponent(workspaceSlug)}&days=${days}`),
+  analyticsLearningSignals: (workspaceSlug = "", days = 30) =>
+    request(`/analytics/learning-signals?workspace_slug=${encodeURIComponent(workspaceSlug)}&days=${days}`),
+  analyticsBottlenecks: (workspaceSlug = "", days = 30) =>
+    request(`/analytics/bottlenecks?workspace_slug=${encodeURIComponent(workspaceSlug)}&days=${days}`),
+
+  // Phase 6Q: Autonomous Optimization & Recommendation Engine
+  listRecommendations: (workspaceSlug = "", days = 30, status = "", recType = "") => {
+    const p = new URLSearchParams();
+    if (workspaceSlug) p.set("workspace_slug", workspaceSlug);
+    p.set("days", String(days));
+    if (status) p.set("status", status);
+    if (recType) p.set("rec_type", recType);
+    return request(`/recommendations?${p.toString()}`);
+  },
+  getRecommendation: (recId, workspaceSlug = "", days = 30) =>
+    request(`/recommendations/${encodeURIComponent(recId)}?workspace_slug=${encodeURIComponent(workspaceSlug)}&days=${days}`),
+  acceptRecommendation: (recId) =>
+    request(`/recommendations/${encodeURIComponent(recId)}/accept`, { method: "POST" }),
+  dismissRecommendation: (recId) =>
+    request(`/recommendations/${encodeURIComponent(recId)}/dismiss`, { method: "POST" }),
+  applyRecommendation: (recId) =>
+    request(`/recommendations/${encodeURIComponent(recId)}/apply`, { method: "POST" }),
+  recommendationsSummary: (workspaceSlug = "", days = 30) =>
+    request(`/recommendations/summary?workspace_slug=${encodeURIComponent(workspaceSlug)}&days=${days}`),
+  crossClientSignals: (days = 30) =>
+    request(`/recommendations/cross-client-signals?days=${days}`),
 };
 
 export { API_BASE_URL };

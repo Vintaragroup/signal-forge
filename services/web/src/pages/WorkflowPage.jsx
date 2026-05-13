@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowRight,
+  Brain,
   Check,
   Clock3,
   Compass,
@@ -798,6 +799,48 @@ function WorkflowRunSummaryCard({ run, onContinue, continueLabel }) {
 }
 
 // ── Phase 6H: ContinueWorkflowCTA ────────────────────────────────────────────
+
+// ── Phase 6N: MemoryContextPanel ─────────────────────────────────────────────
+function MemoryContextPanel({ run }) {
+  if (!run?.client_memory_version || !run?.memory_snapshot) return null;
+  const snap = run.memory_snapshot;
+  const vt = snap.voice_tone || {};
+  const toneParts = [vt.tone, vt.style].filter(Boolean);
+  const winning = (snap.winning_patterns || []).slice(0, 3);
+  const blocked = (snap.blocked_claims || []).slice(0, 3);
+  const hasSignals = toneParts.length + winning.length + blocked.length > 0;
+
+  return (
+    <div className="rounded-lg border border-violet-200 bg-violet-50 px-4 py-3 text-xs">
+      <div className="flex items-center gap-2 mb-2">
+        <Brain className="h-3.5 w-3.5 text-violet-500" />
+        <span className="font-semibold text-violet-700">
+          Using Client Memory v{run.client_memory_version}
+        </span>
+        {run.memory_context_hash && (
+          <span className="text-violet-400 font-mono text-[10px]">#{run.memory_context_hash.slice(0, 8)}</span>
+        )}
+      </div>
+      {hasSignals ? (
+        <div className="space-y-1">
+          {toneParts.length > 0 && (
+            <div className="text-violet-700">
+              <span className="font-medium">Tone:</span> {toneParts.join(", ")}
+            </div>
+          )}
+          {winning.map((p, i) => (
+            <div key={i} className="text-violet-600">✓ {p}</div>
+          ))}
+          {blocked.map((c, i) => (
+            <div key={i} className="text-amber-600">⚠ Blocked: {c}</div>
+          ))}
+        </div>
+      ) : (
+        <div className="text-violet-500 italic">Memory loaded — no patterns configured yet.</div>
+      )}
+    </div>
+  );
+}
 
 function ContinueWorkflowCTA({ discoveryRun, contentBuildRun, onRunContentBuild, onGoToReview, onGoToDistribution, readyToSendCount }) {
   // Determine the primary CTA based on workflow progression
@@ -1728,7 +1771,7 @@ export default function WorkflowPage({ activeProfile = "custom", demoMode = fals
         {(latestDiscoveryRun || latestContentBuildRun) && (
           <div className="mb-5 grid gap-4 sm:grid-cols-2">
             {latestDiscoveryRun && (
-              <div>
+              <div className="space-y-2">
                 <div className="text-[10px] font-semibold uppercase tracking-wide text-slate-400 mb-1.5">Last Discovery Run</div>
                 <WorkflowRunSummaryCard
                   run={latestDiscoveryRun}
@@ -1737,16 +1780,20 @@ export default function WorkflowPage({ activeProfile = "custom", demoMode = fals
                     : undefined}
                   continueLabel="Run Content Build"
                 />
+                {/* Phase 6N: memory context for this run */}
+                <MemoryContextPanel run={latestDiscoveryRun} />
               </div>
             )}
             {latestContentBuildRun && (
-              <div>
+              <div className="space-y-2">
                 <div className="text-[10px] font-semibold uppercase tracking-wide text-slate-400 mb-1.5">Last Content Build Run</div>
                 <WorkflowRunSummaryCard
                   run={latestContentBuildRun}
                   onContinue={() => openModal({ id: "content_build", label: "Content Build", agent_name: "content", task_type: "content_build", defaultModule: activeProfile !== "custom" ? activeProfile : "contractor_growth", defaultLimit: 10, defaultPriority: "normal", modalFields: [] })}
                   continueLabel="Run Again"
                 />
+                {/* Phase 6N: memory context for this run */}
+                <MemoryContextPanel run={latestContentBuildRun} />
               </div>
             )}
           </div>

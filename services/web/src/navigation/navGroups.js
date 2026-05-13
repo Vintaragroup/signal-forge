@@ -25,10 +25,10 @@ export const NAV_GROUPS = [
   },
   {
     id: "analytics",       label: "Analytics",       icon: BarChart3,       defaultRoute: "overview",
-    subRoutes: ["overview", "reports"],
+    subRoutes: ["overview", "reports", "analytics-dashboard", "recommendations"],
   },
   {
     id: "system",          label: "System",          icon: Settings,        defaultRoute: "workspaces",
-    subRoutes: ["workspaces", "admin-onboarding", "agents", "gpt-diagnostics", "demo"],
+    subRoutes: ["workspaces", "admin-onboarding", "client-memory", "agents", "gpt-diagnostics", "demo"],
   },
 ];

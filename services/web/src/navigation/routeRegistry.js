@@ -11,7 +11,10 @@
 
 import {
   Activity,
+  BarChart3,
   Bot,
+  Lightbulb,
+  Brain,
   Briefcase,
   Building2,
   Clapperboard,
@@ -43,8 +46,10 @@ export const ROUTES = [
   { id: "creative-studio", label: "Creative Studio",  icon: PenLine,       group: "campaign-studio", primary: true  },
 
   // ── Analytics ─────────────────────────────────────────────────────────────
-  { id: "overview",        label: "Overview",         icon: Gauge,         group: "analytics",       primary: true  },
-  { id: "reports",         label: "Reports",          icon: FileText,      group: "analytics",       primary: false },
+  { id: "overview",             label: "Overview",             icon: Gauge,     group: "analytics", primary: true  },
+  { id: "reports",              label: "Reports",              icon: FileText,  group: "analytics", primary: false },
+  { id: "analytics-dashboard",  label: "Operational Analytics",  icon: BarChart3,  group: "analytics", primary: false },
+  { id: "recommendations",       label: "Recommendations",         icon: Lightbulb, group: "analytics", primary: false },
 
   // ── System ────────────────────────────────────────────────────────────────
   { id: "workspaces",         label: "Workspaces",        icon: Briefcase,  group: "system", primary: true  },
@@ -52,6 +57,7 @@ export const ROUTES = [
   { id: "gpt-diagnostics",    label: "GPT Diagnostics",   icon: Activity,   group: "system", primary: false },
   { id: "demo",               label: "Demo Mode",         icon: Clapperboard, group: "system", primary: false },
   { id: "admin-onboarding",   label: "Client Onboarding", icon: UserCog,    group: "system", primary: false },
+  { id: "client-memory",      label: "Client Memory",     icon: Brain,      group: "system", primary: false },
 ];
 
 /** Keyed by route id — O(1) lookups for active-group detection and title derivation. */
