@@ -854,6 +854,34 @@ export const api = {
     request(`/recommendations/summary?workspace_slug=${encodeURIComponent(workspaceSlug)}&days=${days}`),
   crossClientSignals: (days = 30) =>
     request(`/recommendations/cross-client-signals?days=${days}`),
+
+  // Phase 6R: Autonomous Execution Policies & Safe Auto-Optimization
+  getAutonomyPolicies: (workspaceSlug = "") =>
+    request(`/autonomy/policies${workspaceSlug ? `?workspace_slug=${encodeURIComponent(workspaceSlug)}` : ""}`),
+  updateAutonomyPolicy: (workspace, body) =>
+    request(`/autonomy/policies/${encodeURIComponent(workspace)}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }),
+  listAutonomyActions: (workspaceSlug = "", status = "", actionType = "", limit = 50) => {
+    const p = new URLSearchParams();
+    if (workspaceSlug) p.set("workspace_slug", workspaceSlug);
+    if (status) p.set("status", status);
+    if (actionType) p.set("action_type", actionType);
+    p.set("limit", String(limit));
+    return request(`/autonomy/actions?${p.toString()}`);
+  },
+  getAutonomyAction: (actionId) =>
+    request(`/autonomy/actions/${encodeURIComponent(actionId)}`),
+  rollbackAutonomyAction: (actionId) =>
+    request(`/autonomy/actions/${encodeURIComponent(actionId)}/rollback`, { method: "POST" }),
+  pauseAutonomy: () =>
+    request("/autonomy/pause", { method: "POST" }),
+  resumeAutonomy: () =>
+    request("/autonomy/resume", { method: "POST" }),
+  getAutonomyAnalytics: (workspaceSlug = "", days = 30) =>
+    request(`/autonomy/analytics?workspace_slug=${encodeURIComponent(workspaceSlug)}&days=${days}`),
 };
 
 export { API_BASE_URL };

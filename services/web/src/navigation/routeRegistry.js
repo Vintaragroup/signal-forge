@@ -14,6 +14,7 @@ import {
   BarChart3,
   Bot,
   Lightbulb,
+  Shield,
   Brain,
   Briefcase,
   Building2,
@@ -50,6 +51,7 @@ export const ROUTES = [
   { id: "reports",              label: "Reports",              icon: FileText,  group: "analytics", primary: false },
   { id: "analytics-dashboard",  label: "Operational Analytics",  icon: BarChart3,  group: "analytics", primary: false },
   { id: "recommendations",       label: "Recommendations",         icon: Lightbulb, group: "analytics", primary: false },
+  { id: "autonomy-control",       label: "Autonomy Control",         icon: Shield,    group: "analytics", primary: false },
 
   // ── System ────────────────────────────────────────────────────────────────
   { id: "workspaces",         label: "Workspaces",        icon: Briefcase,  group: "system", primary: true  },

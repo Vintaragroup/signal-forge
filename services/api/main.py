@@ -13138,3 +13138,412 @@ def dismiss_recommendation(rec_id: str) -> dict:
 def apply_recommendation(rec_id: str) -> dict:
     return _update_recommendation_status(rec_id, "applied")
 
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PHASE 6R — Autonomous Execution Policies & Safe Auto-Optimization
+# ─────────────────────────────────────────────────────────────────────────────
+
+import uuid as _uuid_6r
+
+# ── Constants ──────────────────────────────────────────────────────────────────
+
+_RISK_LEVELS: dict[str, int] = {"low": 0, "medium": 1, "high": 2}
+
+_ACTION_META: dict[str, dict] = {
+    "auto_archive_stale_workflows":          {"risk_level": "low",    "rollback_supported": True},
+    "auto_promote_high_confidence_patterns": {"risk_level": "medium", "rollback_supported": True},
+    "auto_merge_duplicate_memory_entries":   {"risk_level": "low",    "rollback_supported": True},
+    "auto_adjust_template_priority":         {"risk_level": "low",    "rollback_supported": True},
+    "auto_prioritize_distribution_channel":  {"risk_level": "low",    "rollback_supported": True},
+    "auto_archive_low_quality_proposals":    {"risk_level": "low",    "rollback_supported": True},
+    "auto_escalate_bottlenecks":             {"risk_level": "medium", "rollback_supported": False},
+    "auto_recommend_template_switch":        {"risk_level": "medium", "rollback_supported": True},
+}
+
+_SAFETY_BLOCKED_ACTIONS: set[str] = {
+    "blocked_claim_changes",
+    "legal_compliance_memory",
+    "delete_workflow_history",
+    "mutate_immutable_lineage",
+}
+
+_DEFAULT_GLOBAL_POLICY: dict = {
+    "workspace_slug": "__global__",
+    "autonomy_enabled": True,
+    "max_autonomy_risk": "low",
+    "auto_apply_threshold": 0.90,
+    "require_review_for": ["template_adaptation", "blocked_claim_changes"],
+    "auto_archive_days": 30,
+}
+
+_AUTO_MIN_CONFIDENCE: float = 0.90
+_AUTO_MIN_EVIDENCE: int = 3
+
+# ── Helper Functions ────────────────────────────────────────────────────────────
+
+
+def _is_autonomy_paused(db) -> bool:
+    doc = db.autonomy_state.find_one({"_id": "global"})
+    return bool(doc and doc.get("paused", False))
+
+
+def _get_effective_policy(workspace_slug: str, db) -> dict:
+    """Return workspace policy merged on top of global policy defaults."""
+    global_doc = db.autonomy_policies.find_one({"workspace_slug": "__global__"}) or {}
+    policy: dict = {
+        **_DEFAULT_GLOBAL_POLICY,
+        **{k: v for k, v in global_doc.items() if k != "_id"},
+    }
+    if workspace_slug and workspace_slug != "__global__":
+        ws_doc = db.autonomy_policies.find_one({"workspace_slug": workspace_slug}) or {}
+        policy.update({k: v for k, v in ws_doc.items() if k != "_id"})
+    return policy
+
+
+def evaluate_autonomy_policy(
+    action_type: str,
+    confidence_score: float,
+    evidence_count: int,
+    workspace_slug: str,
+    db,
+) -> dict:
+    """Evaluate whether an action is permitted under current policies.
+
+    Returns dict with keys: allowed, requires_review, reason, policy.
+    """
+    # 1. Global pause check
+    if _is_autonomy_paused(db):
+        return {
+            "allowed": False,
+            "requires_review": False,
+            "reason": "autonomy_paused",
+            "policy": _DEFAULT_GLOBAL_POLICY,
+        }
+
+    policy = _get_effective_policy(workspace_slug, db)
+
+    # 2. Autonomy disabled
+    if not policy.get("autonomy_enabled", True):
+        return {
+            "allowed": False,
+            "requires_review": False,
+            "reason": "autonomy_disabled",
+            "policy": policy,
+        }
+
+    # 3. Safety guardrails — hard block, no operator override
+    if action_type in _SAFETY_BLOCKED_ACTIONS:
+        return {
+            "allowed": False,
+            "requires_review": False,
+            "reason": "safety_guardrail",
+            "policy": policy,
+        }
+
+    requires_review = False
+    reason = "auto_apply"
+
+    # 4. Risk level check
+    meta = _ACTION_META.get(action_type, {"risk_level": "high", "rollback_supported": False})
+    action_risk = _RISK_LEVELS.get(meta["risk_level"], 2)
+    max_risk = _RISK_LEVELS.get(policy.get("max_autonomy_risk", "low"), 0)
+    if action_risk > max_risk:
+        requires_review = True
+        reason = "risk_exceeds_policy"
+
+    # 5. Explicitly listed for operator review
+    if action_type in policy.get("require_review_for", []):
+        requires_review = True
+        reason = "policy_requires_review"
+
+    # 6. Confidence threshold
+    threshold = float(policy.get("auto_apply_threshold", _AUTO_MIN_CONFIDENCE))
+    if confidence_score < threshold:
+        requires_review = True
+        reason = "confidence_below_threshold"
+
+    # 7. Minimum evidence count
+    if evidence_count < _AUTO_MIN_EVIDENCE:
+        requires_review = True
+        reason = "insufficient_evidence"
+
+    return {
+        "allowed": True,
+        "requires_review": requires_review,
+        "reason": reason,
+        "policy": policy,
+    }
+
+
+def simulate_autonomy_action(
+    action_type: str,
+    workspace_slug: str,
+    params: dict,
+    db,
+) -> dict:
+    """Generate a simulation/diff preview before applying an autonomous action."""
+    meta = _ACTION_META.get(action_type, {"risk_level": "unknown", "rollback_supported": False})
+
+    _change_map: dict[str, list[str]] = {
+        "auto_archive_stale_workflows": [
+            f"Archive workflows inactive for >{params.get('days', 30)} days",
+        ],
+        "auto_promote_high_confidence_patterns": [
+            "Promote pattern to approved status",
+            "Increase template confidence score",
+        ],
+        "auto_merge_duplicate_memory_entries": [
+            "Merge duplicate memory entries",
+            f"Remove {params.get('duplicate_count', 1)} redundant entries",
+        ],
+        "auto_adjust_template_priority": [
+            f"Adjust template priority from {params.get('old_priority', 'medium')} to {params.get('new_priority', 'high')}",
+        ],
+        "auto_prioritize_distribution_channel": [
+            f"Set channel '{params.get('channel', 'unknown')}' as primary",
+        ],
+        "auto_archive_low_quality_proposals": [
+            f"Archive {params.get('proposal_count', 0)} low-quality proposals",
+        ],
+        "auto_escalate_bottlenecks": [
+            "Flag bottleneck for operator review",
+            "Create escalation record",
+        ],
+        "auto_recommend_template_switch": [
+            f"Switch template from '{params.get('current_template', '?')}' to '{params.get('target_template', '?')}'",
+        ],
+    }
+    changes = _change_map.get(action_type, ["Apply change"])
+
+    rollback_complexity: str
+    if not meta["rollback_supported"]:
+        rollback_complexity = "none"
+    elif meta["risk_level"] == "low":
+        rollback_complexity = "simple"
+    else:
+        rollback_complexity = "moderate"
+
+    return {
+        "action_type": action_type,
+        "workspace_slug": workspace_slug,
+        "expected_changes": changes,
+        "impact_summary": "This change would: " + "; ".join(changes),
+        "conflict_detected": False,
+        "rollback_complexity": rollback_complexity,
+        "rollback_supported": meta["rollback_supported"],
+        "risk_level": meta["risk_level"],
+        "estimated_confidence_gain": params.get("estimated_confidence_gain", 0.0),
+        "params": params,
+    }
+
+
+def _new_action_id() -> str:
+    return _uuid_6r.uuid4().hex[:16]
+
+
+def _now_6r() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _compute_autonomy_analytics(db, workspace_slug: str = "", days: int = 30) -> dict:
+    query: dict = {}
+    if workspace_slug:
+        query["workspace_slug"] = workspace_slug
+    if days > 0:
+        since = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+        query["created_at"] = {"$gte": since}
+
+    actions = list(db.autonomy_action_logs.find(query, {"_id": 0}))
+    total = len(actions)
+    applied = sum(1 for a in actions if a.get("status") in ("applied", "auto_applied"))
+    rolled_back = sum(1 for a in actions if a.get("status") == "rolled_back")
+    blocked = sum(1 for a in actions if a.get("status") in ("blocked", "auto_blocked"))
+    pending = sum(1 for a in actions if a.get("status") == "pending")
+    overridden = sum(1 for a in actions if a.get("status") == "operator_overridden")
+
+    auto_apply_success_rate = round(applied / total, 4) if total > 0 else 0.0
+    rollback_rate = round(rolled_back / applied, 4) if applied > 0 else 0.0
+    operator_override_rate = round(overridden / total, 4) if total > 0 else 0.0
+
+    by_type: dict[str, int] = {}
+    by_risk: dict[str, int] = {}
+    for a in actions:
+        t = a.get("action_type", "unknown")
+        by_type[t] = by_type.get(t, 0) + 1
+        r = a.get("risk_level", "unknown")
+        by_risk[r] = by_risk.get(r, 0) + 1
+
+    return {
+        "total_actions": total,
+        "applied_actions": applied,
+        "rolled_back_actions": rolled_back,
+        "blocked_actions": blocked,
+        "pending_actions": pending,
+        "operator_override_count": overridden,
+        "auto_apply_success_rate": auto_apply_success_rate,
+        "rollback_rate": rollback_rate,
+        "operator_override_rate": operator_override_rate,
+        "by_action_type": by_type,
+        "by_risk_level": by_risk,
+        "autonomy_paused": _is_autonomy_paused(db),
+        "days": days,
+    }
+
+
+# ── Endpoints ──────────────────────────────────────────────────────────────────
+
+
+@app.get("/autonomy/policies")
+def get_autonomy_policies(workspace_slug: str = Query("")) -> dict:
+    client = get_client()
+    try:
+        db = get_database(client)
+        policies: list[dict] = []
+        effective_global = _get_effective_policy("", db)
+        policies.append(effective_global)
+        if workspace_slug:
+            ws_policy = _get_effective_policy(workspace_slug, db)
+            ws_policy["workspace_slug"] = workspace_slug
+            if ws_policy != effective_global:
+                policies.append(ws_policy)
+        else:
+            for doc in db.autonomy_policies.find(
+                {"workspace_slug": {"$ne": "__global__"}}, {"_id": 0}
+            ):
+                policies.append(dict(doc))
+        paused = _is_autonomy_paused(db)
+        return {"policies": policies, "autonomy_paused": paused}
+    finally:
+        client.close()
+
+
+@app.patch("/autonomy/policies/{workspace}")
+def update_autonomy_policy(workspace: str, payload: dict) -> dict:
+    client = get_client()
+    try:
+        db = get_database(client)
+        update = {k: v for k, v in payload.items() if k not in ("_id", "workspace_slug")}
+        update["workspace_slug"] = workspace
+        update["updated_at"] = _now_6r()
+        db.autonomy_policies.update_one(
+            {"workspace_slug": workspace},
+            {"$set": update},
+            upsert=True,
+        )
+        effective = _get_effective_policy(
+            workspace if workspace != "__global__" else "", db
+        )
+        return {"policy": effective, "workspace": workspace}
+    finally:
+        client.close()
+
+
+@app.get("/autonomy/actions")
+def list_autonomy_actions(
+    workspace_slug: str = Query(""),
+    status: str = Query(""),
+    action_type: str = Query(""),
+    limit: int = Query(50, ge=1, le=200),
+) -> dict:
+    client = get_client()
+    try:
+        db = get_database(client)
+        query: dict = {}
+        if workspace_slug:
+            query["workspace_slug"] = workspace_slug
+        if status:
+            query["status"] = status
+        if action_type:
+            query["action_type"] = action_type
+        actions = list(
+            db.autonomy_action_logs.find(query, {"_id": 0})
+            .sort("created_at", -1)
+            .limit(limit)
+        )
+        return {"actions": actions, "total": len(actions)}
+    finally:
+        client.close()
+
+
+@app.get("/autonomy/actions/{action_id}")
+def get_autonomy_action(action_id: str) -> dict:
+    client = get_client()
+    try:
+        db = get_database(client)
+        doc = db.autonomy_action_logs.find_one({"id": action_id}, {"_id": 0})
+        if not doc:
+            raise HTTPException(status_code=404, detail="Action not found")
+        return dict(doc)
+    finally:
+        client.close()
+
+
+@app.post("/autonomy/actions/{action_id}/rollback")
+def rollback_autonomy_action(action_id: str) -> dict:
+    client = get_client()
+    try:
+        db = get_database(client)
+        doc = db.autonomy_action_logs.find_one({"id": action_id})
+        if not doc:
+            raise HTTPException(status_code=404, detail="Action not found")
+        if doc.get("status") not in ("applied", "auto_applied"):
+            raise HTTPException(
+                status_code=400,
+                detail=f"Cannot rollback action with status '{doc.get('status')}'",
+            )
+        meta = _ACTION_META.get(doc.get("action_type", ""), {"rollback_supported": False})
+        if not meta.get("rollback_supported", False):
+            raise HTTPException(
+                status_code=400, detail="Action type does not support rollback"
+            )
+        db.autonomy_action_logs.update_one(
+            {"id": action_id},
+            {"$set": {"status": "rolled_back", "rolled_back_at": _now_6r()}},
+        )
+        return {"action_id": action_id, "status": "rolled_back"}
+    finally:
+        client.close()
+
+
+@app.post("/autonomy/pause")
+def pause_autonomy() -> dict:
+    client = get_client()
+    try:
+        db = get_database(client)
+        db.autonomy_state.update_one(
+            {"_id": "global"},
+            {"$set": {"paused": True, "paused_at": _now_6r()}},
+            upsert=True,
+        )
+        return {"autonomy_paused": True}
+    finally:
+        client.close()
+
+
+@app.post("/autonomy/resume")
+def resume_autonomy() -> dict:
+    client = get_client()
+    try:
+        db = get_database(client)
+        db.autonomy_state.update_one(
+            {"_id": "global"},
+            {"$set": {"paused": False, "resumed_at": _now_6r()}},
+            upsert=True,
+        )
+        return {"autonomy_paused": False}
+    finally:
+        client.close()
+
+
+@app.get("/autonomy/analytics")
+def get_autonomy_analytics(
+    workspace_slug: str = Query(""),
+    days: int = Query(30, ge=0, le=365),
+) -> dict:
+    client = get_client()
+    try:
+        db = get_database(client)
+        return _compute_autonomy_analytics(db, workspace_slug, days)
+    finally:
+        client.close()
+
