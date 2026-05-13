@@ -1452,8 +1452,10 @@ export default function WorkflowPage({ activeProfile = "custom", demoMode = fals
       const result = await api.updateWorkflowAssetDistribution(asset._id, payload);
       setNotice(result.message || "Distribution state updated.");
       setWorkflowAssets((prev) => prev.map((item) => (item._id === asset._id ? result.item : item)));
-      if (action === "mark_published") {
+      if (action === "mark_published" || action === "archive") {
         setPublishDraftOpen((current) => ({ ...current, [asset._id]: false }));
+        // Refresh workflow_runs so content_build completion state propagates immediately
+        loadWorkflow();
       }
     } catch (error) {
       setNotice(error.message);
@@ -1612,13 +1614,15 @@ export default function WorkflowPage({ activeProfile = "custom", demoMode = fals
     if (discoveryDoneToday && !contentBuildRunCompleted) return 2;
     // After content_build, route to Step 4 for review — driven by workflow_run lineage
     // Phase 6I: contentBuildApprovals (workflow_run-linked) replaces legacy contentApprovals routing
+    // Lifecycle fully complete: content_build done + nothing in distribution queue → prompt new cycle
+    if (latestContentBuildRun?.status === "completed" && activeDistributionWorkCount === 0) return 2;
     if (contentBuildRunCompleted || contentBuildApprovals.length) return 4;
     if (awaitingResponse.length || interested.length || booked.length) return 6;
     if (openDeals.length || closedWon.length) return 7;
     // Discovery done but no content build yet — show Step 2 to prompt Content Build run
     if (discoveryDoneToday) return 2;
     return 1;
-  }, [activeTask?.status, draftsNeedingReview.length, contentBuildApprovals.length, readyToSend.length, activeDistributionWorkCount, awaitingResponse.length, interested.length, booked.length, openDeals.length, closedWon.length, discoveryDoneToday, contentBuildRunCompleted]);
+  }, [activeTask?.status, draftsNeedingReview.length, contentBuildApprovals.length, readyToSend.length, activeDistributionWorkCount, awaitingResponse.length, interested.length, booked.length, openDeals.length, closedWon.length, discoveryDoneToday, contentBuildRunCompleted, latestContentBuildRun?.status]);
 
   // Sync expandedStep with nextStep unless the user has manually selected a step
   useEffect(() => {

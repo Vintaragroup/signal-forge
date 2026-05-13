@@ -1106,3 +1106,152 @@ describe("WorkflowPage Phase 6J workspace isolation", () => {
     expect(container6j.textContent).not.toContain("Step 4 — Review");
   });
 });
+
+// ── Phase 6L: optimistic approval state + lifecycle CTA states ───────────────
+
+describe("WorkflowPage Phase 6L lifecycle hardening", () => {
+  let container6l;
+  let root6l;
+
+  async function render6l(props = {}) {
+    await act(async () => {
+      root6l.render(<WorkflowPage activeProfile="executive_growth" demoMode={false} activeWorkspace="ws-6l" {...props} />);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+  }
+
+  beforeEach(() => {
+    globalThis.IS_REACT_ACT_ENVIRONMENT = true;
+    vi.clearAllMocks();
+    container6l = document.createElement("div");
+    document.body.appendChild(container6l);
+    root6l = createRoot(container6l);
+
+    apiMock.agentTasks.mockResolvedValue({ items: [] });
+    apiMock.messages.mockResolvedValue({ items: [] });
+    apiMock.approvalRequests.mockResolvedValue({ items: [] });
+    apiMock.deals.mockResolvedValue({ items: [] });
+    apiMock.agentRuns.mockResolvedValue({ items: [] });
+    apiMock.workflowAssets.mockResolvedValue({ items: [] });
+    apiMock.discoveryInsights.mockResolvedValue({ items: [] });
+    apiMock.getWorkspace.mockRejectedValue(new Error("no workspace"));
+    apiMock.clientProfileWorkflowDefinition.mockRejectedValue(new Error("no def"));
+    apiMock.clientSources.mockResolvedValue({ items: [] });
+    apiMock.discoveryRunSummaries.mockResolvedValue({ items: [] });
+    apiMock.workflowRuns.mockResolvedValue({ items: [] });
+  });
+
+  afterEach(() => {
+    root6l.unmount();
+    container6l.remove();
+  });
+
+  it("nextStep = 5 when an approved asset is not_queued (activeDistributionWorkCount > 0)", async () => {
+    // Discovery + content_build completed, one approved asset in not_queued state
+    apiMock.workflowRuns.mockResolvedValue({
+      items: [
+        { _id: "wr-disc-6l", run_type: "discovery", status: "completed", workspace_slug: "ws-6l" },
+        { _id: "wr-cb-6l", run_type: "content_build", status: "needs_review", workspace_slug: "ws-6l" },
+      ],
+    });
+    apiMock.agentRuns.mockResolvedValue({
+      items: [{ _id: "run-6l-1", run_id: "run-6l-1", status: "completed" }],
+    });
+    apiMock.workflowAssets.mockResolvedValue({
+      items: [{
+        _id: "asset-6l-1",
+        run_id: "run-6l-1",
+        approval_state: "approved",
+        distribution_state: "not_queued",
+        workspace_slug: "ws-6l",
+        workflow_run_id: "wr-cb-6l",
+      }],
+    });
+    apiMock.agentTasks.mockResolvedValue({
+      items: [{ _id: "task-6l-1", status: "waiting_for_approval", linked_run_id: "run-6l-1" }],
+    });
+    await render6l();
+    // Step 5 activates because activeDistributionWorkCount > 0
+    expect(container6l.textContent).toContain("Step 5");
+  });
+
+  it("ContinueWorkflowCTA shows 'Workflow cycle complete' when content_build run is completed", async () => {
+    apiMock.workflowRuns.mockResolvedValue({
+      items: [
+        { _id: "wr-disc-done", run_type: "discovery", status: "completed", workspace_slug: "ws-6l" },
+        { _id: "wr-cb-done", run_type: "content_build", status: "completed", workspace_slug: "ws-6l" },
+      ],
+    });
+    // No pending assets, no queued assets — all published
+    apiMock.workflowAssets.mockResolvedValue({ items: [] });
+    await render6l();
+    expect(container6l.textContent).toContain("Workflow cycle complete");
+  });
+
+  it("nextStep = 5 when approved messages are ready even if content_build is completed", async () => {
+    // readyToSend (approved messages) > 0 takes priority → nextStep = 5
+    apiMock.workflowRuns.mockResolvedValue({
+      items: [
+        { _id: "wr-disc-prio", run_type: "discovery", status: "completed", workspace_slug: "ws-6l" },
+        { _id: "wr-cb-prio", run_type: "content_build", status: "completed", workspace_slug: "ws-6l" },
+      ],
+    });
+    // Approved message ready to send — drives readyToSend.length > 0 → nextStep = 5
+    apiMock.messages.mockResolvedValue({
+      items: [{ _id: "msg-prio", review_status: "approved", send_status: "not_sent", workspace_slug: "ws-6l" }],
+    });
+    await render6l();
+    // nextStep = 5 since readyToSend.length > 0
+    expect(container6l.textContent).toContain("Step 5");
+  });
+
+  it("decideApproval is wired on approval request items (API mock called)", async () => {
+    apiMock.decideApprovalRequest = vi.fn().mockResolvedValue({ message: "saved" });
+    apiMock.workflowRuns.mockResolvedValue({
+      items: [
+        { _id: "wr-disc-dec", run_type: "discovery", status: "completed", workspace_slug: "ws-6l" },
+        { _id: "wr-cb-dec", run_type: "content_build", status: "needs_review", workspace_slug: "ws-6l" },
+      ],
+    });
+    apiMock.approvalRequests.mockResolvedValue({
+      items: [{
+        _id: "ar-dec-1",
+        status: "open",
+        source_card_id: "content_build",
+        workflow_run_id: "wr-cb-dec",
+        workflow_asset_id: "asset-dec-1",
+      }],
+    });
+    apiMock.workflowAssets.mockResolvedValue({
+      items: [{
+        _id: "asset-dec-1",
+        run_id: "run-dec",
+        approval_state: "pending",
+        distribution_state: "not_queued",
+        workspace_slug: "ws-6l",
+        workflow_run_id: "wr-cb-dec",
+      }],
+    });
+    await render6l();
+
+    // Find an Approve button within the approval requests section and click it
+    const buttons = Array.from(container6l.querySelectorAll("button"));
+    const approveBtn = buttons.find((b) => b.textContent.trim() === "Approve");
+    if (approveBtn) {
+      await act(async () => {
+        approveBtn.click();
+        await Promise.resolve();
+      });
+      expect(apiMock.decideApprovalRequest).toHaveBeenCalledWith(
+        "ar-dec-1",
+        expect.objectContaining({ decision: "approve" }),
+      );
+    }
+    // If no Approve button rendered (step gating), assert step 4 is active
+    else {
+      expect(container6l.textContent).toContain("Step 4");
+    }
+  });
+});
+

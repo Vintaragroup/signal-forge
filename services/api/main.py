@@ -1752,37 +1752,43 @@ def update_workflow_asset_distribution(asset_id: str, payload: WorkflowAssetDist
             _wf_run_id = updated.get("workflow_run_id")
             _ws = updated.get("workspace_slug") or ""
             _now = utc_now()
-            # Create a distribution workflow_run linked to the content_build run
-            dist_run: dict[str, Any] = {
-                "workspace_slug": _ws,
-                "client_profile_id": None,
-                "workflow_stage": 5,
+            # Phase 6L: guard against duplicate distribution runs for the same asset
+            _existing_dist = db.workflow_runs.find_one({
                 "run_type": "distribution",
-                "status": "completed",
-                "title": "Distribution Run",
-                "summary": f"Asset published: {updated.get('title', 'Untitled')}",
-                "source_task_id": None,
-                "source_agent_run_id": None,
-                "source_workflow_run_id": _wf_run_id or None,
-                "inputs": {
-                    "asset_id": asset_id,
-                    "distribution_channel": updates.get("distribution_channel"),
-                    "published_url": updates.get("published_url"),
-                },
-                "outputs": {
-                    "assets_published": 1,
-                    "workflow_run_id": None,  # filled after insert
-                },
-                "started_at": _now,
-                "completed_at": _now,
-                "created_at": _now,
-                "updated_at": _now,
-            }
-            dist_result = db.workflow_runs.insert_one(dist_run)
-            db.workflow_runs.update_one(
-                {"_id": dist_result.inserted_id},
-                {"$set": {"outputs.workflow_run_id": str(dist_result.inserted_id)}},
-            )
+                "inputs.asset_id": asset_id,
+            })
+            if not _existing_dist:
+                # Create a distribution workflow_run linked to the content_build run
+                dist_run: dict[str, Any] = {
+                    "workspace_slug": _ws,
+                    "client_profile_id": None,
+                    "workflow_stage": 5,
+                    "run_type": "distribution",
+                    "status": "completed",
+                    "title": "Distribution Run",
+                    "summary": f"Asset published: {updated.get('title', 'Untitled')}",
+                    "source_task_id": None,
+                    "source_agent_run_id": None,
+                    "source_workflow_run_id": _wf_run_id or None,
+                    "inputs": {
+                        "asset_id": asset_id,
+                        "distribution_channel": updates.get("distribution_channel"),
+                        "published_url": updates.get("published_url"),
+                    },
+                    "outputs": {
+                        "assets_published": 1,
+                        "workflow_run_id": None,  # filled after insert
+                    },
+                    "started_at": _now,
+                    "completed_at": _now,
+                    "created_at": _now,
+                    "updated_at": _now,
+                }
+                dist_result = db.workflow_runs.insert_one(dist_run)
+                db.workflow_runs.update_one(
+                    {"_id": dist_result.inserted_id},
+                    {"$set": {"outputs.workflow_run_id": str(dist_result.inserted_id)}},
+                )
             # Check if all assets for this content_build workflow_run are published/archived
             if _wf_run_id:
                 _terminal = {"published", "archived"}
@@ -2889,6 +2895,175 @@ def decide_approval_request(approval_id: str, payload: ApprovalDecisionRequest) 
                 "simulation_only": True,
             }
         )
+    finally:
+        client.close()
+
+
+# ---------------------------------------------------------------------------
+# Phase 6L — Workflow Lineage & Lifecycle Summary endpoints
+# ---------------------------------------------------------------------------
+
+@app.get("/workflow-lineage")
+def workflow_lineage(
+    workspace_slug: str = Query(""),
+    limit: int = Query(5, ge=1, le=20),
+) -> dict:
+    """Return a structured lineage graph: discovery → content_build → assets → distribution runs.
+
+    Each item in ``cycles`` represents one content-build cycle anchored by a content_build
+    workflow_run and enriched with its parent discovery run, child assets, and per-asset
+    distribution runs.
+    """
+    client = get_client()
+    try:
+        db = get_database(client)
+        q: dict[str, Any] = {}
+        if workspace_slug:
+            q["workspace_slug"] = workspace_slug
+
+        # Fetch recent content_build runs as the anchor for each cycle
+        cb_runs = list(
+            db.workflow_runs.find({**q, "run_type": "content_build"})
+            .sort([("created_at", -1)])
+            .limit(limit)
+        )
+
+        cycles = []
+        for cb in cb_runs:
+            cb_id_str = str(cb["_id"])
+
+            # Parent discovery run (linked via source_workflow_run_id → content_build, or
+            # same workspace, run_type=discovery, created just before this cb run)
+            disc_run = None
+            src_disc_id = cb.get("source_workflow_run_id")
+            if src_disc_id and ObjectId.is_valid(src_disc_id):
+                disc_run = db.workflow_runs.find_one({"_id": ObjectId(src_disc_id), "run_type": "discovery"})
+            if not disc_run and workspace_slug:
+                # Fallback: most recent discovery run in the same workspace created before this cb
+                disc_run = db.workflow_runs.find_one(
+                    {**q, "run_type": "discovery", "created_at": {"$lte": cb.get("created_at", utc_now())}},
+                    sort=[("created_at", -1)],
+                )
+
+            # Assets belonging to this content_build run
+            raw_assets = list(db.workflow_assets.find({"workflow_run_id": cb_id_str}))
+            asset_nodes = []
+            for asset in raw_assets:
+                asset_id_str = str(asset["_id"])
+                dist_runs = list(
+                    db.workflow_runs.find({"run_type": "distribution", "inputs.asset_id": asset_id_str})
+                    .sort([("created_at", -1)])
+                )
+                asset_nodes.append({
+                    "asset": serialize(normalize_workflow_asset(asset)),
+                    "distribution_runs": serialize(dist_runs),
+                })
+
+            cycles.append({
+                "content_build_run": serialize(cb),
+                "discovery_run": serialize(disc_run) if disc_run else None,
+                "assets": asset_nodes,
+            })
+
+        return {
+            "workspace_slug": workspace_slug,
+            "cycles": cycles,
+            "count": len(cycles),
+        }
+    finally:
+        client.close()
+
+
+@app.get("/workflow-lifecycle-summary")
+def workflow_lifecycle_summary(workspace_slug: str = Query("")) -> dict:
+    """Return a concise snapshot of the current lifecycle state for a workspace.
+
+    ``lifecycle_stage`` reflects the highest active stage:
+    ``complete`` → ``distribution`` → ``review`` → ``content_build`` → ``discovery`` → ``idle``
+    """
+    client = get_client()
+    try:
+        db = get_database(client)
+        q: dict[str, Any] = {}
+        if workspace_slug:
+            q["workspace_slug"] = workspace_slug
+
+        # Latest runs by type
+        def _latest(run_type: str) -> dict | None:
+            return db.workflow_runs.find_one({**q, "run_type": run_type}, sort=[("created_at", -1)])
+
+        disc = _latest("discovery")
+        cb = _latest("content_build")
+
+        # Assets for the latest content_build run
+        cb_id_str = str(cb["_id"]) if cb else None
+        assets: list[dict] = list(db.workflow_assets.find({"workflow_run_id": cb_id_str})) if cb_id_str else []
+        dist_runs = list(db.workflow_runs.find({**q, "run_type": "distribution"}).sort([("created_at", -1)]).limit(50)) if cb_id_str else []
+
+        # Open approval requests
+        open_approvals = list(db.approval_requests.find({**q, "status": "open"})) if workspace_slug else []
+
+        # Asset breakdowns
+        def _count_assets(state: str) -> int:
+            return sum(1 for a in assets if (a.get("distribution_state") or "not_queued") == state)
+
+        approved_count = sum(1 for a in assets if a.get("approval_state") == "approved")
+        pending_count = sum(1 for a in assets if a.get("approval_state") == "pending")
+        queued = _count_assets("queued")
+        published = _count_assets("published")
+        archived = _count_assets("archived")
+        not_queued = _count_assets("not_queued")
+
+        # Determine lifecycle stage
+        is_complete = (
+            cb is not None
+            and cb.get("status") == "completed"
+            and len(assets) > 0
+            and all((a.get("distribution_state") or "not_queued") in {"published", "archived"} for a in assets)
+        )
+
+        if is_complete:
+            stage = "complete"
+        elif published > 0 or queued > 0:
+            stage = "distribution"
+        elif open_approvals or approved_count > 0 or pending_count > 0:
+            stage = "review"
+        elif cb is not None:
+            stage = "content_build"
+        elif disc is not None:
+            stage = "discovery"
+        else:
+            stage = "idle"
+
+        return serialize({
+            "workspace_slug": workspace_slug,
+            "lifecycle_stage": stage,
+            "is_complete": is_complete,
+            "discovery": {
+                "run_id": str(disc["_id"]) if disc else None,
+                "status": disc.get("status") if disc else None,
+                "insights_generated": ((disc.get("outputs") or {}).get("insights_generated")) if disc else None,
+                "created_at": disc.get("created_at") if disc else None,
+            },
+            "content_build": {
+                "run_id": cb_id_str,
+                "status": cb.get("status") if cb else None,
+                "asset_count": len(assets),
+                "created_at": cb.get("created_at") if cb else None,
+            },
+            "review": {
+                "open_approvals": len(open_approvals),
+                "approved_assets": approved_count,
+                "pending_assets": pending_count,
+            },
+            "distribution": {
+                "not_queued": not_queued,
+                "queued": queued,
+                "published": published,
+                "archived": archived,
+                "distribution_runs": len(dist_runs),
+            },
+        })
     finally:
         client.close()
 
