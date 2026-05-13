@@ -5,7 +5,7 @@ import zipfile
 import inspect
 from collections import Counter, defaultdict
 from contextlib import asynccontextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Literal, Optional
 
@@ -1692,6 +1692,28 @@ def decide_workflow_asset(asset_id: str, payload: dict) -> dict:
             }},
         )
         updated = db.workflow_assets.find_one({"_id": ObjectId(asset_id)})
+
+        # Phase 6M: auto-propose memory update on approval
+        if decision == "approve" and updated:
+            _ws6m = updated.get("workspace_slug") or ""
+            _asset_type = updated.get("asset_type") or "content"
+            _platform = updated.get("platform") or ""
+            _pattern = f"Operator approved {_asset_type}{' on ' + _platform if _platform else ''}"
+            _try_propose_memory_update(
+                db,
+                workspace_slug=_ws6m,
+                workflow_run_id=updated.get("workflow_run_id") or "",
+                source="asset_approval",
+                proposed_change={
+                    "field": "winning_patterns",
+                    "change_type": "add",
+                    "new_value": _pattern,
+                    "old_value": None,
+                },
+                evidence=f"Asset '{updated.get('title', 'Untitled')}' was approved by operator.",
+                confidence=0.65,
+            )
+
         return {"item": serialize([normalize_workflow_asset(updated)])[0], "message": f"Asset {decision}d."}
     finally:
         client.close()
@@ -1806,6 +1828,25 @@ def update_workflow_asset_distribution(asset_id: str, payload: WorkflowAssetDist
                         )
                     except Exception:
                         pass  # non-fatal
+
+        # Phase 6M: auto-propose memory update on mark_published
+        if action == "mark_published" and updated:
+            _ws6m_d = updated.get("workspace_slug") or ""
+            _channel = (updates.get("distribution_channel") or updated.get("distribution_channel") or "unknown")
+            _try_propose_memory_update(
+                db,
+                workspace_slug=_ws6m_d,
+                workflow_run_id=updated.get("workflow_run_id") or "",
+                source="mark_published",
+                proposed_change={
+                    "field": "distribution_preferences",
+                    "change_type": "update",
+                    "new_value": {"last_published_channel": _channel},
+                    "old_value": None,
+                },
+                evidence=f"Asset '{updated.get('title', 'Untitled')}' published on {_channel}.",
+                confidence=0.6,
+            )
 
         message_map = {
             "queue": "Asset queued for manual distribution.",
@@ -2243,6 +2284,9 @@ def _run_content_discovery_task(db, task: dict, started_at: Any) -> dict:
     input_cfg = task.get("input_config") or {}
     max_insights = max(1, min(int(input_cfg.get("limit") or 4), 10))
 
+    # Phase 6N: load client memory context for memory-aware execution
+    memory_ctx = build_memory_context(db, ws)
+
     run_id = str(_ObjId())
 
     # Mark task as running
@@ -2367,7 +2411,15 @@ def _run_content_discovery_task(db, task: dict, started_at: Any) -> dict:
                 "platforms_checked": platforms_from_insights,
                 "configured_sources_used": source_labels,
                 "recommended_next_step": "content_build",
+                # Phase 6N
+                "memory_informed": memory_ctx.get("has_memory", False),
+                "memory_version_used": memory_ctx.get("memory_version") if memory_ctx.get("has_memory") else None,
             },
+            # Phase 6N: memory traceability
+            "client_memory_id": memory_ctx.get("memory_id", ""),
+            "client_memory_version": memory_ctx.get("memory_version", 0),
+            "memory_context_hash": memory_ctx.get("memory_context_hash", ""),
+            "memory_snapshot": memory_ctx.get("snapshot", {}),
             "started_at": started_at,
             "completed_at": disc_completed,
             "created_at": disc_completed,
@@ -2446,6 +2498,9 @@ def _run_content_build_task(db, task: dict, started_at: Any) -> dict:
     max_assets = max(1, min(int(input_cfg.get("limit") or 3), 10))
     discovery_run_id = clean_text(input_cfg.get("discovery_run_id") or "")
 
+    # Phase 6N: load client memory for memory-aware content generation
+    memory_ctx = build_memory_context(db, ws)
+
     run_id = str(_ObjId())
     now = started_at
 
@@ -2511,6 +2566,11 @@ def _run_content_build_task(db, task: dict, started_at: Any) -> dict:
         "source_agent_run_id": run_id,
         "inputs": {"module": module, "max_assets": max_assets, "discovery_run_id": discovery_run_id or None},
         "outputs": {},
+        # Phase 6N: memory traceability
+        "client_memory_id": memory_ctx.get("memory_id", ""),
+        "client_memory_version": memory_ctx.get("memory_version", 0),
+        "memory_context_hash": memory_ctx.get("memory_context_hash", ""),
+        "memory_snapshot": memory_ctx.get("snapshot", {}),
         "started_at": now,
         "completed_at": completed_at,
         "created_at": completed_at,
@@ -2525,14 +2585,23 @@ def _run_content_build_task(db, task: dict, started_at: Any) -> dict:
         insight_id = str(insight.get("_id", ""))
         insight_title = clean_text(insight.get("title") or insight.get("summary") or f"Insight {i+1}")
 
+        # Phase 6N: apply memory context to asset body
+        tone_label, signal_block = _build_memory_asset_hints(memory_ctx)
         asset_body = (
-            f"[Simulated {content_type.replace('_', ' ').title()}]\n\n"
-            f"Based on insight: {insight_title}\n\n"
-            f"Platform: {platform}\n"
-            f"Module: {module}\n\n"
-            f"This is a generated draft ready for operator review. "
-            f"Edit before publishing."
+            f"[{content_type.replace('_', ' ').title()}"
+            + (f" — {tone_label}" if tone_label else "")
+            + "]\n\n"
+            + f"Based on insight: {insight_title}\n\n"
+            + f"Platform: {platform}\n"
+            + f"Module: {module}\n\n"
+            + (signal_block + "\n\n" if signal_block else "")
+            + "This is a generated draft ready for operator review. "
+            + "Edit before publishing."
         )
+        # Phase 6N: enforce blocked claims
+        constraint_result = _enforce_memory_constraints(asset_body, memory_ctx)
+        asset_memory_violations = constraint_result["violations"]
+        asset_memory_warnings = constraint_result["warnings"]
 
         asset_doc: dict[str, Any] = {
             "workspace_slug": ws,
@@ -2550,6 +2619,10 @@ def _run_content_build_task(db, task: dict, started_at: Any) -> dict:
             "distribution_notes": None,
             "published_at": None,
             "published_url": None,
+            # Phase 6N: memory context used
+            "memory_context_used": memory_ctx.get("has_memory", False),
+            "memory_violations": asset_memory_violations,
+            "memory_warnings": asset_memory_warnings,
             "created_at": completed_at,
             "updated_at": completed_at,
         }
@@ -2580,6 +2653,15 @@ def _run_content_build_task(db, task: dict, started_at: Any) -> dict:
 
     # If no insights found, generate generic placeholder asset
     if not created_assets:
+        tone_label, signal_block = _build_memory_asset_hints(memory_ctx)
+        placeholder_body = (
+            "[Content Draft"
+            + (f" — {tone_label}" if tone_label else "")
+            + "]\n\n"
+            + f"Generic content draft for {module.replace('_', ' ')} module.\n\n"
+            + (signal_block + "\n\n" if signal_block else "")
+            + "No discovery insights found. Add client sources to improve content relevance."
+        )
         asset_doc = {
             "workspace_slug": ws,
             "module": module,
@@ -2589,17 +2671,17 @@ def _run_content_build_task(db, task: dict, started_at: Any) -> dict:
             "asset_type": "social_post",
             "platform": "LinkedIn",
             "title": f"LinkedIn Social Post — {module.replace('_', ' ').title()} Campaign",
-            "body": (
-                "[Simulated Content Draft]\n\n"
-                f"Generic content draft for {module.replace('_', ' ')} module.\n\n"
-                "No discovery insights found. Add client sources to improve content relevance."
-            ),
+            "body": placeholder_body,
             "approval_state": "pending",
             "distribution_state": "not_queued",
             "distribution_channel": None,
             "distribution_notes": None,
             "published_at": None,
             "published_url": None,
+            # Phase 6N: memory context
+            "memory_context_used": memory_ctx.get("has_memory", False),
+            "memory_violations": [],
+            "memory_warnings": [],
             "created_at": completed_at,
             "updated_at": completed_at,
         }
@@ -2632,6 +2714,13 @@ def _run_content_build_task(db, task: dict, started_at: Any) -> dict:
         f"for review. {len(created_approval_ids)} approval request{'s' if len(created_approval_ids) != 1 else ''} created."
     )
 
+    # Aggregate memory violations across all assets
+    all_violations: list[str] = []
+    all_memory_warnings: list[str] = []
+    for a_rec in db.workflow_assets.find({"workflow_run_id": workflow_run_id}):
+        all_violations.extend(a_rec.get("memory_violations") or [])
+        all_memory_warnings.extend(a_rec.get("memory_warnings") or [])
+
     # Update workflow_run with final outputs
     db.workflow_runs.update_one(
         {"_id": wf_run_result.inserted_id},
@@ -2642,6 +2731,11 @@ def _run_content_build_task(db, task: dict, started_at: Any) -> dict:
                 "approval_requests_created": len(created_approval_ids),
                 "asset_types": list({a["asset_type"] for a in created_assets}),
                 "workflow_run_id": workflow_run_id,
+                # Phase 6N
+                "memory_informed": memory_ctx.get("has_memory", False),
+                "memory_version_used": memory_ctx.get("memory_version") if memory_ctx.get("has_memory") else None,
+                "memory_violations": all_violations,
+                "memory_warnings": all_memory_warnings,
             },
             "updated_at": completed_at,
         }},
@@ -10023,6 +10117,10 @@ class WorkflowRunCreateRequest(BaseModel):
     outputs: dict[str, Any] = Field(default_factory=dict)
     started_at: Optional[datetime] = None
     completed_at: Optional[datetime] = None
+    # Phase 6N: memory traceability
+    client_memory_id: str = ""
+    client_memory_version: int = 0
+    memory_context_hash: str = ""
 
 
 class WorkflowRunPatchRequest(BaseModel):
@@ -10139,3 +10237,2904 @@ def patch_workflow_run(run_id: str, payload: WorkflowRunPatchRequest) -> dict:
         return {"item": _serialize_workflow_run(updated)}
     finally:
         client.close()
+
+
+@app.get("/workflow-runs/{run_id}/memory-context")
+def get_workflow_run_memory_context(run_id: str) -> dict:
+    """Phase 6N: Return the memory snapshot frozen at the time of a workflow run."""
+    client = get_client()
+    try:
+        db = get_database(client)
+        if is_object_id(run_id):
+            run = db.workflow_runs.find_one({"_id": ObjectId(run_id)})
+        else:
+            run = db.workflow_runs.find_one({"source_task_id": run_id})
+        if not run:
+            raise HTTPException(status_code=404, detail=f"Workflow run '{run_id}' not found.")
+        return {
+            "run_id": run_id,
+            "run_type": run.get("run_type", ""),
+            "has_memory": bool(run.get("client_memory_id")),
+            "client_memory_id": run.get("client_memory_id", ""),
+            "client_memory_version": run.get("client_memory_version", 0),
+            "memory_context_hash": run.get("memory_context_hash", ""),
+            "memory_snapshot": run.get("memory_snapshot") or {},
+        }
+    finally:
+        client.close()
+
+
+# ===========================================================================
+# Phase 6M — Adaptive Client Operating Memory & Template Recommendation
+# ===========================================================================
+
+# ---------------------------------------------------------------------------
+# Foundation Templates — static catalog (8 templates)
+# ---------------------------------------------------------------------------
+
+FOUNDATION_TEMPLATES: dict[str, dict] = {
+    "media_growth": {
+        "slug": "media_growth",
+        "name": "Media Growth",
+        "description": (
+            "For media operators, podcasters, YouTube creators, and content publishers "
+            "seeking sponsors, partners, and audience growth opportunities."
+        ),
+        "category": "content_media",
+        "target_client_types": ["podcaster", "youtube_creator", "media_operator", "content_publisher", "blogger", "newsletter_author"],
+        "keywords": ["podcast", "media", "content", "youtube", "creator", "audience", "show", "newsletter", "publisher", "streaming", "broadcast"],
+        "default_workflow": {
+            "discovery_sources": ["podcast_directories", "youtube", "linkedin", "twitter"],
+            "content_types": ["social_post", "email", "sponsorship_pitch"],
+            "platforms": ["LinkedIn", "YouTube", "Instagram", "TikTok"],
+            "approval_required": True,
+            "manual_distribution": True,
+        },
+        "memory_defaults": {
+            "voice_tone": {"tone": "engaging", "style": "authentic", "examples": [], "forbidden_phrases": []},
+            "workflow_preferences": {"max_assets_per_run": 5, "review_all_assets": True},
+            "distribution_preferences": {"channels": ["LinkedIn", "Instagram"], "manual_only": True},
+        },
+    },
+    "artist_growth": {
+        "slug": "artist_growth",
+        "name": "Artist Growth",
+        "description": (
+            "For independent artists, musicians, and creatives seeking booking opportunities, "
+            "fan engagement, and collaborative partnerships."
+        ),
+        "category": "content_media",
+        "target_client_types": ["musician", "artist", "performer", "band", "dj", "photographer", "visual_artist"],
+        "keywords": ["artist", "musician", "music", "band", "tour", "booking", "fan", "creative", "performer", "album", "gig"],
+        "default_workflow": {
+            "discovery_sources": ["spotify", "instagram", "tiktok", "eventbrite"],
+            "content_types": ["social_post", "fan_email", "booking_inquiry"],
+            "platforms": ["Instagram", "TikTok", "Facebook", "Spotify"],
+            "approval_required": True,
+            "manual_distribution": True,
+        },
+        "memory_defaults": {
+            "voice_tone": {"tone": "expressive", "style": "personal", "examples": [], "forbidden_phrases": []},
+            "workflow_preferences": {"max_assets_per_run": 3, "review_all_assets": True},
+            "distribution_preferences": {"channels": ["Instagram", "TikTok"], "manual_only": True},
+        },
+    },
+    "insurance_growth": {
+        "slug": "insurance_growth",
+        "name": "Insurance Growth",
+        "description": (
+            "For independent insurance agents and brokers building referral networks, "
+            "generating local leads, and nurturing prospect relationships."
+        ),
+        "category": "professional_services",
+        "target_client_types": ["insurance_agent", "insurance_broker", "financial_advisor", "risk_consultant"],
+        "keywords": ["insurance", "broker", "agent", "policy", "coverage", "premium", "referral", "risk", "claims", "underwriting"],
+        "default_workflow": {
+            "discovery_sources": ["linkedin", "local_directories", "chamber_of_commerce"],
+            "content_types": ["social_post", "email", "referral_request"],
+            "platforms": ["LinkedIn", "Facebook", "Email"],
+            "approval_required": True,
+            "manual_distribution": True,
+        },
+        "memory_defaults": {
+            "voice_tone": {"tone": "trustworthy", "style": "consultative", "examples": [], "forbidden_phrases": []},
+            "workflow_preferences": {"max_assets_per_run": 5, "review_all_assets": True},
+            "distribution_preferences": {"channels": ["LinkedIn", "Email"], "manual_only": True},
+        },
+    },
+    "sales_enablement": {
+        "slug": "sales_enablement",
+        "name": "Sales Enablement",
+        "description": (
+            "For B2B sales teams, SDRs, and revenue operators seeking to accelerate pipeline "
+            "through targeted prospect research and personalized outreach."
+        ),
+        "category": "b2b_sales",
+        "target_client_types": ["sales_rep", "sdr", "ae", "revenue_operator", "b2b_company", "saas", "startup"],
+        "keywords": ["sales", "b2b", "prospect", "pipeline", "outreach", "revenue", "crm", "demo", "close", "lead", "sdr", "quota"],
+        "default_workflow": {
+            "discovery_sources": ["linkedin", "company_websites", "job_boards", "news"],
+            "content_types": ["cold_email", "linkedin_dm", "follow_up"],
+            "platforms": ["LinkedIn", "Email", "Phone"],
+            "approval_required": True,
+            "manual_distribution": True,
+        },
+        "memory_defaults": {
+            "voice_tone": {"tone": "direct", "style": "concise", "examples": [], "forbidden_phrases": []},
+            "workflow_preferences": {"max_assets_per_run": 10, "review_all_assets": False},
+            "distribution_preferences": {"channels": ["LinkedIn", "Email"], "manual_only": True},
+        },
+    },
+    "founder_thought_leadership": {
+        "slug": "founder_thought_leadership",
+        "name": "Founder Thought Leadership",
+        "description": (
+            "For startup founders and executives building public authority through strategic content, "
+            "speaking opportunities, and media placements."
+        ),
+        "category": "executive_brand",
+        "target_client_types": ["founder", "ceo", "executive", "startup_leader", "operator"],
+        "keywords": ["founder", "startup", "executive", "ceo", "leadership", "thought_leader", "speaking", "authority", "brand", "venture"],
+        "default_workflow": {
+            "discovery_sources": ["linkedin", "twitter", "substack", "podcast_directories"],
+            "content_types": ["linkedin_post", "twitter_thread", "essay", "speaking_pitch"],
+            "platforms": ["LinkedIn", "Twitter/X", "Substack"],
+            "approval_required": True,
+            "manual_distribution": True,
+        },
+        "memory_defaults": {
+            "voice_tone": {"tone": "authoritative", "style": "opinionated", "examples": [], "forbidden_phrases": []},
+            "workflow_preferences": {"max_assets_per_run": 5, "review_all_assets": True},
+            "distribution_preferences": {"channels": ["LinkedIn", "Twitter/X"], "manual_only": True},
+        },
+    },
+    "investor_outreach": {
+        "slug": "investor_outreach",
+        "name": "Investor Outreach",
+        "description": (
+            "For startups and fund managers building LP relationships, managing investor communications, "
+            "and accelerating fundraising through targeted research and positioning."
+        ),
+        "category": "fundraising",
+        "target_client_types": ["startup_fundraising", "fund_manager", "gp", "lp_relations"],
+        "keywords": ["investor", "fundraising", "venture", "capital", "lp", "fund", "raise", "seed", "series", "valuation", "deck"],
+        "default_workflow": {
+            "discovery_sources": ["crunchbase", "linkedin", "angel_list", "pitchbook"],
+            "content_types": ["investor_update", "cold_email", "deck_teaser"],
+            "platforms": ["Email", "LinkedIn"],
+            "approval_required": True,
+            "manual_distribution": True,
+        },
+        "memory_defaults": {
+            "voice_tone": {"tone": "confident", "style": "data-driven", "examples": [], "forbidden_phrases": []},
+            "workflow_preferences": {"max_assets_per_run": 5, "review_all_assets": True},
+            "distribution_preferences": {"channels": ["Email", "LinkedIn"], "manual_only": True},
+        },
+    },
+    "local_services": {
+        "slug": "local_services",
+        "name": "Local Services",
+        "description": (
+            "For local businesses — contractors, restaurants, clinics, salons — "
+            "seeking to grow through community presence, local SEO, and referral generation."
+        ),
+        "category": "local_business",
+        "target_client_types": ["contractor", "restaurant", "clinic", "salon", "local_retailer", "home_services"],
+        "keywords": ["local", "contractor", "plumber", "electrician", "restaurant", "clinic", "salon", "service", "community", "neighborhood"],
+        "default_workflow": {
+            "discovery_sources": ["google_business", "yelp", "nextdoor", "local_directories"],
+            "content_types": ["social_post", "google_post", "referral_request"],
+            "platforms": ["Facebook", "Instagram", "Google Business", "Nextdoor"],
+            "approval_required": True,
+            "manual_distribution": True,
+        },
+        "memory_defaults": {
+            "voice_tone": {"tone": "friendly", "style": "local", "examples": [], "forbidden_phrases": []},
+            "workflow_preferences": {"max_assets_per_run": 5, "review_all_assets": True},
+            "distribution_preferences": {"channels": ["Facebook", "Instagram"], "manual_only": True},
+        },
+    },
+    "recruiting": {
+        "slug": "recruiting",
+        "name": "Recruiting",
+        "description": (
+            "For talent acquisition teams and recruiting firms building candidate pipelines, "
+            "employer brand, and hiring manager relationships."
+        ),
+        "category": "talent",
+        "target_client_types": ["recruiter", "talent_acquisition", "hr", "hiring_manager", "staffing_agency"],
+        "keywords": ["recruiting", "hiring", "talent", "candidate", "recruiter", "hr", "staffing", "placement", "headhunter", "employer_brand"],
+        "default_workflow": {
+            "discovery_sources": ["linkedin", "indeed", "github", "dribbble"],
+            "content_types": ["linkedin_post", "outreach_email", "job_post"],
+            "platforms": ["LinkedIn", "Email", "Indeed"],
+            "approval_required": True,
+            "manual_distribution": True,
+        },
+        "memory_defaults": {
+            "voice_tone": {"tone": "professional", "style": "human", "examples": [], "forbidden_phrases": []},
+            "workflow_preferences": {"max_assets_per_run": 5, "review_all_assets": True},
+            "distribution_preferences": {"channels": ["LinkedIn", "Email"], "manual_only": True},
+        },
+    },
+}
+
+
+def _score_template_against_profile(template: dict, profile_text: str) -> float:
+    """Score a foundation template against a client profile text blob (0.0–1.0).
+
+    Uses keyword overlap between the profile text and the template's keywords list.
+    Returns a normalized score weighted by match density.
+    """
+    keywords = template.get("keywords", [])
+    if not keywords:
+        return 0.0
+    lowered = profile_text.lower()
+    matches = sum(1 for kw in keywords if kw.lower() in lowered)
+    # Base score from keyword hits, normalized, with a density bonus
+    raw = matches / len(keywords)
+    # Boost if many keywords hit (dense match = stronger signal)
+    if matches >= 3:
+        raw = min(1.0, raw * 1.4)
+    return round(raw, 4)
+
+
+def _build_profile_text(payload_dict: dict) -> str:
+    """Concatenate all string fields from a client profile dict into one searchable blob."""
+    parts: list[str] = []
+    for v in payload_dict.values():
+        if isinstance(v, str) and v.strip():
+            parts.append(v.strip())
+        elif isinstance(v, list):
+            parts.extend(str(x) for x in v if str(x).strip())
+    return " ".join(parts)
+
+
+def _make_memory_skeleton(template_slug: str) -> dict:
+    """Return a fully-formed empty client memory body from the chosen template."""
+    tmpl = FOUNDATION_TEMPLATES.get(template_slug, {})
+    defaults = tmpl.get("memory_defaults", {})
+    return {
+        "positioning": {
+            "what_they_do": "",
+            "who_they_help": "",
+            "why_buyers_choose": "",
+            "proof_points": [],
+            "differentiators": [],
+        },
+        "icp": {
+            "company_type": "",
+            "buyer": "",
+            "size": "",
+            "geography": "",
+            "budget_indicators": [],
+            "timing_signals": [],
+        },
+        "voice_tone": defaults.get("voice_tone", {"tone": "", "style": "", "examples": [], "forbidden_phrases": []}),
+        "offers": [],
+        "approved_claims": [],
+        "blocked_claims": [],
+        "winning_patterns": [],
+        "losing_patterns": [],
+        "source_preferences": [],
+        "workflow_preferences": defaults.get("workflow_preferences", {"max_assets_per_run": 5, "review_all_assets": True}),
+        "distribution_preferences": defaults.get("distribution_preferences", {"channels": [], "manual_only": True}),
+        "approval_tendencies": {
+            "approval_rate": None,
+            "avg_revision_count": None,
+            "common_rejection_reasons": [],
+        },
+        "performance_notes": [],
+    }
+
+
+# ---------------------------------------------------------------------------
+# Phase 6N helpers: memory context injection
+# ---------------------------------------------------------------------------
+
+def build_memory_context(db, workspace_slug: str) -> dict:
+    """Load and condense client memory for a workspace into a workflow-injectable context dict.
+
+    Returns ``{"has_memory": False}`` when no memory is found or on any error.
+    """
+    import hashlib
+    import json as _json
+
+    try:
+        memory = db.client_memories.find_one({"workspace_slug": workspace_slug})
+        if not memory:
+            return {"has_memory": False}
+
+        vt = memory.get("voice_tone") or {}
+        winning = [p for p in (memory.get("winning_patterns") or []) if p]
+        losing = [p for p in (memory.get("losing_patterns") or []) if p]
+        blocked = [c for c in (memory.get("blocked_claims") or []) if c]
+        approved = [c for c in (memory.get("approved_claims") or []) if c]
+        dist_prefs = memory.get("distribution_preferences") or {}
+        src_prefs = memory.get("source_preferences") or []
+        wf_prefs = memory.get("workflow_preferences") or {}
+        approval_tend = memory.get("approval_tendencies") or {}
+        perf_notes = [n for n in (memory.get("performance_notes") or []) if n]
+
+        snapshot = {
+            "voice_tone": vt,
+            "winning_patterns": winning,
+            "losing_patterns": losing,
+            "blocked_claims": blocked,
+            "approved_claims": approved,
+            "distribution_preferences": dist_prefs,
+            "source_preferences": src_prefs,
+        }
+
+        hash_input = _json.dumps(snapshot, sort_keys=True, default=str)
+        memory_context_hash = hashlib.md5(hash_input.encode()).hexdigest()
+
+        return {
+            "has_memory": True,
+            "memory_id": str(memory["_id"]),
+            "memory_version": memory.get("version", 1),
+            "memory_context_hash": memory_context_hash,
+            "voice_tone": vt,
+            "winning_patterns": winning,
+            "losing_patterns": losing,
+            "blocked_claims": blocked,
+            "approved_claims": approved,
+            "distribution_preferences": dist_prefs,
+            "source_preferences": src_prefs,
+            "workflow_preferences": wf_prefs,
+            "approval_tendencies": approval_tend,
+            "performance_notes": perf_notes,
+            "snapshot": snapshot,
+            "snapshot_taken_at": utc_now().isoformat(),
+        }
+    except Exception:
+        return {"has_memory": False}
+
+
+def _enforce_memory_constraints(text: str, memory_ctx: dict) -> dict:
+    """Check text against blocked_claims and losing_patterns from client memory.
+
+    Returns ``{"violations": list, "warnings": list, "clean": bool}``
+    """
+    if not memory_ctx.get("has_memory"):
+        return {"violations": [], "warnings": [], "clean": True}
+
+    text_lower = clean_text(text).lower()
+    violations: list[str] = []
+    warnings_list: list[str] = []
+
+    for claim in memory_ctx.get("blocked_claims") or []:
+        needle = clean_text(str(claim)).lower()
+        if needle and needle in text_lower:
+            violations.append(f"Blocked claim detected: '{claim}'")
+
+    for pattern in memory_ctx.get("losing_patterns") or []:
+        needle = clean_text(str(pattern)).lower()
+        if len(needle) >= 4 and needle in text_lower:
+            warnings_list.append(f"Losing pattern detected: '{pattern}'")
+
+    return {
+        "violations": violations,
+        "warnings": warnings_list,
+        "clean": len(violations) == 0,
+    }
+
+
+def _build_memory_asset_hints(memory_ctx: dict) -> tuple[str, str]:
+    """Return (tone_label, signal_block) strings for injecting into asset bodies.
+
+    ``tone_label`` — e.g. "professional · direct"
+    ``signal_block`` — multi-line block with winning patterns / channel guidance
+    """
+    if not memory_ctx.get("has_memory"):
+        return "", ""
+
+    vt = memory_ctx.get("voice_tone") or {}
+    parts = [p for p in (vt.get("tone", ""), vt.get("style", "")) if p]
+    tone_label = " · ".join(parts) if parts else ""
+
+    lines: list[str] = []
+    winning = memory_ctx.get("winning_patterns") or []
+    if winning:
+        lines.append(f"⚡ Apply: {winning[0]}")
+    dist = memory_ctx.get("distribution_preferences") or {}
+    channels = dist.get("channels") or []
+    if isinstance(channels, list) and channels:
+        lines.append(f"📢 Preferred channel: {channels[0]}")
+    version = memory_ctx.get("memory_version", 0)
+    ws = memory_ctx.get("snapshot", {})
+    if lines:
+        lines.append(f"[Memory v{version} applied]")
+
+    return tone_label, "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# Phase 6M Pydantic models
+# ---------------------------------------------------------------------------
+
+class TemplateRecommendationRequest(BaseModel):
+    client_name: str = ""
+    brand_name: str = ""
+    industry: str = ""
+    business_type: str = ""
+    description: str = ""
+    primary_offer: str = ""
+    target_audience: str = ""
+    goals: str = ""
+    notes: str = ""
+
+
+class ClientMemoryInitRequest(BaseModel):
+    workspace_slug: str
+    client_profile_id: str = ""
+    foundation_template_slug: str
+    # Optional pre-population
+    positioning: dict = Field(default_factory=dict)
+    icp: dict = Field(default_factory=dict)
+    voice_tone: dict = Field(default_factory=dict)
+    offers: list = Field(default_factory=list)
+    approved_claims: list[str] = Field(default_factory=list)
+    blocked_claims: list[str] = Field(default_factory=list)
+
+
+class ClientMemoryUpdateRequest(BaseModel):
+    positioning: Optional[dict] = None
+    icp: Optional[dict] = None
+    voice_tone: Optional[dict] = None
+    offers: Optional[list] = None
+    approved_claims: Optional[list[str]] = None
+    blocked_claims: Optional[list[str]] = None
+    winning_patterns: Optional[list[str]] = None
+    losing_patterns: Optional[list[str]] = None
+    source_preferences: Optional[list] = None
+    workflow_preferences: Optional[dict] = None
+    distribution_preferences: Optional[dict] = None
+    approval_tendencies: Optional[dict] = None
+    performance_notes: Optional[list[str]] = None
+
+
+class MemoryUpdateProposalCreateRequest(BaseModel):
+    workspace_slug: str
+    client_memory_id: str = ""
+    client_profile_id: str = ""
+    workflow_run_id: str = ""
+    source: str = ""  # e.g. "asset_approval", "mark_published", "user_override"
+    proposed_change: dict  # {field, change_type: add|update|remove, old_value, new_value}
+    evidence: str = ""
+    confidence: float = Field(default=0.7, ge=0.0, le=1.0)
+
+
+class MemoryUpdateProposalDecisionRequest(BaseModel):
+    status: Literal["approved", "rejected"]
+    reviewed_by: str = "operator"
+    note: str = ""
+    override_conflicts: bool = False  # Phase 6O: if True, approve despite high-severity conflicts
+
+
+class MemoryRollbackRequest(BaseModel):
+    target_version: int = Field(ge=1)
+    reason: str = ""
+    rolled_back_by: str = "operator"
+
+
+# ---------------------------------------------------------------------------
+# Phase 6M helper: auto-propose memory updates from workflow outcomes
+# ---------------------------------------------------------------------------
+
+def _try_propose_memory_update(
+    db,
+    *,
+    workspace_slug: str,
+    workflow_run_id: str,
+    source: str,
+    proposed_change: dict,
+    evidence: str,
+    confidence: float = 0.7,
+) -> None:
+    """Best-effort insert of a memory update proposal.  Silently swallows errors."""
+    try:
+        memory = db.client_memories.find_one({"workspace_slug": workspace_slug})
+        if not memory:
+            return
+        now = utc_now()
+        db.memory_update_proposals.insert_one({
+            "workspace_slug": workspace_slug,
+            "client_memory_id": str(memory["_id"]),
+            "client_profile_id": memory.get("client_profile_id", ""),
+            "workflow_run_id": workflow_run_id,
+            "source": source,
+            "proposed_change": proposed_change,
+            "evidence": evidence,
+            "confidence": confidence,
+            "status": "pending",
+            "reviewed_by": None,
+            "reviewed_at": None,
+            # Phase 6N: traceability
+            "memory_version_used": memory.get("version", 1),
+            "reasoning_trace": f"Auto-generated from {source} event. workflow_run_id={workflow_run_id}",
+            "created_at": now,
+            "updated_at": now,
+        })
+    except Exception:
+        pass
+
+
+# ---------------------------------------------------------------------------
+# Phase 6O: Memory Governance helpers
+# ---------------------------------------------------------------------------
+
+_STALE_DAYS = 30
+_DUPLICATE_SIMILARITY_THRESHOLD = 0.65
+_AUTO_REJECT_CONFIDENCE_MAX = 0.25
+_CONFLICT_SIMILARITY_MIN = 0.40
+
+_TONE_OPPOSITES: dict[str, list[str]] = {
+    "aggressive":    ["conservative", "gentle", "soft"],
+    "conservative":  ["aggressive", "bold", "edgy"],
+    "casual":        ["formal", "professional", "corporate"],
+    "formal":        ["casual", "conversational", "informal"],
+    "edgy":          ["conservative", "professional", "safe"],
+    "direct":        ["indirect", "nuanced"],
+    "indirect":      ["direct", "blunt"],
+    "conversational": ["formal", "corporate"],
+    "corporate":     ["casual", "conversational"],
+}
+
+
+def _token_similarity(a: str, b: str) -> float:
+    """Jaccard similarity of token sets from two strings."""
+    ta = set(clean_text(a).lower().split())
+    tb = set(clean_text(b).lower().split())
+    if not ta or not tb:
+        return 0.0
+    return len(ta & tb) / len(ta | tb)
+
+
+def _detect_proposal_conflicts(memory_doc: dict, proposed_change: dict) -> list[dict]:
+    """Detect logical conflicts between a proposed change and the current memory state.
+
+    Returns a list of conflict dicts: {conflict_type, description, severity,
+    conflicting_field, conflicting_value, similarity}
+    """
+    conflicts: list[dict] = []
+    if not memory_doc or not proposed_change:
+        return conflicts
+
+    field = proposed_change.get("field", "")
+    change_type = proposed_change.get("change_type", "update")
+    new_value = proposed_change.get("new_value")
+    if new_value is None:
+        return conflicts
+
+    new_items: list[str] = [str(x).strip() for x in (new_value if isinstance(new_value, list) else [new_value]) if x]
+
+    # winning_patterns <-> losing_patterns
+    if field == "winning_patterns" and change_type in ("add", "update"):
+        losing = memory_doc.get("losing_patterns") or []
+        for item in new_items:
+            for lp in losing:
+                sim = _token_similarity(item, lp)
+                if sim >= _CONFLICT_SIMILARITY_MIN:
+                    conflicts.append({
+                        "conflict_type": "winning_losing_overlap",
+                        "description": f"Proposed winning pattern overlaps with existing losing pattern '{lp}'",
+                        "severity": "high" if sim >= 0.65 else "medium",
+                        "conflicting_field": "losing_patterns",
+                        "conflicting_value": lp,
+                        "similarity": round(sim, 2),
+                    })
+
+    if field == "losing_patterns" and change_type in ("add", "update"):
+        winning = memory_doc.get("winning_patterns") or []
+        for item in new_items:
+            for wp in winning:
+                sim = _token_similarity(item, wp)
+                if sim >= _CONFLICT_SIMILARITY_MIN:
+                    conflicts.append({
+                        "conflict_type": "losing_winning_overlap",
+                        "description": f"Proposed losing pattern overlaps with existing winning pattern '{wp}'",
+                        "severity": "high" if sim >= 0.65 else "medium",
+                        "conflicting_field": "winning_patterns",
+                        "conflicting_value": wp,
+                        "similarity": round(sim, 2),
+                    })
+
+    # blocked_claims <-> approved_claims
+    if field == "blocked_claims" and change_type in ("add", "update"):
+        approved = memory_doc.get("approved_claims") or []
+        for item in new_items:
+            for ap in approved:
+                sim = _token_similarity(item, ap)
+                if sim >= 0.50:
+                    conflicts.append({
+                        "conflict_type": "blocked_approved_overlap",
+                        "description": f"Proposed blocked claim overlaps with approved claim '{ap}'",
+                        "severity": "high",
+                        "conflicting_field": "approved_claims",
+                        "conflicting_value": ap,
+                        "similarity": round(sim, 2),
+                    })
+
+    if field == "approved_claims" and change_type in ("add", "update"):
+        blocked = memory_doc.get("blocked_claims") or []
+        for item in new_items:
+            for bl in blocked:
+                sim = _token_similarity(item, bl)
+                if sim >= 0.50:
+                    conflicts.append({
+                        "conflict_type": "approved_blocked_overlap",
+                        "description": f"Proposed approved claim overlaps with blocked claim '{bl}'",
+                        "severity": "high",
+                        "conflicting_field": "blocked_claims",
+                        "conflicting_value": bl,
+                        "similarity": round(sim, 2),
+                    })
+
+    # voice_tone contradiction
+    if field == "voice_tone" and isinstance(new_value, dict):
+        current_tone = (memory_doc.get("voice_tone") or {}).get("tone", "").lower()
+        proposed_tone = new_value.get("tone", "").lower()
+        if current_tone and proposed_tone and current_tone != proposed_tone:
+            if current_tone in _TONE_OPPOSITES.get(proposed_tone, []):
+                conflicts.append({
+                    "conflict_type": "tone_contradiction",
+                    "description": f"Proposed tone '{proposed_tone}' contradicts existing tone '{current_tone}'",
+                    "severity": "medium",
+                    "conflicting_field": "voice_tone.tone",
+                    "conflicting_value": current_tone,
+                    "similarity": 0.0,
+                })
+
+    return conflicts
+
+
+def _detect_proposal_duplicate(db, workspace_slug: str, proposed_change: dict) -> dict:
+    """Check if a sufficiently similar pending proposal already exists.
+
+    Returns {"is_duplicate": bool, "duplicate_proposal_id": str, "similarity": float, "reason": str}
+    """
+    field = proposed_change.get("field", "")
+    new_value = proposed_change.get("new_value")
+    if not field or new_value is None:
+        return {"is_duplicate": False, "duplicate_proposal_id": "", "similarity": 0.0, "reason": ""}
+    try:
+        candidates = list(db.memory_update_proposals.find({
+            "workspace_slug": workspace_slug,
+            "status": "pending",
+            "proposed_change.field": field,
+        }).limit(30))
+        new_str = str(new_value).lower()
+        for cand in candidates:
+            ex_val = (cand.get("proposed_change") or {}).get("new_value")
+            if ex_val is None:
+                continue
+            ex_str = str(ex_val).lower()
+            if ex_str == new_str:
+                return {
+                    "is_duplicate": True,
+                    "duplicate_proposal_id": str(cand["_id"]),
+                    "similarity": 1.0,
+                    "reason": "Identical pending proposal already exists.",
+                }
+            sim = _token_similarity(new_str, ex_str)
+            if sim >= _DUPLICATE_SIMILARITY_THRESHOLD:
+                return {
+                    "is_duplicate": True,
+                    "duplicate_proposal_id": str(cand["_id"]),
+                    "similarity": round(sim, 2),
+                    "reason": f"Near-identical pending proposal detected (similarity {sim:.0%}).",
+                }
+    except Exception:
+        pass
+    return {"is_duplicate": False, "duplicate_proposal_id": "", "similarity": 0.0, "reason": ""}
+
+
+def _generate_memory_diff(memory_doc: dict, proposed_change: dict) -> dict:
+    """Compute a before/after diff for a proposed change without applying it."""
+    field = proposed_change.get("field", "")
+    change_type = proposed_change.get("change_type", "update")
+    new_value = proposed_change.get("new_value")
+    current_value = (memory_doc or {}).get(field)
+
+    additions: list = []
+    removals: list = []
+    result_value = new_value
+
+    if isinstance(current_value, list):
+        if change_type == "add":
+            add_items = new_value if isinstance(new_value, list) else [new_value]
+            additions = [v for v in add_items if v not in current_value]
+            result_value = list(current_value) + additions
+        elif change_type == "remove":
+            rm_items = new_value if isinstance(new_value, list) else [new_value]
+            removals = [v for v in rm_items if v in current_value]
+            result_value = [v for v in current_value if v not in rm_items]
+        else:
+            new_list = new_value if isinstance(new_value, list) else [new_value]
+            additions = [v for v in new_list if v not in current_value]
+            removals = [v for v in current_value if v not in new_list]
+            result_value = new_list
+    elif isinstance(current_value, dict) and isinstance(new_value, dict):
+        for k, v in new_value.items():
+            if current_value.get(k) != v:
+                additions.append(f"{k}: {v}")
+                if k in current_value:
+                    removals.append(f"{k}: {current_value[k]}")
+    else:
+        if current_value != new_value:
+            removals = [current_value] if current_value is not None else []
+            additions = [new_value] if new_value is not None else []
+
+    return {
+        "field": field,
+        "change_type": change_type,
+        "current_value": current_value,
+        "proposed_value": new_value,
+        "result_value": result_value,
+        "additions": additions,
+        "removals": removals,
+        "has_changes": current_value != result_value,
+    }
+
+
+def _snapshot_memory_for_history(
+    db,
+    memory_doc: dict,
+    *,
+    change_summary: list[str],
+    source_proposal_ids: list[str],
+    created_by: str = "operator",
+) -> None:
+    """Write an immutable version snapshot to memory_version_history before a change is applied."""
+    try:
+        import json as _json
+        snap = {k: v for k, v in memory_doc.items() if k != "_id"}
+        snap = _json.loads(_json.dumps(snap, default=str))
+        db.memory_version_history.insert_one({
+            "client_memory_id": str(memory_doc["_id"]),
+            "workspace_slug": memory_doc.get("workspace_slug", ""),
+            "version": memory_doc.get("version", 1),
+            "previous_version": max(0, (memory_doc.get("version", 1) - 1)),
+            "snapshot": snap,
+            "change_summary": change_summary,
+            "source_proposal_ids": source_proposal_ids,
+            "created_by": created_by,
+            "created_at": utc_now(),
+        })
+    except Exception:
+        pass  # Non-fatal: never block the main approval flow
+
+
+def _compute_memory_health(db, memory_doc: dict) -> dict:
+    """Compute health metrics for a client memory document."""
+    if not memory_doc:
+        return {"status": "unknown", "memory_health_score": 0.0, "conflict_count": 0}
+
+    from datetime import timezone as _tz
+
+    now = utc_now()
+    winning = memory_doc.get("winning_patterns") or []
+    losing = memory_doc.get("losing_patterns") or []
+    blocked = memory_doc.get("blocked_claims") or []
+    approved = memory_doc.get("approved_claims") or []
+
+    # Conflict count: winning/losing overlap + blocked/approved overlap
+    conflict_count = 0
+    conflict_pairs: list[dict] = []
+    for w in winning:
+        for ll in losing:
+            sim = _token_similarity(w, ll)
+            if sim >= _CONFLICT_SIMILARITY_MIN:
+                conflict_count += 1
+                if len(conflict_pairs) < 5:
+                    conflict_pairs.append({"winning": w, "losing": ll, "similarity": round(sim, 2)})
+    for bl in blocked:
+        for ap in approved:
+            sim = _token_similarity(bl, ap)
+            if sim >= 0.50:
+                conflict_count += 1
+                if len(conflict_pairs) < 5:
+                    conflict_pairs.append({"blocked": bl, "approved": ap, "similarity": round(sim, 2)})
+
+    # Duplicate patterns in same list
+    def _count_dupes(lst: list) -> int:
+        count = 0
+        for i, a in enumerate(lst):
+            for b in lst[i + 1:]:
+                if _token_similarity(a, b) >= _DUPLICATE_SIMILARITY_THRESHOLD:
+                    count += 1
+        return count
+
+    duplicate_count = _count_dupes(winning) + _count_dupes(losing)
+    all_patterns = winning + losing
+    overgrown = len(all_patterns) > 20
+
+    # Stale detection
+    stale_days = 0
+    updated_at = memory_doc.get("updated_at")
+    if updated_at:
+        try:
+            if hasattr(updated_at, "tzinfo"):
+                if updated_at.tzinfo is None:
+                    updated_at = updated_at.replace(tzinfo=_tz.utc)
+            else:
+                from datetime import datetime as _dt
+                updated_at = _dt.fromisoformat(str(updated_at).replace("Z", "+00:00"))
+            stale_days = max(0, (now - updated_at).days)
+        except Exception:
+            stale_days = 0
+
+    stale = stale_days >= _STALE_DAYS and len(all_patterns) > 0
+
+    # Pending proposal count
+    try:
+        pending_count = db.memory_update_proposals.count_documents(
+            {"workspace_slug": memory_doc.get("workspace_slug", ""), "status": "pending"}
+        )
+    except Exception:
+        pending_count = 0
+
+    # Last approved proposal timestamp
+    try:
+        last_ap = db.memory_update_proposals.find_one(
+            {"workspace_slug": memory_doc.get("workspace_slug", ""), "status": "approved"},
+            sort=[("reviewed_at", -1)],
+        )
+        last_reviewed_at = str(last_ap.get("reviewed_at", "")) if last_ap else None
+    except Exception:
+        last_reviewed_at = None
+
+    # Health score 0.0-1.0
+    score = 1.0
+    score -= min(0.40, conflict_count * 0.15)
+    score -= min(0.20, duplicate_count * 0.10)
+    if stale:
+        score -= 0.15
+    if overgrown:
+        score -= 0.10
+    score = round(max(0.0, score), 2)
+
+    if conflict_count > 0:
+        status = "conflicted"
+    elif stale:
+        status = "stale"
+    elif overgrown:
+        status = "overgrown"
+    elif duplicate_count > 0 or pending_count > 3:
+        status = "needs_review"
+    else:
+        status = "healthy"
+
+    return {
+        "memory_health_score": score,
+        "status": status,
+        "conflict_count": conflict_count,
+        "conflict_pairs": conflict_pairs,
+        "duplicate_pattern_count": duplicate_count,
+        "stale": stale,
+        "stale_days": stale_days,
+        "overgrown": overgrown,
+        "total_patterns": len(all_patterns),
+        "winning_pattern_count": len(winning),
+        "losing_pattern_count": len(losing),
+        "blocked_claim_count": len(blocked),
+        "approved_claim_count": len(approved),
+        "pending_proposal_count": pending_count,
+        "last_reviewed_at": last_reviewed_at,
+        "version": memory_doc.get("version", 1),
+    }
+
+
+# ---------------------------------------------------------------------------
+# Phase 6M Endpoints: Foundation Templates
+# ---------------------------------------------------------------------------
+
+@app.get("/foundation-templates")
+def list_foundation_templates() -> dict:
+    """Return all available foundation templates."""
+    items = [
+        {k: v for k, v in t.items() if k != "keywords"}
+        for t in FOUNDATION_TEMPLATES.values()
+    ]
+    return {"items": items, "count": len(items)}
+
+
+@app.get("/foundation-templates/{slug}")
+def get_foundation_template(slug: str) -> dict:
+    """Return a single foundation template by slug."""
+    tmpl = FOUNDATION_TEMPLATES.get(slug)
+    if not tmpl:
+        raise HTTPException(status_code=404, detail=f"Foundation template '{slug}' not found.")
+    return {"item": {k: v for k, v in tmpl.items() if k != "keywords"}}
+
+
+# ---------------------------------------------------------------------------
+# Phase 6M Endpoints: Template Recommendation
+# ---------------------------------------------------------------------------
+
+@app.post("/template-recommendation")
+def recommend_template(payload: TemplateRecommendationRequest) -> dict:
+    """Score all foundation templates against the provided client profile and return a ranked recommendation.
+
+    Uses deterministic keyword scoring (no LLM required).
+    Returns: recommended template, confidence, reason, alternates, assumptions, missing_information.
+    """
+    profile_dict = payload.model_dump()
+    profile_text = _build_profile_text(profile_dict)
+
+    if not profile_text.strip():
+        raise HTTPException(status_code=400, detail="At least one profile field is required for recommendation.")
+
+    # Score every template
+    scored: list[tuple[float, str]] = []
+    for slug, tmpl in FOUNDATION_TEMPLATES.items():
+        score = _score_template_against_profile(tmpl, profile_text)
+        scored.append((score, slug))
+    scored.sort(key=lambda x: x[0], reverse=True)
+
+    best_score, best_slug = scored[0]
+    best_tmpl = FOUNDATION_TEMPLATES[best_slug]
+
+    # Build alternates (exclude top pick)
+    alternates = [
+        {
+            "slug": s,
+            "name": FOUNDATION_TEMPLATES[s]["name"],
+            "score": round(sc, 4),
+            "reason": f"Partial keyword overlap with {FOUNDATION_TEMPLATES[s]['category']} profile signals.",
+        }
+        for sc, s in scored[1:4]
+        if sc > 0.0
+    ]
+
+    # Identify missing information
+    missing: list[str] = []
+    if not payload.industry.strip():
+        missing.append("industry")
+    if not payload.primary_offer.strip():
+        missing.append("primary_offer")
+    if not payload.target_audience.strip():
+        missing.append("target_audience")
+
+    # Build assumptions from what we inferred
+    assumptions: list[str] = []
+    if best_score < 0.3:
+        assumptions.append("Low keyword overlap — recommendation is a best-guess based on available profile text.")
+        assumptions.append(f"Defaulting to '{best_tmpl['name']}' as the closest match; review alternates before confirming.")
+    else:
+        assumptions.append(f"Client profile signals align with the '{best_tmpl['category']}' category.")
+
+    # Human-readable reason
+    if best_score >= 0.5:
+        reason = (
+            f"Strong keyword alignment with {best_tmpl['name']} template. "
+            f"Profile mentions signals common to {best_tmpl['category']} clients "
+            f"({', '.join(best_tmpl.get('keywords', [])[:4])})."
+        )
+        confidence = min(0.95, 0.6 + best_score * 0.35)
+    elif best_score >= 0.2:
+        reason = (
+            f"Moderate match with {best_tmpl['name']} template based on partial profile signals. "
+            "Consider reviewing alternate templates before confirming."
+        )
+        confidence = min(0.7, 0.3 + best_score * 0.5)
+    else:
+        reason = (
+            f"Weak signal match. '{best_tmpl['name']}' selected as closest option, "
+            "but the profile lacks enough specificity for a confident recommendation. "
+            "Add industry, primary offer, and target audience for better results."
+        )
+        confidence = round(max(0.1, best_score * 0.8), 4)
+
+    return {
+        "recommended_template": {
+            "slug": best_slug,
+            "name": best_tmpl["name"],
+            "description": best_tmpl["description"],
+            "category": best_tmpl["category"],
+        },
+        "confidence_score": round(confidence, 4),
+        "reason": reason,
+        "alternate_templates": alternates,
+        "assumptions": assumptions,
+        "missing_information": missing,
+        "raw_scores": {s: sc for sc, s in scored},
+    }
+
+
+# ---------------------------------------------------------------------------
+# Phase 6M Endpoints: Client Memory
+# ---------------------------------------------------------------------------
+
+@app.get("/client-memory")
+def list_client_memories(
+    workspace_slug: str = Query(""),
+    client_profile_id: str = Query(""),
+    limit: int = Query(20, ge=1, le=100),
+) -> dict:
+    """List client operating memories, optionally filtered by workspace or client profile."""
+    mongo_client = get_client()
+    try:
+        db = get_database(mongo_client)
+        q: dict[str, Any] = {}
+        if workspace_slug:
+            q["workspace_slug"] = workspace_slug
+        if client_profile_id:
+            q["client_profile_id"] = client_profile_id
+        records = list(db.client_memories.find(q).sort([("created_at", -1)]).limit(limit))
+        return {"items": serialize(records), "count": len(records)}
+    finally:
+        mongo_client.close()
+
+
+@app.post("/client-memory")
+def create_client_memory(payload: ClientMemoryInitRequest) -> dict:
+    """Initialize a client operating memory from a foundation template.
+
+    Merges template defaults with any values provided in the request.
+    One memory per workspace (idempotent — returns existing if already present).
+    """
+    if not payload.workspace_slug.strip():
+        raise HTTPException(status_code=400, detail="workspace_slug is required.")
+    if payload.foundation_template_slug not in FOUNDATION_TEMPLATES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unknown foundation_template_slug '{payload.foundation_template_slug}'. "
+                   f"Valid slugs: {sorted(FOUNDATION_TEMPLATES.keys())}",
+        )
+
+    mongo_client = get_client()
+    try:
+        db = get_database(mongo_client)
+
+        # Idempotent: return existing memory if one already exists for this workspace
+        existing = db.client_memories.find_one({"workspace_slug": payload.workspace_slug})
+        if existing:
+            return {
+                "item": serialize(existing),
+                "message": "Client memory already exists for this workspace.",
+                "created": False,
+            }
+
+        now = utc_now()
+        memory_body = _make_memory_skeleton(payload.foundation_template_slug)
+
+        # Apply caller-supplied overrides
+        if payload.positioning:
+            memory_body["positioning"].update({k: v for k, v in payload.positioning.items() if v})
+        if payload.icp:
+            memory_body["icp"].update({k: v for k, v in payload.icp.items() if v})
+        if payload.voice_tone:
+            memory_body["voice_tone"].update({k: v for k, v in payload.voice_tone.items() if v})
+        if payload.offers:
+            memory_body["offers"] = payload.offers
+        if payload.approved_claims:
+            memory_body["approved_claims"] = [clean_text(c) for c in payload.approved_claims if clean_text(c)]
+        if payload.blocked_claims:
+            memory_body["blocked_claims"] = [clean_text(c) for c in payload.blocked_claims if clean_text(c)]
+
+        record: dict[str, Any] = {
+            "workspace_slug": clean_text(payload.workspace_slug),
+            "client_profile_id": clean_text(payload.client_profile_id),
+            "foundation_template_slug": payload.foundation_template_slug,
+            "foundation_template_name": FOUNDATION_TEMPLATES[payload.foundation_template_slug]["name"],
+            "version": 1,
+            **memory_body,
+            "created_at": now,
+            "updated_at": now,
+        }
+
+        result = db.client_memories.insert_one(record)
+        created = db.client_memories.find_one({"_id": result.inserted_id})
+        return {
+            "item": serialize(created),
+            "message": "Client operating memory initialized.",
+            "created": True,
+        }
+    finally:
+        mongo_client.close()
+
+
+@app.patch("/client-memory/{memory_id}")
+def update_client_memory(memory_id: str, payload: ClientMemoryUpdateRequest) -> dict:
+    """Update fields of a client operating memory. Increments version on each save."""
+    if not is_object_id(memory_id):
+        raise HTTPException(status_code=400, detail="Invalid memory_id.")
+    mongo_client = get_client()
+    now = utc_now()
+    try:
+        db = get_database(mongo_client)
+        doc = db.client_memories.find_one({"_id": ObjectId(memory_id)})
+        if not doc:
+            raise HTTPException(status_code=404, detail=f"Client memory '{memory_id}' not found.")
+
+        updates: dict[str, Any] = {"updated_at": now, "version": (doc.get("version") or 1) + 1}
+        if payload.positioning is not None:
+            updates["positioning"] = payload.positioning
+        if payload.icp is not None:
+            updates["icp"] = payload.icp
+        if payload.voice_tone is not None:
+            updates["voice_tone"] = payload.voice_tone
+        if payload.offers is not None:
+            updates["offers"] = payload.offers
+        if payload.approved_claims is not None:
+            updates["approved_claims"] = [clean_text(c) for c in payload.approved_claims if clean_text(c)]
+        if payload.blocked_claims is not None:
+            updates["blocked_claims"] = [clean_text(c) for c in payload.blocked_claims if clean_text(c)]
+        if payload.winning_patterns is not None:
+            updates["winning_patterns"] = [clean_text(p) for p in payload.winning_patterns if clean_text(p)]
+        if payload.losing_patterns is not None:
+            updates["losing_patterns"] = [clean_text(p) for p in payload.losing_patterns if clean_text(p)]
+        if payload.source_preferences is not None:
+            updates["source_preferences"] = payload.source_preferences
+        if payload.workflow_preferences is not None:
+            updates["workflow_preferences"] = payload.workflow_preferences
+        if payload.distribution_preferences is not None:
+            updates["distribution_preferences"] = payload.distribution_preferences
+        if payload.approval_tendencies is not None:
+            updates["approval_tendencies"] = payload.approval_tendencies
+        if payload.performance_notes is not None:
+            updates["performance_notes"] = [clean_text(n) for n in payload.performance_notes if clean_text(n)]
+
+        db.client_memories.update_one({"_id": doc["_id"]}, {"$set": updates})
+        updated = db.client_memories.find_one({"_id": doc["_id"]})
+        return {"item": serialize(updated), "message": "Client memory updated."}
+    finally:
+        mongo_client.close()
+
+
+@app.get("/client-memory/{memory_id}/brief")
+def get_client_memory_brief(memory_id: str) -> dict:
+    """Generate a human-readable markdown brief from the client operating memory."""
+    if not is_object_id(memory_id):
+        raise HTTPException(status_code=400, detail="Invalid memory_id.")
+    mongo_client = get_client()
+    try:
+        db = get_database(mongo_client)
+        doc = db.client_memories.find_one({"_id": ObjectId(memory_id)})
+        if not doc:
+            raise HTTPException(status_code=404, detail=f"Client memory '{memory_id}' not found.")
+
+        def _list_md(items: list, indent: str = "  ") -> str:
+            return "\n".join(f"{indent}- {item}" for item in items) if items else f"{indent}_(none recorded)_"
+
+        pos = doc.get("positioning") or {}
+        icp = doc.get("icp") or {}
+        vt = doc.get("voice_tone") or {}
+        at = doc.get("approval_tendencies") or {}
+
+        brief = f"""# Client Operating Brief
+**Workspace:** `{doc.get('workspace_slug', '')}`
+**Foundation Template:** {doc.get('foundation_template_name', doc.get('foundation_template_slug', ''))}
+**Version:** {doc.get('version', 1)}
+**Last Updated:** {(doc.get('updated_at') or doc.get('created_at', '')).isoformat() if hasattr((doc.get('updated_at') or doc.get('created_at', '')), 'isoformat') else str(doc.get('updated_at', ''))}
+
+---
+
+## Positioning
+- **What they do:** {pos.get('what_they_do') or '_(not set)_'}
+- **Who they help:** {pos.get('who_they_help') or '_(not set)_'}
+- **Why buyers choose them:** {pos.get('why_buyers_choose') or '_(not set)_'}
+
+**Proof points:**
+{_list_md(pos.get('proof_points', []))}
+
+**Differentiators:**
+{_list_md(pos.get('differentiators', []))}
+
+---
+
+## Ideal Customer Profile
+- **Company type:** {icp.get('company_type') or '_(not set)_'}
+- **Buyer:** {icp.get('buyer') or '_(not set)_'}
+- **Size:** {icp.get('size') or '_(not set)_'}
+- **Geography:** {icp.get('geography') or '_(not set)_'}
+
+**Budget indicators:**
+{_list_md(icp.get('budget_indicators', []))}
+
+**Timing signals:**
+{_list_md(icp.get('timing_signals', []))}
+
+---
+
+## Voice & Tone
+- **Tone:** {vt.get('tone') or '_(not set)_'}
+- **Style:** {vt.get('style') or '_(not set)_'}
+
+**Approved claims:**
+{_list_md(doc.get('approved_claims', []))}
+
+**Blocked claims:**
+{_list_md(doc.get('blocked_claims', []))}
+
+---
+
+## Offers
+{_list_md([str(o) if not isinstance(o, dict) else o.get('name', str(o)) for o in (doc.get('offers') or [])])}
+
+---
+
+## Winning Patterns
+{_list_md(doc.get('winning_patterns', []))}
+
+## Losing Patterns
+{_list_md(doc.get('losing_patterns', []))}
+
+---
+
+## Approval Tendencies
+- **Approval rate:** {f"{int(at.get('approval_rate') * 100)}%" if at.get('approval_rate') is not None else '_(not enough data)_'}
+- **Avg revisions:** {at.get('avg_revision_count') if at.get('avg_revision_count') is not None else '_(not enough data)_'}
+
+**Common rejection reasons:**
+{_list_md(at.get('common_rejection_reasons', []))}
+
+---
+
+## Performance Notes
+{_list_md(doc.get('performance_notes', []))}
+"""
+
+        return {
+            "memory_id": memory_id,
+            "workspace_slug": doc.get("workspace_slug", ""),
+            "brief_markdown": brief,
+            "version": doc.get("version", 1),
+        }
+    finally:
+        mongo_client.close()
+
+
+# ---------------------------------------------------------------------------
+# Phase 6M Endpoints: Memory Update Proposals
+# ---------------------------------------------------------------------------
+
+@app.get("/memory-update-proposals")
+def list_memory_update_proposals(
+    workspace_slug: str = Query(""),
+    client_memory_id: str = Query(""),
+    status: str = Query(""),
+    limit: int = Query(50, ge=1, le=200),
+) -> dict:
+    """List memory update proposals."""
+    mongo_client = get_client()
+    try:
+        db = get_database(mongo_client)
+        q: dict[str, Any] = {}
+        if workspace_slug:
+            q["workspace_slug"] = workspace_slug
+        if client_memory_id:
+            q["client_memory_id"] = client_memory_id
+        if status:
+            q["status"] = status
+        records = list(db.memory_update_proposals.find(q).sort([("created_at", -1)]).limit(limit))
+        return {"items": serialize(records), "count": len(records)}
+    finally:
+        mongo_client.close()
+
+
+@app.post("/memory-update-proposals")
+def create_memory_update_proposal(payload: MemoryUpdateProposalCreateRequest) -> dict:
+    """Manually create a memory update proposal."""
+    if not payload.workspace_slug.strip():
+        raise HTTPException(status_code=400, detail="workspace_slug is required.")
+    if not payload.proposed_change:
+        raise HTTPException(status_code=400, detail="proposed_change is required.")
+
+    allowed_fields = {
+        "positioning", "icp", "voice_tone", "offers",
+        "approved_claims", "blocked_claims", "winning_patterns", "losing_patterns",
+        "source_preferences", "workflow_preferences", "distribution_preferences",
+        "approval_tendencies", "performance_notes",
+    }
+    field = payload.proposed_change.get("field", "")
+    if field and field not in allowed_fields:
+        raise HTTPException(status_code=400, detail=f"Unknown memory field '{field}'. Valid fields: {sorted(allowed_fields)}")
+
+    now = utc_now()
+    mongo_client = get_client()
+    try:
+        db = get_database(mongo_client)
+
+        # Phase 6O: conflict + duplicate detection before insertion
+        memory_doc_for_check = db.client_memories.find_one({"workspace_slug": clean_text(payload.workspace_slug)})
+        detected_conflicts = _detect_proposal_conflicts(memory_doc_for_check or {}, payload.proposed_change)
+        dup_result = _detect_proposal_duplicate(db, clean_text(payload.workspace_slug), payload.proposed_change)
+
+        high_severity = [c for c in detected_conflicts if c.get("severity") == "high"]
+
+        # Confidence governance routing
+        if payload.confidence <= _AUTO_REJECT_CONFIDENCE_MAX:
+            governance_suggestion = "auto_reject"
+        elif payload.confidence >= 0.90 and not high_severity and not dup_result["is_duplicate"]:
+            governance_suggestion = "auto_approve"
+        else:
+            governance_suggestion = "review"
+
+        record: dict[str, Any] = {
+            "workspace_slug": clean_text(payload.workspace_slug),
+            "client_memory_id": clean_text(payload.client_memory_id),
+            "client_profile_id": clean_text(payload.client_profile_id),
+            "workflow_run_id": clean_text(payload.workflow_run_id),
+            "source": clean_text(payload.source),
+            "proposed_change": payload.proposed_change,
+            "evidence": clean_text(payload.evidence),
+            "confidence": payload.confidence,
+            "status": "pending",
+            "reviewed_by": None,
+            "reviewed_at": None,
+            # Phase 6O governance fields
+            "conflicts": detected_conflicts,
+            "is_duplicate": dup_result["is_duplicate"],
+            "duplicate_proposal_id": dup_result["duplicate_proposal_id"],
+            "governance_suggestion": governance_suggestion,
+            "created_at": now,
+            "updated_at": now,
+        }
+        result = db.memory_update_proposals.insert_one(record)
+        created = db.memory_update_proposals.find_one({"_id": result.inserted_id})
+        return {"item": serialize(created), "message": "Memory update proposal created."}
+    finally:
+        mongo_client.close()
+
+
+@app.patch("/memory-update-proposals/{proposal_id}")
+def decide_memory_update_proposal(
+    proposal_id: str, payload: MemoryUpdateProposalDecisionRequest
+) -> dict:
+    """Approve or reject a memory update proposal.
+
+    When approved, the proposed change is automatically applied to the linked client memory.
+    """
+    if not is_object_id(proposal_id):
+        raise HTTPException(status_code=400, detail="Invalid proposal_id.")
+
+    mongo_client = get_client()
+    now = utc_now()
+    try:
+        db = get_database(mongo_client)
+        proposal = db.memory_update_proposals.find_one({"_id": ObjectId(proposal_id)})
+        if not proposal:
+            raise HTTPException(status_code=404, detail=f"Proposal '{proposal_id}' not found.")
+        if proposal.get("status") != "pending":
+            raise HTTPException(
+                status_code=400,
+                detail=f"Proposal is already '{proposal.get('status')}' and cannot be re-decided.",
+            )
+
+        # Update proposal status
+        db.memory_update_proposals.update_one(
+            {"_id": proposal["_id"]},
+            {"$set": {
+                "status": payload.status,
+                "reviewed_by": clean_text(payload.reviewed_by) or "operator",
+                "reviewed_at": now,
+                "updated_at": now,
+                "note": clean_text(payload.note),
+            }},
+        )
+
+        applied = False
+        memory_updated = None
+
+        if payload.status == "approved":
+            # Phase 6O: block approval if high-severity conflicts exist and not overridden
+            stored_conflicts = proposal.get("conflicts") or []
+            high_conflicts = [c for c in stored_conflicts if c.get("severity") == "high"]
+            if high_conflicts and not payload.override_conflicts:
+                raise HTTPException(
+                    status_code=409,
+                    detail={
+                        "message": "Proposal has high-severity conflicts. Pass override_conflicts=true to approve anyway.",
+                        "conflicts": high_conflicts,
+                    },
+                )
+
+            # Apply the proposed change to the linked client memory
+            mem_id = proposal.get("client_memory_id", "")
+            change = proposal.get("proposed_change") or {}
+            field = change.get("field", "")
+            change_type = change.get("change_type", "update")  # add | update | remove
+            new_value = change.get("new_value")
+
+            memory_doc = None
+            if mem_id and is_object_id(mem_id):
+                memory_doc = db.client_memories.find_one({"_id": ObjectId(mem_id)})
+            if not memory_doc:
+                memory_doc = db.client_memories.find_one({"workspace_slug": proposal.get("workspace_slug", "")})
+
+            if memory_doc and field and new_value is not None:
+                # Phase 6O: snapshot current state BEFORE applying the change
+                _snapshot_memory_for_history(
+                    db,
+                    memory_doc,
+                    change_summary=[f"{change_type} {field}"],
+                    source_proposal_ids=[proposal_id],
+                    created_by=payload.reviewed_by or "operator",
+                )
+
+                current_val = memory_doc.get(field)
+                if change_type == "add" and isinstance(current_val, list):
+                    # Append to list without duplicates
+                    if isinstance(new_value, list):
+                        merged = list(current_val) + [v for v in new_value if v not in current_val]
+                    else:
+                        merged = list(current_val) + ([new_value] if new_value not in current_val else [])
+                    update_val = merged
+                elif change_type == "remove" and isinstance(current_val, list):
+                    remove_items = new_value if isinstance(new_value, list) else [new_value]
+                    update_val = [v for v in current_val if v not in remove_items]
+                else:
+                    # update: replace
+                    update_val = new_value
+
+                db.client_memories.update_one(
+                    {"_id": memory_doc["_id"]},
+                    {"$set": {field: update_val, "updated_at": now, "version": (memory_doc.get("version") or 1) + 1}},
+                )
+                memory_updated = str(memory_doc["_id"])
+                applied = True
+
+        updated_proposal = db.memory_update_proposals.find_one({"_id": proposal["_id"]})
+        return {
+            "item": serialize(updated_proposal),
+            "applied_to_memory": applied,
+            "memory_id": memory_updated,
+            "message": (
+                f"Proposal {payload.status}."
+                + (" Memory updated." if applied else "")
+                + (" Memory not found — change not applied." if payload.status == "approved" and not applied else "")
+            ),
+        }
+    finally:
+        mongo_client.close()
+
+
+# ---------------------------------------------------------------------------
+# Phase 6O Endpoints: Memory Version History & Health
+# ---------------------------------------------------------------------------
+
+@app.get("/client-memory/{memory_id}/history")
+def get_client_memory_history(
+    memory_id: str,
+    limit: int = Query(50, ge=1, le=200),
+) -> dict:
+    """Return the immutable version history for a client operating memory, newest first."""
+    if not is_object_id(memory_id):
+        raise HTTPException(status_code=400, detail="Invalid memory_id.")
+    mongo_client = get_client()
+    try:
+        db = get_database(mongo_client)
+        if not db.client_memories.find_one({"_id": ObjectId(memory_id)}):
+            raise HTTPException(status_code=404, detail=f"Client memory '{memory_id}' not found.")
+        records = list(
+            db.memory_version_history.find({"client_memory_id": memory_id})
+            .sort([("version", -1)])
+            .limit(limit)
+        )
+        return {"items": serialize(records), "count": len(records)}
+    finally:
+        mongo_client.close()
+
+
+@app.get("/client-memory/{memory_id}/health")
+def get_client_memory_health(memory_id: str) -> dict:
+    """Compute and return health metrics for a client operating memory."""
+    if not is_object_id(memory_id):
+        raise HTTPException(status_code=400, detail="Invalid memory_id.")
+    mongo_client = get_client()
+    try:
+        db = get_database(mongo_client)
+        doc = db.client_memories.find_one({"_id": ObjectId(memory_id)})
+        if not doc:
+            raise HTTPException(status_code=404, detail=f"Client memory '{memory_id}' not found.")
+        health = _compute_memory_health(db, doc)
+        return {"memory_id": memory_id, "workspace_slug": doc.get("workspace_slug", ""), **health}
+    finally:
+        mongo_client.close()
+
+
+@app.post("/client-memory/{memory_id}/rollback")
+def rollback_client_memory(memory_id: str, payload: MemoryRollbackRequest) -> dict:
+    """Restore a client memory to a previous version snapshot.
+
+    The memory is restored to the given target_version snapshot state.
+    A new version history entry is created to preserve the audit trail.
+    The current version number is incremented (not reset).
+    """
+    if not is_object_id(memory_id):
+        raise HTTPException(status_code=400, detail="Invalid memory_id.")
+    mongo_client = get_client()
+    now = utc_now()
+    try:
+        db = get_database(mongo_client)
+        current_doc = db.client_memories.find_one({"_id": ObjectId(memory_id)})
+        if not current_doc:
+            raise HTTPException(status_code=404, detail=f"Client memory '{memory_id}' not found.")
+
+        # Find the target version snapshot
+        history_entry = db.memory_version_history.find_one(
+            {"client_memory_id": memory_id, "version": payload.target_version}
+        )
+        if not history_entry:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Version {payload.target_version} not found in history for memory '{memory_id}'.",
+            )
+
+        snap = history_entry.get("snapshot") or {}
+
+        # Snapshot the CURRENT state before overwriting
+        _snapshot_memory_for_history(
+            db,
+            current_doc,
+            change_summary=[f"rollback to v{payload.target_version}"],
+            source_proposal_ids=[],
+            created_by=payload.rolled_back_by or "operator",
+        )
+
+        # Fields to restore from snapshot (exclude version + timestamps — we manage those)
+        restore_fields = {
+            k: v for k, v in snap.items()
+            if k not in ("version", "created_at", "updated_at", "workspace_slug", "client_profile_id",
+                         "foundation_template_slug", "foundation_template_name")
+        }
+        new_version = (current_doc.get("version") or 1) + 1
+        restore_fields["version"] = new_version
+        restore_fields["updated_at"] = now
+
+        db.client_memories.update_one({"_id": current_doc["_id"]}, {"$set": restore_fields})
+        updated = db.client_memories.find_one({"_id": current_doc["_id"]})
+
+        return {
+            "item": serialize(updated),
+            "rolled_back_from_version": current_doc.get("version", 1),
+            "rolled_back_to_version": payload.target_version,
+            "new_version": new_version,
+            "message": f"Memory rolled back to v{payload.target_version}. Now at v{new_version}.",
+        }
+    finally:
+        mongo_client.close()
+
+
+@app.get("/memory-update-proposals/{proposal_id}/diff")
+def get_proposal_diff(proposal_id: str) -> dict:
+    """Return a before/after diff preview for a memory update proposal."""
+    if not is_object_id(proposal_id):
+        raise HTTPException(status_code=400, detail="Invalid proposal_id.")
+    mongo_client = get_client()
+    try:
+        db = get_database(mongo_client)
+        proposal = db.memory_update_proposals.find_one({"_id": ObjectId(proposal_id)})
+        if not proposal:
+            raise HTTPException(status_code=404, detail=f"Proposal '{proposal_id}' not found.")
+
+        change = proposal.get("proposed_change") or {}
+        mem_id = proposal.get("client_memory_id", "")
+        memory_doc = None
+        if mem_id and is_object_id(mem_id):
+            memory_doc = db.client_memories.find_one({"_id": ObjectId(mem_id)})
+        if not memory_doc:
+            memory_doc = db.client_memories.find_one({"workspace_slug": proposal.get("workspace_slug", "")})
+
+        diff = _generate_memory_diff(memory_doc or {}, change)
+        return {
+            "proposal_id": proposal_id,
+            "workspace_slug": proposal.get("workspace_slug", ""),
+            "status": proposal.get("status", ""),
+            "diff": diff,
+        }
+    finally:
+        mongo_client.close()
+
+
+@app.get("/memory-update-proposals/{proposal_id}/conflicts")
+def get_proposal_conflicts(proposal_id: str) -> dict:
+    """Detect and return conflicts for a memory update proposal."""
+    if not is_object_id(proposal_id):
+        raise HTTPException(status_code=400, detail="Invalid proposal_id.")
+    mongo_client = get_client()
+    try:
+        db = get_database(mongo_client)
+        proposal = db.memory_update_proposals.find_one({"_id": ObjectId(proposal_id)})
+        if not proposal:
+            raise HTTPException(status_code=404, detail=f"Proposal '{proposal_id}' not found.")
+
+        change = proposal.get("proposed_change") or {}
+        mem_id = proposal.get("client_memory_id", "")
+        memory_doc = None
+        if mem_id and is_object_id(mem_id):
+            memory_doc = db.client_memories.find_one({"_id": ObjectId(mem_id)})
+        if not memory_doc:
+            memory_doc = db.client_memories.find_one({"workspace_slug": proposal.get("workspace_slug", "")})
+
+        conflicts = _detect_proposal_conflicts(memory_doc or {}, change)
+        dup = _detect_proposal_duplicate(db, proposal.get("workspace_slug", ""), change)
+
+        return {
+            "proposal_id": proposal_id,
+            "workspace_slug": proposal.get("workspace_slug", ""),
+            "conflicts": conflicts,
+            "conflict_count": len(conflicts),
+            "has_high_severity_conflicts": any(c.get("severity") == "high" for c in conflicts),
+            "duplicate": dup,
+        }
+    finally:
+        mongo_client.close()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Phase 6P — Operational Analytics & Learning Dashboard
+# ─────────────────────────────────────────────────────────────────────────────
+
+_BOTTLENECK_APPROVAL_STALE_HOURS = 24
+_BOTTLENECK_WORKFLOW_STALE_HOURS = 48
+_BOTTLENECK_QUEUE_OVERLOAD_THRESHOLD = 10
+
+
+def _analytics_date_filter(days: int) -> dict:
+    """Return a MongoDB filter for created_at within the last N days. 0 = all time."""
+    if days <= 0:
+        return {}
+    cutoff = utc_now() - timedelta(days=days)
+    return {"created_at": {"$gte": cutoff}}
+
+
+def _safe_rate(numerator: int, denominator: int) -> float:
+    if denominator == 0:
+        return 0.0
+    return round(numerator / denominator, 4)
+
+
+def _avg_duration_seconds(docs: list[dict]) -> float | None:
+    durations = []
+    for d in docs:
+        s = d.get("started_at")
+        e = d.get("completed_at")
+        if s and e:
+            try:
+                delta = (e - s).total_seconds()
+                if delta >= 0:
+                    durations.append(delta)
+            except Exception:
+                pass
+    return round(sum(durations) / len(durations), 1) if durations else None
+
+
+def compute_workflow_metrics(db, workspace_slug: str = "", days: int = 30) -> dict:
+    """Aggregate workflow performance metrics from workflow_runs."""
+    q: dict[str, Any] = {}
+    if workspace_slug:
+        q["workspace_slug"] = workspace_slug
+    q.update(_analytics_date_filter(days))
+    try:
+        all_runs = list(db.workflow_runs.find(q))
+    except Exception:
+        all_runs = []
+
+    total = len(all_runs)
+    completed = [r for r in all_runs if r.get("status") == "completed"]
+    failed = [r for r in all_runs if r.get("status") == "failed"]
+    needs_review = [r for r in all_runs if r.get("status") == "needs_review"]
+
+    by_type: dict[str, int] = {}
+    for r in all_runs:
+        rt = r.get("run_type") or "unknown"
+        by_type[rt] = by_type.get(rt, 0) + 1
+
+    avg_dur = _avg_duration_seconds(completed)
+    memory_informed = [r for r in all_runs if r.get("client_memory_id")]
+
+    return {
+        "total_runs": total,
+        "completed_runs": len(completed),
+        "failed_runs": len(failed),
+        "needs_review_runs": len(needs_review),
+        "completion_rate": _safe_rate(len(completed), total),
+        "failure_rate": _safe_rate(len(failed), total),
+        "avg_duration_seconds": avg_dur,
+        "memory_informed_runs": len(memory_informed),
+        "memory_informed_rate": _safe_rate(len(memory_informed), total),
+        "by_run_type": by_type,
+        "period_days": days,
+    }
+
+
+def compute_memory_metrics(db, workspace_slug: str = "", days: int = 30) -> dict:
+    """Aggregate memory effectiveness from proposals + client_memories."""
+    q: dict[str, Any] = {}
+    if workspace_slug:
+        q["workspace_slug"] = workspace_slug
+    q.update(_analytics_date_filter(days))
+    try:
+        proposals = list(db.memory_update_proposals.find(q))
+    except Exception:
+        proposals = []
+
+    total = len(proposals)
+    approved = [p for p in proposals if p.get("status") == "approved"]
+    rejected = [p for p in proposals if p.get("status") == "rejected"]
+    pending = [p for p in proposals if p.get("status") == "pending"]
+    decided = len(approved) + len(rejected)
+
+    auto_approve = [p for p in proposals if p.get("governance_suggestion") == "auto_approve"]
+    auto_reject = [p for p in proposals if p.get("governance_suggestion") == "auto_reject"]
+    review = [p for p in proposals if p.get("governance_suggestion") == "review"]
+    duplicates = [p for p in proposals if p.get("is_duplicate")]
+    conflicted = [p for p in proposals if p.get("conflicts")]
+
+    confidences = [p.get("confidence", 0.0) for p in proposals if isinstance(p.get("confidence"), (int, float))]
+    avg_confidence = round(sum(confidences) / len(confidences), 3) if confidences else 0.0
+
+    mem_q: dict[str, Any] = {}
+    if workspace_slug:
+        mem_q["workspace_slug"] = workspace_slug
+    try:
+        memories = list(db.client_memories.find(mem_q))
+    except Exception:
+        memories = []
+    total_winning = sum(len(m.get("winning_patterns") or []) for m in memories)
+    total_losing = sum(len(m.get("losing_patterns") or []) for m in memories)
+    total_blocked = sum(len(m.get("blocked_claims") or []) for m in memories)
+
+    return {
+        "total_proposals": total,
+        "approved_proposals": len(approved),
+        "rejected_proposals": len(rejected),
+        "pending_proposals": len(pending),
+        "approval_rate": _safe_rate(len(approved), decided),
+        "rejection_rate": _safe_rate(len(rejected), decided),
+        "avg_confidence": avg_confidence,
+        "governance_auto_approve_count": len(auto_approve),
+        "governance_auto_reject_count": len(auto_reject),
+        "governance_review_count": len(review),
+        "duplicate_proposals": len(duplicates),
+        "conflicted_proposals": len(conflicted),
+        "total_winning_patterns": total_winning,
+        "total_losing_patterns": total_losing,
+        "total_blocked_claims": total_blocked,
+        "memory_count": len(memories),
+        "period_days": days,
+    }
+
+
+def compute_distribution_metrics(db, workspace_slug: str = "", days: int = 30) -> dict:
+    """Distribution funnel metrics from workflow_assets."""
+    q: dict[str, Any] = {}
+    if workspace_slug:
+        q["workspace_slug"] = workspace_slug
+    q.update(_analytics_date_filter(days))
+    try:
+        assets = list(db.workflow_assets.find(q))
+    except Exception:
+        assets = []
+
+    total = len(assets)
+    published = [a for a in assets if a.get("distribution_state") == "published"]
+    queued = [a for a in assets if a.get("distribution_state") == "queued"]
+    archived = [a for a in assets if a.get("distribution_state") == "archived"]
+    not_queued = [a for a in assets if a.get("distribution_state") in ("not_queued", None, "")]
+
+    by_type: dict[str, int] = {}
+    for a in assets:
+        t = a.get("asset_type") or a.get("content_type") or "unknown"
+        by_type[t] = by_type.get(t, 0) + 1
+
+    by_channel: dict[str, int] = {}
+    for a in published:
+        ch = a.get("distribution_channel") or "unknown"
+        by_channel[ch] = by_channel.get(ch, 0) + 1
+
+    return {
+        "total_assets": total,
+        "published_count": len(published),
+        "queued_count": len(queued),
+        "archived_count": len(archived),
+        "not_queued_count": len(not_queued),
+        "publish_rate": _safe_rate(len(published), total),
+        "queue_rate": _safe_rate(len(queued), total),
+        "by_asset_type": by_type,
+        "by_channel": by_channel,
+        "period_days": days,
+    }
+
+
+def compute_approval_metrics(db, workspace_slug: str = "", days: int = 30) -> dict:
+    """Approval funnel and latency from approval_requests."""
+    q: dict[str, Any] = {}
+    if workspace_slug:
+        q["workspace_slug"] = workspace_slug
+    q.update(_analytics_date_filter(days))
+    try:
+        requests_list = list(db.approval_requests.find(q))
+    except Exception:
+        requests_list = []
+
+    total = len(requests_list)
+    open_reqs = [r for r in requests_list if r.get("status") == "open"]
+    approved = [r for r in requests_list if r.get("status") == "approved"]
+    rejected = [r for r in requests_list if r.get("status") == "rejected"]
+    decided = len(approved) + len(rejected)
+
+    latencies_hours = []
+    for r in approved:
+        c = r.get("created_at")
+        a = r.get("approved_at")
+        if c and a:
+            try:
+                delta_h = (a - c).total_seconds() / 3600
+                if delta_h >= 0:
+                    latencies_hours.append(delta_h)
+            except Exception:
+                pass
+    avg_latency_hours = round(sum(latencies_hours) / len(latencies_hours), 2) if latencies_hours else None
+
+    by_type: dict[str, int] = {}
+    for r in requests_list:
+        rt = r.get("request_type") or "unknown"
+        by_type[rt] = by_type.get(rt, 0) + 1
+
+    by_module: dict[str, int] = {}
+    for r in approved:
+        m = r.get("module") or "unknown"
+        by_module[m] = by_module.get(m, 0) + 1
+
+    return {
+        "total_requests": total,
+        "open_count": len(open_reqs),
+        "approved_count": len(approved),
+        "rejected_count": len(rejected),
+        "approval_rate": _safe_rate(len(approved), decided),
+        "rejection_rate": _safe_rate(len(rejected), decided),
+        "avg_approval_latency_hours": avg_latency_hours,
+        "by_request_type": by_type,
+        "approved_by_module": by_module,
+        "period_days": days,
+    }
+
+
+def compute_template_metrics(db, workspace_slug: str = "", days: int = 30) -> dict:
+    """Per-template (module) performance breakdown."""
+    q_base: dict[str, Any] = {}
+    if workspace_slug:
+        q_base["workspace_slug"] = workspace_slug
+    date_f = _analytics_date_filter(days)
+    try:
+        runs = list(db.workflow_runs.find({**q_base, **date_f}))
+    except Exception:
+        runs = []
+    try:
+        assets = list(db.workflow_assets.find({**q_base, **date_f}))
+    except Exception:
+        assets = []
+    try:
+        approvals = list(db.approval_requests.find({**q_base, **date_f}))
+    except Exception:
+        approvals = []
+    try:
+        proposals = list(db.memory_update_proposals.find({**q_base, **date_f}))
+    except Exception:
+        proposals = []
+
+    modules: set[str] = set()
+    for r in runs:
+        if (r.get("inputs") or {}).get("module"):
+            modules.add(r["inputs"]["module"])
+    for a in assets:
+        if a.get("module"):
+            modules.add(a["module"])
+    for ar in approvals:
+        if ar.get("module"):
+            modules.add(ar["module"])
+
+    leaderboard: list[dict] = []
+    for module in sorted(modules):
+        mod_runs = [r for r in runs if (r.get("inputs") or {}).get("module") == module]
+        mod_assets = [a for a in assets if a.get("module") == module]
+        mod_approvals = [ar for ar in approvals if ar.get("module") == module]
+        mod_proposals = [p for p in proposals if (p.get("workspace_slug") or "") == (workspace_slug or (p.get("workspace_slug") or ""))]
+
+        completed_runs = [r for r in mod_runs if r.get("status") == "completed"]
+        approved_apps = [ar for ar in mod_approvals if ar.get("status") == "approved"]
+        rejected_apps = [ar for ar in mod_approvals if ar.get("status") == "rejected"]
+        published_assets = [a for a in mod_assets if a.get("distribution_state") == "published"]
+        decided_count = len(approved_apps) + len(rejected_apps)
+
+        avg_conf = 0.0
+        if mod_proposals:
+            confs = [p.get("confidence", 0.7) for p in mod_proposals if isinstance(p.get("confidence"), (int, float))]
+            avg_conf = round(sum(confs) / len(confs), 3) if confs else 0.0
+
+        leaderboard.append({
+            "module": module,
+            "workflow_runs": len(mod_runs),
+            "workflow_completion_rate": _safe_rate(len(completed_runs), len(mod_runs)),
+            "total_assets": len(mod_assets),
+            "total_approvals": len(mod_approvals),
+            "approval_rate": _safe_rate(len(approved_apps), decided_count),
+            "rejection_rate": _safe_rate(len(rejected_apps), decided_count),
+            "distribution_completion_rate": _safe_rate(len(published_assets), len(mod_assets)),
+            "avg_memory_proposal_confidence": avg_conf,
+        })
+
+    leaderboard.sort(key=lambda x: (x["approval_rate"], x["workflow_completion_rate"]), reverse=True)
+    return {
+        "templates": leaderboard,
+        "total_modules": len(leaderboard),
+        "period_days": days,
+    }
+
+
+def compute_client_health_metrics(db, workspace_slug: str = "", days: int = 30) -> dict:
+    """Per-workspace operational health scoring."""
+    if workspace_slug:
+        slugs = [workspace_slug]
+    else:
+        try:
+            ws_docs = list(db.workspaces.find({}, {"slug": 1}))
+            slugs = [w.get("slug") for w in ws_docs if w.get("slug")]
+        except Exception:
+            slugs = []
+        if not slugs:
+            try:
+                runs_sample = list(db.workflow_runs.find({}, {"workspace_slug": 1}).limit(500))
+                slugs = list({r.get("workspace_slug") for r in runs_sample if r.get("workspace_slug")})
+            except Exception:
+                slugs = []
+
+    scores: list[dict] = []
+    for ws in slugs:
+        wf_metrics = compute_workflow_metrics(db, ws, days)
+        mem_metrics = compute_memory_metrics(db, ws, days)
+        dist_metrics = compute_distribution_metrics(db, ws, days)
+        app_metrics = compute_approval_metrics(db, ws, days)
+
+        mem_health_score = 0.0
+        try:
+            mem_doc = db.client_memories.find_one({"workspace_slug": ws})
+            if mem_doc:
+                h = _compute_memory_health(db, mem_doc)
+                mem_health_score = h.get("memory_health_score", 0.0)
+        except Exception:
+            pass
+
+        weekly_velocity = round(wf_metrics["total_runs"] / max(days / 7, 1), 2)
+        components = [
+            wf_metrics["completion_rate"],
+            mem_metrics["approval_rate"],
+            dist_metrics["publish_rate"],
+            app_metrics["approval_rate"],
+            mem_health_score,
+        ]
+        non_zero = [c for c in components if c > 0]
+        overall_score = round(sum(non_zero) / len(non_zero), 3) if non_zero else 0.0
+        status = (
+            "healthy" if overall_score >= 0.70 else
+            "needs_attention" if overall_score >= 0.40 else
+            "at_risk"
+        )
+        scores.append({
+            "workspace_slug": ws,
+            "overall_health_score": overall_score,
+            "status": status,
+            "workflow_velocity_per_week": weekly_velocity,
+            "workflow_completion_rate": wf_metrics["completion_rate"],
+            "memory_health_score": mem_health_score,
+            "approval_efficiency": app_metrics["approval_rate"],
+            "distribution_efficiency": dist_metrics["publish_rate"],
+            "memory_proposal_approval_rate": mem_metrics["approval_rate"],
+            "pending_approvals": app_metrics["open_count"],
+            "total_workflow_runs": wf_metrics["total_runs"],
+        })
+
+    scores.sort(key=lambda x: x["overall_health_score"], reverse=True)
+    return {
+        "workspaces": scores,
+        "total_workspaces": len(scores),
+        "period_days": days,
+    }
+
+
+def compute_learning_signals(db, workspace_slug: str = "", days: int = 30) -> dict:
+    """Surface top patterns, best-performing channels, tones, and change fields."""
+    mem_q: dict[str, Any] = {}
+    if workspace_slug:
+        mem_q["workspace_slug"] = workspace_slug
+    try:
+        memories = list(db.client_memories.find(mem_q))
+    except Exception:
+        memories = []
+
+    pattern_counts: dict[str, int] = {}
+    for m in memories:
+        for p in (m.get("winning_patterns") or []):
+            pattern_counts[p] = pattern_counts.get(p, 0) + 1
+    top_winning = sorted(pattern_counts.items(), key=lambda x: x[1], reverse=True)[:10]
+
+    rejected_counts: dict[str, int] = {}
+    for m in memories:
+        for p in (m.get("losing_patterns") or []):
+            rejected_counts[p] = rejected_counts.get(p, 0) + 1
+    top_rejected = sorted(rejected_counts.items(), key=lambda x: x[1], reverse=True)[:10]
+
+    tone_counts: dict[str, int] = {}
+    for m in memories:
+        tone = (m.get("voice_tone") or {}).get("tone", "")
+        if tone:
+            tone_counts[tone] = tone_counts.get(tone, 0) + 1
+    top_tones = sorted(tone_counts.items(), key=lambda x: x[1], reverse=True)[:5]
+
+    asset_q: dict[str, Any] = {"distribution_state": "published"}
+    if workspace_slug:
+        asset_q["workspace_slug"] = workspace_slug
+    asset_q.update(_analytics_date_filter(days))
+    try:
+        published_assets = list(db.workflow_assets.find(asset_q))
+    except Exception:
+        published_assets = []
+
+    channel_counts: dict[str, int] = {}
+    for a in published_assets:
+        ch = a.get("distribution_channel") or a.get("platform") or "unknown"
+        channel_counts[ch] = channel_counts.get(ch, 0) + 1
+    top_channels = sorted(channel_counts.items(), key=lambda x: x[1], reverse=True)[:5]
+
+    prop_q: dict[str, Any] = {"status": "approved"}
+    if workspace_slug:
+        prop_q["workspace_slug"] = workspace_slug
+    prop_q.update(_analytics_date_filter(days))
+    try:
+        approved_props = list(db.memory_update_proposals.find(prop_q))
+    except Exception:
+        approved_props = []
+
+    change_field_counts: dict[str, int] = {}
+    for p in approved_props:
+        f = (p.get("proposed_change") or {}).get("field", "unknown")
+        change_field_counts[f] = change_field_counts.get(f, 0) + 1
+    top_change_fields = sorted(change_field_counts.items(), key=lambda x: x[1], reverse=True)[:5]
+
+    return {
+        "top_winning_patterns": [{"pattern": p, "frequency": c} for p, c in top_winning],
+        "top_rejected_patterns": [{"pattern": p, "frequency": c} for p, c in top_rejected],
+        "top_tone_profiles": [{"tone": t, "workspace_count": c} for t, c in top_tones],
+        "top_distribution_channels": [{"channel": ch, "published_count": c} for ch, c in top_channels],
+        "top_approved_change_fields": [{"field": f, "approval_count": c} for f, c in top_change_fields],
+        "total_memories_analyzed": len(memories),
+        "period_days": days,
+    }
+
+
+def compute_bottlenecks(db, workspace_slug: str = "", days: int = 30) -> list[dict]:
+    """Detect operational bottlenecks: stuck approvals, stale workflows, overloaded queues."""
+    now = utc_now()
+    bottlenecks: list[dict] = []
+    q_base: dict[str, Any] = {}
+    if workspace_slug:
+        q_base["workspace_slug"] = workspace_slug
+
+    stale_approval_cutoff = now - timedelta(hours=_BOTTLENECK_APPROVAL_STALE_HOURS)
+    try:
+        stuck_approvals = list(db.approval_requests.find({
+            **q_base,
+            "status": "open",
+            "created_at": {"$lt": stale_approval_cutoff},
+        }))
+        if stuck_approvals:
+            bottlenecks.append({
+                "type": "stuck_approvals",
+                "severity": "high" if len(stuck_approvals) > 5 else "medium",
+                "count": len(stuck_approvals),
+                "description": f"{len(stuck_approvals)} approval request(s) open for more than {_BOTTLENECK_APPROVAL_STALE_HOURS}h.",
+                "workspace_slug": workspace_slug or "all",
+                "item_ids": [str(a["_id"]) for a in stuck_approvals[:5]],
+                "status": "Blocked",
+            })
+    except Exception:
+        pass
+
+    stale_wf_cutoff = now - timedelta(hours=_BOTTLENECK_WORKFLOW_STALE_HOURS)
+    try:
+        stale_wf = list(db.workflow_runs.find({
+            **q_base,
+            "status": "needs_review",
+            "created_at": {"$lt": stale_wf_cutoff},
+        }))
+        if stale_wf:
+            bottlenecks.append({
+                "type": "stale_workflow_runs",
+                "severity": "medium",
+                "count": len(stale_wf),
+                "description": f"{len(stale_wf)} workflow run(s) stuck in needs_review for more than {_BOTTLENECK_WORKFLOW_STALE_HOURS}h.",
+                "workspace_slug": workspace_slug or "all",
+                "item_ids": [str(r["_id"]) for r in stale_wf[:5]],
+                "status": "Delayed",
+            })
+    except Exception:
+        pass
+
+    if not workspace_slug:
+        try:
+            ws_docs = list(db.workflow_runs.find({}, {"workspace_slug": 1}).limit(500))
+            ws_set = {r.get("workspace_slug") for r in ws_docs if r.get("workspace_slug")}
+            for ws in ws_set:
+                open_count = db.approval_requests.count_documents({"workspace_slug": ws, "status": "open"})
+                if open_count >= _BOTTLENECK_QUEUE_OVERLOAD_THRESHOLD:
+                    bottlenecks.append({
+                        "type": "overloaded_queue",
+                        "severity": "high",
+                        "count": open_count,
+                        "description": f"Workspace '{ws}' has {open_count} open approval requests (threshold: {_BOTTLENECK_QUEUE_OVERLOAD_THRESHOLD}).",
+                        "workspace_slug": ws,
+                        "item_ids": [],
+                        "status": "At Risk",
+                    })
+        except Exception:
+            pass
+    else:
+        try:
+            open_count = db.approval_requests.count_documents({"workspace_slug": workspace_slug, "status": "open"})
+            if open_count >= _BOTTLENECK_QUEUE_OVERLOAD_THRESHOLD:
+                bottlenecks.append({
+                    "type": "overloaded_queue",
+                    "severity": "high",
+                    "count": open_count,
+                    "description": f"Workspace '{workspace_slug}' has {open_count} open approval requests.",
+                    "workspace_slug": workspace_slug,
+                    "item_ids": [],
+                    "status": "At Risk",
+                })
+        except Exception:
+            pass
+
+    auto_approve_stale_cutoff = now - timedelta(hours=12)
+    try:
+        stale_proposals = list(db.memory_update_proposals.find({
+            **q_base,
+            "status": "pending",
+            "governance_suggestion": "auto_approve",
+            "created_at": {"$lt": auto_approve_stale_cutoff},
+        }))
+        if stale_proposals:
+            bottlenecks.append({
+                "type": "unactioned_auto_approve_proposals",
+                "severity": "low",
+                "count": len(stale_proposals),
+                "description": f"{len(stale_proposals)} memory proposal(s) suggested auto_approve but remain pending.",
+                "workspace_slug": workspace_slug or "all",
+                "item_ids": [str(p["_id"]) for p in stale_proposals[:5]],
+                "status": "Needs Attention",
+            })
+    except Exception:
+        pass
+
+    bottlenecks.sort(key=lambda x: {"high": 0, "medium": 1, "low": 2}.get(x.get("severity", "low"), 3))
+    return bottlenecks
+
+
+# ── Phase 6P Analytics Endpoints ──────────────────────────────────────────────
+
+@app.get("/analytics/workflows")
+def analytics_workflows(
+    workspace_slug: str = Query(""),
+    days: int = Query(30, ge=0, le=365),
+) -> dict:
+    client = get_client()
+    try:
+        db = get_database(client)
+        return compute_workflow_metrics(db, workspace_slug, days)
+    finally:
+        client.close()
+
+
+@app.get("/analytics/memory")
+def analytics_memory(
+    workspace_slug: str = Query(""),
+    days: int = Query(30, ge=0, le=365),
+) -> dict:
+    client = get_client()
+    try:
+        db = get_database(client)
+        return compute_memory_metrics(db, workspace_slug, days)
+    finally:
+        client.close()
+
+
+@app.get("/analytics/distribution")
+def analytics_distribution(
+    workspace_slug: str = Query(""),
+    days: int = Query(30, ge=0, le=365),
+) -> dict:
+    client = get_client()
+    try:
+        db = get_database(client)
+        return compute_distribution_metrics(db, workspace_slug, days)
+    finally:
+        client.close()
+
+
+@app.get("/analytics/approvals")
+def analytics_approvals(
+    workspace_slug: str = Query(""),
+    days: int = Query(30, ge=0, le=365),
+) -> dict:
+    client = get_client()
+    try:
+        db = get_database(client)
+        return compute_approval_metrics(db, workspace_slug, days)
+    finally:
+        client.close()
+
+
+@app.get("/analytics/templates")
+def analytics_templates(
+    workspace_slug: str = Query(""),
+    days: int = Query(30, ge=0, le=365),
+) -> dict:
+    client = get_client()
+    try:
+        db = get_database(client)
+        return compute_template_metrics(db, workspace_slug, days)
+    finally:
+        client.close()
+
+
+@app.get("/analytics/client-health")
+def analytics_client_health(
+    workspace_slug: str = Query(""),
+    days: int = Query(30, ge=0, le=365),
+) -> dict:
+    client = get_client()
+    try:
+        db = get_database(client)
+        return compute_client_health_metrics(db, workspace_slug, days)
+    finally:
+        client.close()
+
+
+@app.get("/analytics/learning-signals")
+def analytics_learning_signals(
+    workspace_slug: str = Query(""),
+    days: int = Query(30, ge=0, le=365),
+) -> dict:
+    client = get_client()
+    try:
+        db = get_database(client)
+        return compute_learning_signals(db, workspace_slug, days)
+    finally:
+        client.close()
+
+
+@app.get("/analytics/bottlenecks")
+def analytics_bottlenecks(
+    workspace_slug: str = Query(""),
+    days: int = Query(30, ge=0, le=365),
+) -> dict:
+    client = get_client()
+    try:
+        db = get_database(client)
+        items = compute_bottlenecks(db, workspace_slug, days)
+        return {"bottlenecks": items, "total": len(items), "period_days": days}
+    finally:
+        client.close()
+
+
+# ── Phase 6Q: Autonomous Optimization & Recommendation Engine ────────────────
+
+import hashlib as _hashlib
+
+_REC_WORKFLOW_MIN_COMPLETION_RATE = 0.70
+_REC_WORKFLOW_MAX_AVG_DURATION_S = 300.0
+_REC_MEMORY_MIN_AUTO_APPROVE_RATE = 0.50
+_REC_MEMORY_MAX_PENDING = 10
+_REC_TEMPLATE_MIN_APPROVAL_RATE_DIFF = 0.10
+_REC_DIST_MIN_PUBLISH_RATE = 0.60
+_REC_CLIENT_HEALTH_WARN_THRESHOLD = 0.50
+_REC_CONFIDENCE_HIGH = 0.90
+_REC_CONFIDENCE_MEDIUM = 0.70
+_REC_CONFIDENCE_LOW = 0.50
+
+
+def _rec_id(rec_type: str, title: str, workspace_slug: str = "") -> str:
+    """Deterministic recommendation ID from type + workspace + title."""
+    key = f"{rec_type}:{workspace_slug}:{title}"
+    return _hashlib.md5(key.encode()).hexdigest()[:16]  # noqa: S324
+
+
+def _make_recommendation(
+    rec_type: str,
+    title: str,
+    description: str,
+    confidence: float,
+    impact: str,
+    evidence: list,
+    affected_workspaces: list,
+    workspace_slug: str = "",
+) -> dict:
+    return {
+        "id": _rec_id(rec_type, title, workspace_slug),
+        "recommendation_type": rec_type,
+        "title": title,
+        "description": description,
+        "confidence_score": round(confidence, 4),
+        "impact_estimate": impact,
+        "evidence": evidence,
+        "affected_workspaces": affected_workspaces,
+        "generated_at": utc_now().isoformat(),
+        "status": "active",
+    }
+
+
+def generate_workflow_recommendations(db, workspace_slug: str = "", days: int = 30) -> list:
+    """Derive workflow optimization recommendations from telemetry."""
+    recs: list[dict] = []
+    try:
+        metrics = compute_workflow_metrics(db, workspace_slug, days)
+    except Exception:
+        return recs
+
+    total = metrics.get("total_runs", 0)
+    if total == 0:
+        return recs
+
+    ws_list = [workspace_slug] if workspace_slug else []
+    completion_rate = metrics.get("completion_rate", 1.0)
+    avg_dur = metrics.get("avg_duration_seconds")
+    memory_rate = metrics.get("memory_informed_rate", 1.0)
+    needs_review = metrics.get("needs_review_runs", 0)
+    failed = metrics.get("failed_runs", 0)
+
+    if completion_rate < _REC_WORKFLOW_MIN_COMPLETION_RATE:
+        recs.append(_make_recommendation(
+            rec_type="workflow_optimization",
+            title="Improve Workflow Completion Rate",
+            description=(
+                f"Workflow completion rate is {round(completion_rate * 100, 1)}%, "
+                f"below the recommended minimum of {round(_REC_WORKFLOW_MIN_COMPLETION_RATE * 100, 1)}%. "
+                "Review failed runs and common failure modes."
+            ),
+            confidence=_REC_CONFIDENCE_HIGH,
+            impact="high",
+            evidence=[
+                f"Completion rate: {round(completion_rate * 100, 1)}% over last {days or 'all'} days.",
+                f"{failed} workflow(s) failed out of {total} total runs.",
+            ],
+            affected_workspaces=ws_list,
+            workspace_slug=workspace_slug,
+        ))
+
+    if avg_dur is not None and avg_dur > _REC_WORKFLOW_MAX_AVG_DURATION_S:
+        recs.append(_make_recommendation(
+            rec_type="workflow_optimization",
+            title="Reduce Average Workflow Duration",
+            description=(
+                f"Average workflow duration is {round(avg_dur, 1)}s, "
+                f"exceeding the recommended ceiling of {_REC_WORKFLOW_MAX_AVG_DURATION_S}s. "
+                "Consider splitting long-running workflows or parallelizing steps."
+            ),
+            confidence=_REC_CONFIDENCE_MEDIUM,
+            impact="medium",
+            evidence=[
+                f"Average duration: {round(avg_dur, 1)}s across {total} run(s).",
+            ],
+            affected_workspaces=ws_list,
+            workspace_slug=workspace_slug,
+        ))
+
+    if memory_rate < 0.5 and total >= 3:
+        recs.append(_make_recommendation(
+            rec_type="workflow_optimization",
+            title="Increase Memory-Informed Workflow Coverage",
+            description=(
+                f"Only {round(memory_rate * 100, 1)}% of workflows use client memory context. "
+                "Enabling memory-informed execution improves output quality and approval rates."
+            ),
+            confidence=_REC_CONFIDENCE_MEDIUM,
+            impact="medium",
+            evidence=[
+                f"{round(memory_rate * 100, 1)}% of {total} workflow(s) were memory-informed.",
+            ],
+            affected_workspaces=ws_list,
+            workspace_slug=workspace_slug,
+        ))
+
+    if needs_review >= 5:
+        recs.append(_make_recommendation(
+            rec_type="bottleneck_remediation",
+            title="Clear Needs-Review Workflow Backlog",
+            description=(
+                f"{needs_review} workflow run(s) are in needs_review state. "
+                "A growing backlog reduces throughput and blocks downstream distribution."
+            ),
+            confidence=_REC_CONFIDENCE_HIGH,
+            impact="high",
+            evidence=[f"{needs_review} run(s) stuck in needs_review state."],
+            affected_workspaces=ws_list,
+            workspace_slug=workspace_slug,
+        ))
+
+    return recs
+
+
+def generate_memory_recommendations(db, workspace_slug: str = "", days: int = 30) -> list:
+    """Derive memory refinement recommendations from proposal and memory metrics."""
+    recs: list[dict] = []
+    try:
+        metrics = compute_memory_metrics(db, workspace_slug, days)
+    except Exception:
+        return recs
+
+    ws_list = [workspace_slug] if workspace_slug else []
+    total_props = metrics.get("total_proposals", 0)
+    auto_approve_rate = metrics.get("approval_rate", 1.0)
+    pending = metrics.get("pending_proposals", 0)
+    rejection_rate = metrics.get("rejection_rate", 0.0)
+    total_memories = metrics.get("memory_count", 0)
+
+    if pending >= _REC_MEMORY_MAX_PENDING:
+        recs.append(_make_recommendation(
+            rec_type="memory_refinement",
+            title="Action Pending Memory Update Proposals",
+            description=(
+                f"{pending} memory update proposal(s) are awaiting review. "
+                "Unactioned proposals delay knowledge base improvements."
+            ),
+            confidence=_REC_CONFIDENCE_HIGH,
+            impact="medium",
+            evidence=[f"{pending} proposal(s) currently pending review."],
+            affected_workspaces=ws_list,
+            workspace_slug=workspace_slug,
+        ))
+
+    if total_props >= 5 and auto_approve_rate < _REC_MEMORY_MIN_AUTO_APPROVE_RATE:
+        recs.append(_make_recommendation(
+            rec_type="memory_refinement",
+            title="Review Memory Governance Thresholds",
+            description=(
+                f"Auto-approval rate is {round(auto_approve_rate * 100, 1)}%, "
+                "suggesting confidence thresholds may be too conservative. "
+                "Consider adjusting to reduce manual review load."
+            ),
+            confidence=_REC_CONFIDENCE_MEDIUM,
+            impact="medium",
+            evidence=[
+                f"Approval rate: {round(auto_approve_rate * 100, 1)}% across {total_props} proposal(s).",
+            ],
+            affected_workspaces=ws_list,
+            workspace_slug=workspace_slug,
+        ))
+
+    if total_props >= 5 and rejection_rate > 0.40:
+        recs.append(_make_recommendation(
+            rec_type="memory_refinement",
+            title="Investigate High Memory Proposal Rejection Rate",
+            description=(
+                f"{round(rejection_rate * 100, 1)}% of memory proposals are being rejected. "
+                "High rejection rates suggest agent extraction quality issues or misaligned scoring rules."
+            ),
+            confidence=_REC_CONFIDENCE_MEDIUM,
+            impact="high",
+            evidence=[
+                f"Rejection rate: {round(rejection_rate * 100, 1)}% across {total_props} proposal(s).",
+            ],
+            affected_workspaces=ws_list,
+            workspace_slug=workspace_slug,
+        ))
+
+    if total_memories == 0 and total_props == 0:
+        recs.append(_make_recommendation(
+            rec_type="memory_refinement",
+            title="Initialize Client Memory Coverage",
+            description=(
+                "No client memory records or update proposals have been created. "
+                "Initializing memory enables personalized, context-aware workflow execution."
+            ),
+            confidence=_REC_CONFIDENCE_LOW,
+            impact="medium",
+            evidence=["No client memory entries or proposals found."],
+            affected_workspaces=ws_list,
+            workspace_slug=workspace_slug,
+        ))
+
+    return recs
+
+
+def generate_template_recommendations(db, workspace_slug: str = "", days: int = 30) -> list:
+    """Compare template performance and surface adaptation opportunities."""
+    recs: list[dict] = []
+    try:
+        metrics = compute_template_metrics(db, workspace_slug, days)
+    except Exception:
+        return recs
+
+    templates = metrics.get("templates", [])
+    ws_list = [workspace_slug] if workspace_slug else []
+
+    if len(templates) < 2:
+        return recs
+
+    ranked = sorted(templates, key=lambda t: t.get("approval_rate", 0.0), reverse=True)
+    best = ranked[0]
+    worst = ranked[-1]
+    best_rate = best.get("approval_rate", 0.0)
+    worst_rate = worst.get("approval_rate", 0.0)
+    diff = best_rate - worst_rate
+
+    if diff >= _REC_TEMPLATE_MIN_APPROVAL_RATE_DIFF and worst.get("workflow_runs", 0) >= 2:
+        recs.append(_make_recommendation(
+            rec_type="template_adaptation",
+            title=f"Promote {best['module']} Template Patterns",
+            description=(
+                f"The '{best['module']}' template achieves a {round(best_rate * 100, 1)}% approval rate, "
+                f"{round(diff * 100, 1)}% higher than '{worst['module']}' ({round(worst_rate * 100, 1)}%). "
+                "Consider applying patterns from the higher-performing template."
+            ),
+            confidence=_REC_CONFIDENCE_MEDIUM,
+            impact="medium",
+            evidence=[
+                f"'{best['module']}' approval rate: {round(best_rate * 100, 1)}%.",
+                f"'{worst['module']}' approval rate: {round(worst_rate * 100, 1)}%.",
+                f"Performance gap: {round(diff * 100, 1)} percentage points.",
+            ],
+            affected_workspaces=ws_list,
+            workspace_slug=workspace_slug,
+        ))
+
+    underutilized = [
+        t for t in templates
+        if t.get("workflow_runs", 0) <= 1 and t.get("approval_rate", 0.0) == 0.0
+    ]
+    for tmpl in underutilized[:2]:
+        recs.append(_make_recommendation(
+            rec_type="template_adaptation",
+            title=f"Activate or Archive Underutilized Template: {tmpl['module']}",
+            description=(
+                f"Template '{tmpl['module']}' has {tmpl.get('workflow_runs', 0)} run(s) and 0% approval rate. "
+                "Consider activating it for a test run or archiving to reduce noise."
+            ),
+            confidence=_REC_CONFIDENCE_LOW,
+            impact="low",
+            evidence=[
+                f"'{tmpl['module']}': {tmpl.get('workflow_runs', 0)} run(s), "
+                f"{round(tmpl.get('approval_rate', 0.0) * 100, 1)}% approval rate.",
+            ],
+            affected_workspaces=ws_list,
+            workspace_slug=workspace_slug,
+        ))
+
+    return recs
+
+
+def generate_distribution_recommendations(db, workspace_slug: str = "", days: int = 30) -> list:
+    """Derive distribution pipeline recommendations from asset funnel metrics."""
+    recs: list[dict] = []
+    try:
+        metrics = compute_distribution_metrics(db, workspace_slug, days)
+    except Exception:
+        return recs
+
+    ws_list = [workspace_slug] if workspace_slug else []
+    total = metrics.get("total_assets", 0)
+    publish_rate = metrics.get("publish_rate", 1.0)
+    channel_breakdown = metrics.get("by_channel", {})
+
+    if total == 0:
+        return recs
+
+    if publish_rate < _REC_DIST_MIN_PUBLISH_RATE:
+        recs.append(_make_recommendation(
+            rec_type="distribution_timing",
+            title="Improve Distribution Pipeline Publish Rate",
+            description=(
+                f"Distribution publish rate is {round(publish_rate * 100, 1)}%, "
+                f"below the recommended minimum of {round(_REC_DIST_MIN_PUBLISH_RATE * 100, 1)}%. "
+                "Review blocked or pending assets and resolve downstream blockers."
+            ),
+            confidence=_REC_CONFIDENCE_HIGH,
+            impact="high",
+            evidence=[
+                f"Publish rate: {round(publish_rate * 100, 1)}% across {total} asset(s).",
+            ],
+            affected_workspaces=ws_list,
+            workspace_slug=workspace_slug,
+        ))
+
+    if len(channel_breakdown) >= 2:
+        sorted_channels = sorted(channel_breakdown.items(), key=lambda x: x[1], reverse=True)
+        top_ch, top_cnt = sorted_channels[0]
+        bot_ch, bot_cnt = sorted_channels[-1]
+        if bot_cnt > 0:
+            ratio = round(top_cnt / bot_cnt, 1)
+            if ratio >= 2.0:
+                recs.append(_make_recommendation(
+                    rec_type="distribution_timing",
+                    title=f"Prioritize {top_ch.title()} Distribution Channel",
+                    description=(
+                        f"'{top_ch}' produces {ratio}x more distributed assets than '{bot_ch}'. "
+                        "Consider reallocating production capacity toward the higher-performing channel."
+                    ),
+                    confidence=_REC_CONFIDENCE_MEDIUM,
+                    impact="medium",
+                    evidence=[
+                        f"'{top_ch}': {top_cnt} asset(s) distributed.",
+                        f"'{bot_ch}': {bot_cnt} asset(s) distributed.",
+                        f"Performance ratio: {ratio}x.",
+                    ],
+                    affected_workspaces=ws_list,
+                    workspace_slug=workspace_slug,
+                ))
+
+    return recs
+
+
+def generate_operational_recommendations(db, workspace_slug: str = "", days: int = 30) -> list:
+    """Generate bottleneck remediation and client health warning recommendations."""
+    recs: list[dict] = []
+    ws_list = [workspace_slug] if workspace_slug else []
+
+    try:
+        bottlenecks = compute_bottlenecks(db, workspace_slug, days)
+        for bn in bottlenecks:
+            severity = bn.get("severity", "low")
+            impact = "high" if severity == "high" else "medium"
+            bn_ws = bn.get("workspace_slug") or workspace_slug
+            affected = [bn_ws] if bn_ws and bn_ws != "all" else ws_list
+            recs.append(_make_recommendation(
+                rec_type="bottleneck_remediation",
+                title=f"Resolve Bottleneck: {bn.get('type', 'unknown').replace('_', ' ').title()}",
+                description=bn.get("description", ""),
+                confidence=_REC_CONFIDENCE_HIGH if severity == "high" else _REC_CONFIDENCE_MEDIUM,
+                impact=impact,
+                evidence=[bn.get("description", "")],
+                affected_workspaces=affected,
+                workspace_slug=workspace_slug,
+            ))
+    except Exception:
+        pass
+
+    try:
+        health_metrics = compute_client_health_metrics(db, workspace_slug, days)
+        for ws_data in health_metrics.get("workspaces", []):
+            score = ws_data.get("overall_health_score", 1.0)
+            if score < _REC_CLIENT_HEALTH_WARN_THRESHOLD:
+                ws = ws_data.get("workspace_slug", workspace_slug)
+                recs.append(_make_recommendation(
+                    rec_type="client_health_warning",
+                    title=f"Client Health Alert: {ws}",
+                    description=(
+                        f"Workspace '{ws}' has a health score of {round(score, 2)}, "
+                        f"below the warning threshold of {_REC_CLIENT_HEALTH_WARN_THRESHOLD}. "
+                        "Review workflow completion, approval rates, and memory quality."
+                    ),
+                    confidence=_REC_CONFIDENCE_HIGH,
+                    impact="high",
+                    evidence=[
+                        f"Health score: {round(score, 2)} (threshold: {_REC_CLIENT_HEALTH_WARN_THRESHOLD}).",
+                        f"Workflow completion: {round(ws_data.get('workflow_completion_rate', 0.0) * 100, 1)}%.",
+                        f"Approval efficiency: {round(ws_data.get('approval_efficiency', 0.0) * 100, 1)}%.",
+                    ],
+                    affected_workspaces=[ws],
+                    workspace_slug=workspace_slug,
+                ))
+    except Exception:
+        pass
+
+    return recs
+
+
+def generate_cross_client_signals(db, days: int = 30) -> dict:
+    """Aggregate anonymized intelligence across all workspaces."""
+    date_f = _analytics_date_filter(days)
+
+    try:
+        prop_q: dict[str, Any] = {"status": "approved", "extracted_patterns": {"$exists": True}}
+        prop_q.update(date_f)
+        approved_props = list(db.memory_update_proposals.find(prop_q))
+    except Exception:
+        approved_props = []
+
+    pattern_counts: dict[str, int] = {}
+    for p in approved_props:
+        for pat in (p.get("extracted_patterns") or []):
+            key = str(pat)
+            pattern_counts[key] = pattern_counts.get(key, 0) + 1
+    top_patterns = sorted(pattern_counts.items(), key=lambda x: x[1], reverse=True)[:5]
+
+    try:
+        tmpl_metrics = compute_template_metrics(db, workspace_slug="", days=days)
+        global_templates = sorted(
+            tmpl_metrics.get("templates", []),
+            key=lambda t: t.get("approval_rate", 0.0),
+            reverse=True,
+        )[:5]
+    except Exception:
+        global_templates = []
+
+    try:
+        dist_metrics = compute_distribution_metrics(db, workspace_slug="", days=days)
+        top_channels = sorted(
+            dist_metrics.get("by_channel", {}).items(),
+            key=lambda x: x[1],
+            reverse=True,
+        )[:5]
+    except Exception:
+        top_channels = []
+
+    try:
+        run_q: dict[str, Any] = {}
+        run_q.update(date_f)
+        all_runs = list(db.workflow_runs.find(run_q))
+        active_workspaces = len({r.get("workspace_slug") for r in all_runs if r.get("workspace_slug")})
+    except Exception:
+        active_workspaces = 0
+
+    try:
+        all_bottlenecks = compute_bottlenecks(db, workspace_slug="", days=days)
+        bn_type_counts: dict[str, int] = {}
+        for bn in all_bottlenecks:
+            t = bn.get("type", "unknown")
+            bn_type_counts[t] = bn_type_counts.get(t, 0) + 1
+        common_bottlenecks = sorted(bn_type_counts.items(), key=lambda x: x[1], reverse=True)
+    except Exception:
+        common_bottlenecks = []
+
+    return {
+        "period_days": days,
+        "active_workspaces": active_workspaces,
+        "top_winning_patterns": [{"pattern": p, "frequency": c} for p, c in top_patterns],
+        "best_performing_templates": global_templates,
+        "top_channels": [{"channel": ch, "count": c} for ch, c in top_channels],
+        "common_bottlenecks": [{"type": t, "count": c} for t, c in common_bottlenecks],
+        "generated_at": utc_now().isoformat(),
+    }
+
+
+def _collect_all_recommendations(db, workspace_slug: str = "", days: int = 30) -> list:
+    """Collect and deduplicate recommendations from all generators, merging persisted statuses."""
+    recs: list[dict] = []
+    for generator in [
+        generate_workflow_recommendations,
+        generate_memory_recommendations,
+        generate_template_recommendations,
+        generate_distribution_recommendations,
+        generate_operational_recommendations,
+    ]:
+        try:
+            recs.extend(generator(db, workspace_slug, days))
+        except Exception:
+            pass
+
+    seen: dict[str, dict] = {}
+    for r in recs:
+        seen[r["id"]] = r
+    recs = list(seen.values())
+
+    rec_ids = [r["id"] for r in recs]
+    try:
+        overrides = {
+            o["rec_id"]: o
+            for o in db.recommendation_statuses.find({"rec_id": {"$in": rec_ids}})
+        }
+    except Exception:
+        overrides = {}
+
+    for r in recs:
+        override = overrides.get(r["id"])
+        if override:
+            r["status"] = override.get("status", r["status"])
+            r["updated_at"] = override.get("updated_at", r.get("generated_at"))
+
+    return recs
+
+
+def _update_recommendation_status(rec_id: str, new_status: str) -> dict:
+    client = get_client()
+    try:
+        db = get_database(client)
+        now = utc_now()
+        db.recommendation_statuses.update_one(
+            {"rec_id": rec_id},
+            {"$set": {"rec_id": rec_id, "status": new_status, "updated_at": now}},
+            upsert=True,
+        )
+        return {"rec_id": rec_id, "status": new_status, "updated_at": now.isoformat()}
+    finally:
+        client.close()
+
+
+# ── Phase 6Q Endpoints ────────────────────────────────────────────────────────
+
+@app.get("/recommendations")
+def list_recommendations(
+    workspace_slug: str = Query(""),
+    days: int = Query(30, ge=0, le=365),
+    status: str = Query(""),
+    rec_type: str = Query(""),
+) -> dict:
+    client = get_client()
+    try:
+        db = get_database(client)
+        recs = _collect_all_recommendations(db, workspace_slug, days)
+        if status:
+            recs = [r for r in recs if r.get("status") == status]
+        if rec_type:
+            recs = [r for r in recs if r.get("recommendation_type") == rec_type]
+        _impact_order = {"high": 0, "medium": 1, "low": 2}
+        recs.sort(key=lambda r: (_impact_order.get(r.get("impact_estimate", "low"), 2), -r.get("confidence_score", 0.0)))
+        return {"recommendations": recs, "total": len(recs), "period_days": days}
+    finally:
+        client.close()
+
+
+@app.get("/recommendations/summary")
+def recommendations_summary(
+    workspace_slug: str = Query(""),
+    days: int = Query(30, ge=0, le=365),
+) -> dict:
+    client = get_client()
+    try:
+        db = get_database(client)
+        recs = _collect_all_recommendations(db, workspace_slug, days)
+        active = [r for r in recs if r.get("status") == "active"]
+        high_impact = [r for r in active if r.get("impact_estimate") == "high"]
+        by_type: dict[str, int] = {}
+        for r in recs:
+            t = r.get("recommendation_type", "unknown")
+            by_type[t] = by_type.get(t, 0) + 1
+        return {
+            "total": len(recs),
+            "active": len(active),
+            "high_impact": len(high_impact),
+            "by_type": by_type,
+            "period_days": days,
+        }
+    finally:
+        client.close()
+
+
+@app.get("/recommendations/cross-client-signals")
+def recommendations_cross_client_signals(
+    days: int = Query(30, ge=0, le=365),
+) -> dict:
+    client = get_client()
+    try:
+        db = get_database(client)
+        return generate_cross_client_signals(db, days)
+    finally:
+        client.close()
+
+
+@app.get("/recommendations/{rec_id}")
+def get_recommendation(
+    rec_id: str,
+    workspace_slug: str = Query(""),
+    days: int = Query(30, ge=0, le=365),
+) -> dict:
+    client = get_client()
+    try:
+        db = get_database(client)
+        recs = _collect_all_recommendations(db, workspace_slug, days)
+        rec = next((r for r in recs if r["id"] == rec_id), None)
+        if rec is None:
+            raise HTTPException(status_code=404, detail="Recommendation not found")
+        return rec
+    finally:
+        client.close()
+
+
+@app.post("/recommendations/{rec_id}/accept")
+def accept_recommendation(rec_id: str) -> dict:
+    return _update_recommendation_status(rec_id, "accepted")
+
+
+@app.post("/recommendations/{rec_id}/dismiss")
+def dismiss_recommendation(rec_id: str) -> dict:
+    return _update_recommendation_status(rec_id, "dismissed")
+
+
+@app.post("/recommendations/{rec_id}/apply")
+def apply_recommendation(rec_id: str) -> dict:
+    return _update_recommendation_status(rec_id, "applied")
+
