@@ -29,6 +29,7 @@ import {
   UserCog,
   Users,
   Workflow,
+  GitBranch,
 } from "lucide-react";
 
 export const ROUTES = [
@@ -52,6 +53,7 @@ export const ROUTES = [
   { id: "analytics-dashboard",  label: "Operational Analytics",  icon: BarChart3,  group: "analytics", primary: false },
   { id: "recommendations",       label: "Recommendations",         icon: Lightbulb, group: "analytics", primary: false },
   { id: "autonomy-control",       label: "Autonomy Control",         icon: Shield,    group: "analytics", primary: false },
+  { id: "orchestration-dashboard",  label: "Orchestration",            icon: GitBranch, group: "analytics", primary: false },
 
   // ── System ────────────────────────────────────────────────────────────────
   { id: "workspaces",         label: "Workspaces",        icon: Briefcase,  group: "system", primary: true  },

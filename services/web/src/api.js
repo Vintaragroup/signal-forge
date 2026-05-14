@@ -882,6 +882,32 @@ export const api = {
     request("/autonomy/resume", { method: "POST" }),
   getAutonomyAnalytics: (workspaceSlug = "", days = 30) =>
     request(`/autonomy/analytics?workspace_slug=${encodeURIComponent(workspaceSlug)}&days=${days}`),
+
+  // Phase 6T: Multi-Agent Coordination & Autonomous Workflow Orchestration
+  createOrchestration: (body) =>
+    request("/orchestrations", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }),
+  listOrchestrations: (workspaceSlug = "", status = "", priority = "", limit = 50) =>
+    request(`/orchestrations?workspace_slug=${encodeURIComponent(workspaceSlug)}&status=${encodeURIComponent(status)}&priority=${encodeURIComponent(priority)}&limit=${limit}`),
+  getOrchestrationGlobalTelemetry: (workspaceSlug = "", days = 30) =>
+    request(`/orchestrations/telemetry?workspace_slug=${encodeURIComponent(workspaceSlug)}&days=${days}`),
+  getOrchestration: (orchId) =>
+    request(`/orchestrations/${encodeURIComponent(orchId)}`),
+  getOrchestrationGraph: (orchId) =>
+    request(`/orchestrations/${encodeURIComponent(orchId)}/graph`),
+  getOrchestrationTelemetry: (orchId) =>
+    request(`/orchestrations/${encodeURIComponent(orchId)}/telemetry`),
+  pauseOrchestration: (orchId) =>
+    request(`/orchestrations/${encodeURIComponent(orchId)}/pause`, { method: "POST" }),
+  resumeOrchestration: (orchId) =>
+    request(`/orchestrations/${encodeURIComponent(orchId)}/resume`, { method: "POST" }),
+  retryOrchestrationNode: (orchId, body) =>
+    request(`/orchestrations/${encodeURIComponent(orchId)}/retry-node`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }),
+  escalateOrchestration: (orchId, body) =>
+    request(`/orchestrations/${encodeURIComponent(orchId)}/escalate`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }),
+  listAgentProfiles: () =>
+    request("/agents/profiles"),
+  getAgentUtilization: (workspaceSlug = "", days = 30) =>
+    request(`/agents/utilization?workspace_slug=${encodeURIComponent(workspaceSlug)}&days=${days}`),
 };
 
 export { API_BASE_URL };

@@ -23,6 +23,7 @@ import ClientMemoryPage from "./pages/ClientMemoryPage.jsx";
 import OperationalDashboardPage from "./pages/OperationalDashboardPage.jsx";
 import RecommendationsDashboardPage from "./pages/RecommendationsDashboardPage.jsx";
 import AutonomyControlCenter from "./pages/AutonomyControlCenter.jsx";
+import OrchestrationDashboard from "./pages/OrchestrationDashboardPage.jsx";
 import { api, setAppWorkspace } from "./api.js";
 import { ROUTE_MAP } from "./navigation/routeRegistry.js";
 import { NAV_GROUPS } from "./navigation/navGroups.js";
@@ -48,6 +49,7 @@ const PAGE_COMPONENTS = {
   "analytics-dashboard": OperationalDashboardPage,
     "recommendations": RecommendationsDashboardPage,
     "autonomy-control": AutonomyControlCenter,
+    "orchestration-dashboard": OrchestrationDashboard,
 };
 
 export default function App() {

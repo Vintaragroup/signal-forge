@@ -13547,3 +13547,730 @@ def get_autonomy_analytics(
     finally:
         client.close()
 
+
+
+# =============================================================================
+# PHASE 6T — Multi-Agent Coordination & Autonomous Workflow Orchestration
+# =============================================================================
+
+import uuid as _uuid_6t
+
+# ── Constants ─────────────────────────────────────────────────────────────────
+
+_AGENT_NAMES_6T: set[str] = {
+    "discovery", "content_build", "approval",
+    "distribution", "recommendation", "optimization",
+}
+
+_NODE_STATUSES_6T: set[str] = {
+    "pending", "ready", "running", "blocked",
+    "failed", "retrying", "completed", "escalated",
+}
+
+_ORCH_STATUSES_6T: set[str] = {
+    "pending", "running", "paused", "completed", "failed", "escalated",
+}
+
+_PRIORITY_LEVELS_6T: dict[str, int] = {
+    "critical": 3, "high": 2, "normal": 1, "background": 0,
+}
+
+_DEFAULT_AGENT_PROFILES_6T: dict[str, dict] = {
+    "discovery": {
+        "agent_name": "discovery",
+        "specializations": ["audience_analysis", "trend_detection", "content_gap_analysis"],
+        "success_rate": 0.91,
+        "avg_execution_time": 8.5,
+        "preferred_templates": ["media_growth", "artist_growth"],
+        "max_concurrency": 3,
+    },
+    "content_build": {
+        "agent_name": "content_build",
+        "specializations": ["linkedin_posts", "short_form", "founder_content", "visual_scripts"],
+        "success_rate": 0.88,
+        "avg_execution_time": 14.2,
+        "preferred_templates": ["media_growth", "founder_thought_leadership"],
+        "max_concurrency": 5,
+    },
+    "approval": {
+        "agent_name": "approval",
+        "specializations": ["compliance_review", "brand_voice_validation", "claim_verification"],
+        "success_rate": 0.95,
+        "avg_execution_time": 3.1,
+        "preferred_templates": ["insurance_growth", "investor_outreach"],
+        "max_concurrency": 10,
+    },
+    "distribution": {
+        "agent_name": "distribution",
+        "specializations": ["multi_channel", "scheduling", "platform_optimization"],
+        "success_rate": 0.93,
+        "avg_execution_time": 5.7,
+        "preferred_templates": ["media_growth", "local_services"],
+        "max_concurrency": 8,
+    },
+    "recommendation": {
+        "agent_name": "recommendation",
+        "specializations": ["pattern_learning", "template_optimization", "workflow_improvement"],
+        "success_rate": 0.87,
+        "avg_execution_time": 6.3,
+        "preferred_templates": [],
+        "max_concurrency": 4,
+    },
+    "optimization": {
+        "agent_name": "optimization",
+        "specializations": ["autonomy_tuning", "memory_refinement", "distribution_optimization"],
+        "success_rate": 0.84,
+        "avg_execution_time": 11.8,
+        "preferred_templates": [],
+        "max_concurrency": 2,
+    },
+}
+
+# ── Utility helpers ──────────────────────────────────────────────────────────
+
+
+def _now_6t() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _new_orch_id() -> str:
+    return _uuid_6t.uuid4().hex[:16]
+
+
+def _new_node_id() -> str:
+    return _uuid_6t.uuid4().hex[:8]
+
+
+# ── Pydantic Models ───────────────────────────────────────────────────────────
+
+
+class OrchestrationCreateRequest(BaseModel):
+    workspace_slug: str
+    workflow_run_id: str = ""
+    priority: Literal["critical", "high", "normal", "background"] = "normal"
+    agent_chain: list[str]
+    config: Optional[dict] = None
+
+
+class RetryNodeRequest(BaseModel):
+    node_id: str
+    recovery_strategy: str = ""
+
+
+class EscalateOrchestrationRequest(BaseModel):
+    node_id: str = ""
+    reason: str = ""
+
+
+# ── Core Orchestration Logic ──────────────────────────────────────────────────
+
+
+def evaluate_agent_dependencies(nodes: list[dict]) -> list[str]:
+    """Return node_ids of *pending* nodes whose dependencies are all completed."""
+    completed_ids = {n["node_id"] for n in nodes if n.get("status") == "completed"}
+    ready: list[str] = []
+    for node in nodes:
+        if node.get("status") != "pending":
+            continue
+        deps = node.get("depends_on") or []
+        if all(dep in completed_ids for dep in deps):
+            ready.append(node["node_id"])
+    return ready
+
+
+def schedule_next_agent_tasks(orch_id: str, db) -> list[str]:
+    """Promote pending → ready for nodes whose dependencies are satisfied."""
+    orch = db.orchestrations.find_one({"orchestration_id": orch_id})
+    if not orch:
+        return []
+    nodes = orch.get("nodes") or []
+    ready_ids = evaluate_agent_dependencies(nodes)
+    if not ready_ids:
+        return []
+    for n in nodes:
+        if n["node_id"] in ready_ids:
+            n["status"] = "ready"
+    db.orchestrations.update_one(
+        {"orchestration_id": orch_id},
+        {"$set": {"nodes": nodes, "updated_at": _now_6t()}},
+    )
+    return ready_ids
+
+
+def create_orchestration_plan(
+    workspace_slug: str,
+    workflow_run_id: str,
+    agent_chain: list[str],
+    db,
+    priority: str = "normal",
+    config: Optional[dict] = None,
+) -> dict:
+    """Create and persist an orchestration plan from a linear agent chain.
+
+    Builds nodes sequentially — node N+1 depends on node N.
+    The first node is immediately set to *ready*; all others are *pending*.
+    """
+    config = config or {}
+    now = _now_6t()
+    orch_id = _new_orch_id()
+    nodes: list[dict] = []
+    edges: list[dict] = []
+    prev_node_id: Optional[str] = None
+
+    for i, agent_name in enumerate(agent_chain):
+        node_id = _new_node_id()
+        node: dict = {
+            "node_id": node_id,
+            "agent_name": agent_name,
+            "label": f"{agent_name.replace('_', ' ').title()} (step {i + 1})",
+            "status": "ready" if i == 0 else "pending",
+            "depends_on": [prev_node_id] if prev_node_id else [],
+            "retry_count": 0,
+            "max_retries": int(config.get("max_retries", 3)),
+            "failure_reason": None,
+            "recovery_strategy": None,
+            "execution_metadata": config.get(agent_name) or {},
+            "started_at": None,
+            "completed_at": None,
+        }
+        nodes.append(node)
+        if prev_node_id:
+            edges.append({"from": prev_node_id, "to": node_id})
+        prev_node_id = node_id
+
+    doc: dict = {
+        "orchestration_id": orch_id,
+        "workspace_slug": workspace_slug,
+        "workflow_run_id": workflow_run_id,
+        "status": "running" if nodes else "completed",
+        "priority": priority if priority in _PRIORITY_LEVELS_6T else "normal",
+        "nodes": nodes,
+        "edges": edges,
+        "created_at": now,
+        "updated_at": now,
+        "completed_at": None,
+        "failure_reason": None,
+        "escalation_status": None,
+        "delegation_count": 0,
+        "retry_total": 0,
+    }
+
+    result = db.orchestrations.insert_one(doc)
+    created = db.orchestrations.find_one({"_id": result.inserted_id})
+    return created or doc
+
+
+def execute_orchestration_graph(orch_id: str, db) -> dict:
+    """Advance the graph by transitioning all *ready* nodes to *running*."""
+    orch = db.orchestrations.find_one({"orchestration_id": orch_id})
+    if not orch:
+        return {"error": "not_found"}
+    if orch.get("status") in ("paused", "completed", "failed"):
+        return {"error": f"cannot_execute: status={orch.get('status')}"}
+
+    nodes = orch.get("nodes") or []
+    now = _now_6t()
+    started: list[str] = []
+    for n in nodes:
+        if n.get("status") == "ready":
+            n["status"] = "running"
+            n["started_at"] = now
+            started.append(n["node_id"])
+
+    if started:
+        db.orchestrations.update_one(
+            {"orchestration_id": orch_id},
+            {"$set": {"nodes": nodes, "updated_at": now}},
+        )
+
+    return {
+        "orchestration_id": orch_id,
+        "nodes_started": started,
+        "total_started": len(started),
+    }
+
+
+def handle_agent_failure(
+    orch_id: str,
+    node_id: str,
+    failure_reason: str,
+    db,
+    recovery_strategy: str = "",
+) -> dict:
+    """Handle a failed node: retry if under max_retries, escalate otherwise."""
+    orch = db.orchestrations.find_one({"orchestration_id": orch_id})
+    if not orch:
+        return {"error": "not_found"}
+    nodes = orch.get("nodes") or []
+    target = next((n for n in nodes if n["node_id"] == node_id), None)
+    if not target:
+        return {"error": "node_not_found"}
+
+    retry_count = target.get("retry_count", 0) + 1
+    max_retries = target.get("max_retries", 3)
+
+    if retry_count <= max_retries:
+        new_status = "retrying"
+        recovery = recovery_strategy or "retry_with_defaults"
+    else:
+        new_status = "escalated"
+        recovery = recovery_strategy or "escalate_to_operator"
+
+    for n in nodes:
+        if n["node_id"] == node_id:
+            n["status"] = new_status
+            n["retry_count"] = retry_count
+            n["failure_reason"] = failure_reason
+            n["recovery_strategy"] = recovery
+
+    orch_status = orch.get("status", "running")
+    if new_status == "escalated" and orch_status not in ("paused", "completed"):
+        orch_status = "escalated"
+
+    db.orchestrations.update_one(
+        {"orchestration_id": orch_id},
+        {"$set": {
+            "nodes": nodes,
+            "status": orch_status,
+            "retry_total": orch.get("retry_total", 0) + 1,
+            "updated_at": _now_6t(),
+        }},
+    )
+    return {
+        "orchestration_id": orch_id,
+        "node_id": node_id,
+        "new_status": new_status,
+        "retry_count": retry_count,
+        "recovery_strategy": recovery,
+    }
+
+
+def escalate_orchestration_issue(orch_id: str, node_id: str, reason: str, db) -> dict:
+    """Escalate an orchestration issue — optionally scoped to a single node."""
+    orch = db.orchestrations.find_one({"orchestration_id": orch_id})
+    if not orch:
+        return {"error": "not_found"}
+
+    nodes = orch.get("nodes") or []
+    now = _now_6t()
+    for n in nodes:
+        if not node_id or n["node_id"] == node_id:
+            n["status"] = "escalated"
+            n["failure_reason"] = reason
+            n["recovery_strategy"] = "operator_review"
+            if node_id:
+                break
+
+    db.orchestrations.update_one(
+        {"orchestration_id": orch_id},
+        {"$set": {
+            "nodes": nodes,
+            "status": "escalated",
+            "escalation_status": "pending_operator_review",
+            "failure_reason": reason,
+            "updated_at": now,
+        }},
+    )
+    return {
+        "orchestration_id": orch_id,
+        "node_id": node_id,
+        "escalation_status": "pending_operator_review",
+        "reason": reason,
+    }
+
+
+def _compute_queue_priority(
+    urgency: str,
+    deps_ready: bool,
+    deadline_hours: float,
+    client_health: float,
+    confidence: float,
+) -> str:
+    """Score an orchestration and return a priority bucket."""
+    score = _PRIORITY_LEVELS_6T.get(urgency, 1) * 25
+    if deps_ready:
+        score += 10
+    if deadline_hours < 4:
+        score += 30
+    elif deadline_hours < 24:
+        score += 15
+    if client_health >= 0.8:
+        score += 10
+    if confidence >= 0.90:
+        score += 5
+    if score >= 90:
+        return "critical"
+    elif score >= 50:
+        return "high"
+    elif score >= 25:
+        return "normal"
+    else:
+        return "background"
+
+
+def _compute_orchestration_telemetry(db, workspace_slug: str = "", days: int = 30) -> dict:
+    """Aggregate telemetry across all orchestrations in scope."""
+    q: dict[str, Any] = {}
+    if workspace_slug:
+        q["workspace_slug"] = workspace_slug
+    q.update(_analytics_date_filter(days))
+    try:
+        orches = list(db.orchestrations.find(q))
+    except Exception:
+        orches = []
+
+    total = len(orches)
+    completed = [o for o in orches if o.get("status") == "completed"]
+    failed = [o for o in orches if o.get("status") == "failed"]
+    escalated = [o for o in orches if o.get("status") == "escalated"]
+    running = [o for o in orches if o.get("status") == "running"]
+
+    total_retries = sum(o.get("retry_total", 0) for o in orches)
+    total_delegations = sum(o.get("delegation_count", 0) for o in orches)
+
+    all_nodes = [n for o in orches for n in (o.get("nodes") or [])]
+    by_agent: dict[str, dict] = {}
+    for n in all_nodes:
+        agent = n.get("agent_name") or "unknown"
+        if agent not in by_agent:
+            by_agent[agent] = {"total": 0, "completed": 0, "failed": 0, "retries": 0}
+        by_agent[agent]["total"] += 1
+        if n.get("status") == "completed":
+            by_agent[agent]["completed"] += 1
+        elif n.get("status") in ("failed", "escalated"):
+            by_agent[agent]["failed"] += 1
+        by_agent[agent]["retries"] += n.get("retry_count", 0)
+
+    by_priority: dict[str, int] = {}
+    for o in orches:
+        p = o.get("priority") or "normal"
+        by_priority[p] = by_priority.get(p, 0) + 1
+
+    return {
+        "total_orchestrations": total,
+        "completed": len(completed),
+        "failed": len(failed),
+        "escalated": len(escalated),
+        "running": len(running),
+        "completion_rate": round(len(completed) / total, 3) if total else 0.0,
+        "total_retries": total_retries,
+        "retry_frequency": round(total_retries / total, 2) if total else 0.0,
+        "total_delegations": total_delegations,
+        "by_agent": by_agent,
+        "by_priority": by_priority,
+        "days": days,
+    }
+
+
+# ── Endpoints ─────────────────────────────────────────────────────────────────
+
+
+@app.post("/orchestrations")
+def create_orchestration(payload: OrchestrationCreateRequest) -> dict:
+    if not payload.workspace_slug.strip():
+        raise HTTPException(status_code=400, detail="workspace_slug is required.")
+    if not payload.agent_chain:
+        raise HTTPException(status_code=400, detail="agent_chain must not be empty.")
+    client = get_client()
+    try:
+        db = get_database(client)
+        doc = create_orchestration_plan(
+            workspace_slug=payload.workspace_slug.strip(),
+            workflow_run_id=payload.workflow_run_id or "",
+            agent_chain=payload.agent_chain,
+            db=db,
+            priority=payload.priority,
+            config=payload.config or {},
+        )
+        return {"item": serialize([doc])[0], "message": "Orchestration created."}
+    finally:
+        client.close()
+
+
+@app.get("/orchestrations")
+def list_orchestrations(
+    workspace_slug: str = Query(""),
+    status: str = Query(""),
+    priority: str = Query(""),
+    limit: int = Query(50, ge=1, le=200),
+) -> dict:
+    client = get_client()
+    try:
+        db = get_database(client)
+        q: dict = {}
+        if workspace_slug:
+            q["workspace_slug"] = workspace_slug
+        if status and status in _ORCH_STATUSES_6T:
+            q["status"] = status
+        if priority and priority in _PRIORITY_LEVELS_6T:
+            q["priority"] = priority
+        items = list(db.orchestrations.find(q).sort("created_at", -1).limit(limit))
+        return {"items": serialize(items), "total": len(items)}
+    finally:
+        client.close()
+
+
+@app.get("/orchestrations/telemetry")
+def get_orchestration_global_telemetry(
+    workspace_slug: str = Query(""),
+    days: int = Query(30, ge=0, le=365),
+) -> dict:
+    client = get_client()
+    try:
+        db = get_database(client)
+        return _compute_orchestration_telemetry(db, workspace_slug, days)
+    finally:
+        client.close()
+
+
+@app.get("/orchestrations/{orch_id}")
+def get_orchestration(orch_id: str) -> dict:
+    client = get_client()
+    try:
+        db = get_database(client)
+        doc = db.orchestrations.find_one({"orchestration_id": orch_id})
+        if not doc:
+            raise HTTPException(status_code=404, detail="Orchestration not found.")
+        return {"item": serialize([doc])[0]}
+    finally:
+        client.close()
+
+
+@app.get("/orchestrations/{orch_id}/graph")
+def get_orchestration_graph(orch_id: str) -> dict:
+    client = get_client()
+    try:
+        db = get_database(client)
+        orch = db.orchestrations.find_one({"orchestration_id": orch_id})
+        if not orch:
+            raise HTTPException(status_code=404, detail="Orchestration not found.")
+        nodes = orch.get("nodes") or []
+        edges = orch.get("edges") or []
+        return {
+            "orchestration_id": orch_id,
+            "status": orch.get("status"),
+            "nodes": [
+                {
+                    "node_id": n.get("node_id"),
+                    "agent_name": n.get("agent_name"),
+                    "label": n.get("label", n.get("agent_name")),
+                    "status": n.get("status"),
+                    "depends_on": n.get("depends_on") or [],
+                    "retry_count": n.get("retry_count", 0),
+                }
+                for n in nodes
+            ],
+            "edges": edges,
+            "ready_node_count": sum(1 for n in nodes if n.get("status") == "ready"),
+            "running_node_count": sum(1 for n in nodes if n.get("status") == "running"),
+            "completion_rate": round(
+                sum(1 for n in nodes if n.get("status") == "completed") / len(nodes), 3
+            ) if nodes else 0.0,
+        }
+    finally:
+        client.close()
+
+
+@app.get("/orchestrations/{orch_id}/telemetry")
+def get_single_orchestration_telemetry(orch_id: str) -> dict:
+    client = get_client()
+    try:
+        db = get_database(client)
+        orch = db.orchestrations.find_one({"orchestration_id": orch_id})
+        if not orch:
+            raise HTTPException(status_code=404, detail="Orchestration not found.")
+        nodes = orch.get("nodes") or []
+        total_nodes = len(nodes)
+        by_agent: dict[str, int] = {}
+        for n in nodes:
+            a = n.get("agent_name") or "unknown"
+            by_agent[a] = by_agent.get(a, 0) + 1
+        total_retries = sum(n.get("retry_count", 0) for n in nodes)
+        return {
+            "orchestration_id": orch_id,
+            "status": orch.get("status"),
+            "priority": orch.get("priority"),
+            "total_nodes": total_nodes,
+            "completed_nodes": sum(1 for n in nodes if n.get("status") == "completed"),
+            "failed_nodes": sum(1 for n in nodes if n.get("status") in ("failed", "escalated")),
+            "running_nodes": sum(1 for n in nodes if n.get("status") == "running"),
+            "pending_nodes": sum(1 for n in nodes if n.get("status") in ("pending", "ready")),
+            "retrying_nodes": sum(1 for n in nodes if n.get("status") == "retrying"),
+            "total_retries": total_retries,
+            "completion_rate": round(
+                sum(1 for n in nodes if n.get("status") == "completed") / total_nodes, 3
+            ) if total_nodes else 0.0,
+            "delegation_count": orch.get("delegation_count", 0),
+            "by_agent": by_agent,
+            "created_at": orch.get("created_at"),
+            "updated_at": orch.get("updated_at"),
+        }
+    finally:
+        client.close()
+
+
+@app.post("/orchestrations/{orch_id}/pause")
+def pause_orchestration(orch_id: str) -> dict:
+    client = get_client()
+    try:
+        db = get_database(client)
+        orch = db.orchestrations.find_one({"orchestration_id": orch_id})
+        if not orch:
+            raise HTTPException(status_code=404, detail="Orchestration not found.")
+        db.orchestrations.update_one(
+            {"orchestration_id": orch_id},
+            {"$set": {"status": "paused", "updated_at": _now_6t()}},
+        )
+        return {"orchestration_id": orch_id, "status": "paused"}
+    finally:
+        client.close()
+
+
+@app.post("/orchestrations/{orch_id}/resume")
+def resume_orchestration(orch_id: str) -> dict:
+    client = get_client()
+    try:
+        db = get_database(client)
+        orch = db.orchestrations.find_one({"orchestration_id": orch_id})
+        if not orch:
+            raise HTTPException(status_code=404, detail="Orchestration not found.")
+        db.orchestrations.update_one(
+            {"orchestration_id": orch_id},
+            {"$set": {"status": "running", "updated_at": _now_6t()}},
+        )
+        schedule_next_agent_tasks(orch_id, db)
+        return {"orchestration_id": orch_id, "status": "running"}
+    finally:
+        client.close()
+
+
+@app.post("/orchestrations/{orch_id}/retry-node")
+def retry_orchestration_node(orch_id: str, payload: RetryNodeRequest) -> dict:
+    if not payload.node_id.strip():
+        raise HTTPException(status_code=400, detail="node_id is required.")
+    client = get_client()
+    try:
+        db = get_database(client)
+        orch = db.orchestrations.find_one({"orchestration_id": orch_id})
+        if not orch:
+            raise HTTPException(status_code=404, detail="Orchestration not found.")
+        nodes = orch.get("nodes") or []
+        target = next((n for n in nodes if n["node_id"] == payload.node_id.strip()), None)
+        if not target:
+            raise HTTPException(status_code=404, detail="Node not found.")
+        if target.get("status") not in ("failed", "escalated", "retrying"):
+            raise HTTPException(
+                status_code=400,
+                detail=f"Node status '{target.get('status')}' is not retryable.",
+            )
+        for n in nodes:
+            if n["node_id"] == payload.node_id.strip():
+                n["status"] = "retrying"
+                n["retry_count"] = n.get("retry_count", 0) + 1
+                if payload.recovery_strategy:
+                    n["recovery_strategy"] = payload.recovery_strategy
+        db.orchestrations.update_one(
+            {"orchestration_id": orch_id},
+            {"$set": {
+                "nodes": nodes,
+                "status": "running",
+                "retry_total": orch.get("retry_total", 0) + 1,
+                "updated_at": _now_6t(),
+            }},
+        )
+        return {"orchestration_id": orch_id, "node_id": payload.node_id, "status": "retrying"}
+    finally:
+        client.close()
+
+
+@app.post("/orchestrations/{orch_id}/escalate")
+def escalate_orchestration(orch_id: str, payload: EscalateOrchestrationRequest) -> dict:
+    client = get_client()
+    try:
+        db = get_database(client)
+        result = escalate_orchestration_issue(
+            orch_id, payload.node_id, payload.reason or "Operator escalation", db
+        )
+        if "error" in result:
+            raise HTTPException(status_code=404, detail="Orchestration not found.")
+        return result
+    finally:
+        client.close()
+
+
+@app.get("/agents/profiles")
+def list_agent_profiles() -> dict:
+    client = get_client()
+    try:
+        db = get_database(client)
+        profiles = {k: dict(v) for k, v in _DEFAULT_AGENT_PROFILES_6T.items()}
+        for p in db.agent_profiles.find({}):
+            name = p.get("agent_name", "")
+            if name:
+                profiles[name] = {k: v for k, v in p.items() if k != "_id"}
+        return {"profiles": list(profiles.values()), "total": len(profiles)}
+    finally:
+        client.close()
+
+
+@app.get("/agents/utilization")
+def get_agent_utilization(
+    workspace_slug: str = Query(""),
+    days: int = Query(30, ge=0, le=365),
+) -> dict:
+    client = get_client()
+    try:
+        db = get_database(client)
+        profiles = {k: dict(v) for k, v in _DEFAULT_AGENT_PROFILES_6T.items()}
+        for p in db.agent_profiles.find({}):
+            name = p.get("agent_name", "")
+            if name:
+                profiles[name] = {k: v for k, v in p.items() if k != "_id"}
+
+        q2: dict[str, Any] = {}
+        if workspace_slug:
+            q2["workspace_slug"] = workspace_slug
+        q2.update(_analytics_date_filter(days))
+        try:
+            all_orches = list(db.orchestrations.find(q2))
+        except Exception:
+            all_orches = []
+
+        utilization: dict[str, dict] = {}
+        for agent_name, profile in profiles.items():
+            running_count = 0
+            completed_count = 0
+            failed_count = 0
+            total_retries = 0
+            for orch in all_orches:
+                for node in (orch.get("nodes") or []):
+                    if node.get("agent_name") == agent_name:
+                        s = node.get("status")
+                        if s == "running":
+                            running_count += 1
+                        elif s == "completed":
+                            completed_count += 1
+                        elif s in ("failed", "escalated"):
+                            failed_count += 1
+                        total_retries += node.get("retry_count", 0)
+            max_concurrency = profile.get("max_concurrency", 5)
+            utilization[agent_name] = {
+                "agent_name": agent_name,
+                "running_nodes": running_count,
+                "max_concurrency": max_concurrency,
+                "utilization_rate": round(running_count / max_concurrency, 3)
+                    if max_concurrency else 0.0,
+                "completed_nodes": completed_count,
+                "failed_nodes": failed_count,
+                "total_retries": total_retries,
+                "success_rate": profile.get("success_rate", 0.0),
+                "avg_execution_time": profile.get("avg_execution_time", 0.0),
+                "specializations": profile.get("specializations", []),
+            }
+        return {
+            "agents": list(utilization.values()),
+            "total_running": sum(u["running_nodes"] for u in utilization.values()),
+            "period_days": days,
+        }
+    finally:
+        client.close()
