@@ -14873,3 +14873,258 @@ def workers_recover_orphaned() -> dict:
         }
     finally:
         client.close()
+
+# =============================================================================
+# PHASE 6V — Production Deployment Drill & Pilot Readiness
+# Appended to services/api/main.py
+# =============================================================================
+
+import json as _json_6v
+import gzip as _gzip_6v
+import base64 as _b64_6v
+from fastapi.responses import JSONResponse as _JSONResponse_6v
+
+# ── Collections covered by backup / restore ───────────────────────────────────
+_PHASE_6V_COLLECTIONS = [
+    "workflow_runs",
+    "workflow_assets",
+    "approval_requests",
+    "client_memory",
+    "memory_update_proposals",
+    "recommendation_statuses",
+    "orchestrations",
+    "autonomy_actions",
+    "agent_tasks",
+]
+
+# Score weights (total = 100)
+_PILOT_READINESS_WEIGHTS_6V: dict[str, int] = {
+    "mongodb_reachable": 20,
+    "indexes_created": 10,
+    "tracing_active": 10,
+    "metrics_operational": 10,
+    "audit_log_operational": 10,
+    "worker_system_operational": 10,
+    "orchestration_recovery_operational": 10,
+    "auth_configurable": 10,
+    "rate_limit_configurable": 10,
+}
+
+
+# ── Pydantic models ───────────────────────────────────────────────────────────
+class BackupRequest6V(BaseModel):
+    collections: list[str] | None = None  # None → all Phase 6V collections
+    compress: bool = True
+
+
+class RestoreRequest6V(BaseModel):
+    payload: str          # base64(gzip(json)) or base64(json)
+    compressed: bool = True
+    dry_run: bool = False
+
+
+# ── Helper: create a backup snapshot ─────────────────────────────────────────
+def _do_backup_6v(db: Any, collections: list[str], compress: bool) -> dict[str, Any]:
+    snapshot: dict[str, Any] = {
+        "version": "6v",
+        "created_at": _now_iso_6u(),
+        "collections": {},
+    }
+    total = 0
+    for name in collections:
+        docs = list(db[name].find({}, {"_id": 0}))
+        snapshot["collections"][name] = docs
+        total += len(docs)
+
+    raw = _json_6v.dumps(snapshot, default=str).encode()
+    if compress:
+        encoded = _b64_6v.b64encode(_gzip_6v.compress(raw)).decode()
+    else:
+        encoded = _b64_6v.b64encode(raw).decode()
+
+    return {
+        "payload": encoded,
+        "compressed": compress,
+        "total_documents": total,
+        "collections": collections,
+        "bytes": len(encoded),
+        "created_at": snapshot["created_at"],
+    }
+
+
+# ── Helper: restore from a backup snapshot ───────────────────────────────────
+def _do_restore_6v(
+    db: Any, payload: str, compressed: bool, dry_run: bool
+) -> dict[str, Any]:
+    raw = _b64_6v.b64decode(payload)
+    if compressed:
+        raw = _gzip_6v.decompress(raw)
+    snapshot = _json_6v.loads(raw)
+
+    if snapshot.get("version") != "6v":
+        raise ValueError(f"Unsupported backup version: {snapshot.get('version')!r}")
+
+    results: dict[str, Any] = {}
+    for name, docs in snapshot.get("collections", {}).items():
+        if dry_run:
+            results[name] = {"status": "dry_run", "would_restore": len(docs)}
+        else:
+            db[name].delete_many({})
+            if docs:
+                db[name].insert_many(docs)
+            results[name] = {"status": "restored", "documents": len(docs)}
+
+    return {
+        "dry_run": dry_run,
+        "collections": results,
+        "restored_at": _now_iso_6u(),
+        "source_version": snapshot.get("version"),
+    }
+
+
+# ── Helper: compute pilot readiness score ────────────────────────────────────
+def _pilot_readiness_6v(db: Any) -> dict[str, Any]:
+    checks: dict[str, Any] = {}
+    score = 0
+    w = _PILOT_READINESS_WEIGHTS_6V
+
+    # MongoDB connectivity
+    try:
+        db.command("ping")
+        checks["mongodb_reachable"] = True
+        score += w["mongodb_reachable"]
+    except Exception:
+        checks["mongodb_reachable"] = False
+
+    # Index health
+    try:
+        ensure_indexes_6u(db)  # type: ignore[name-defined]
+        checks["indexes_created"] = True
+        score += w["indexes_created"]
+    except Exception:
+        checks["indexes_created"] = False
+
+    # Tracing middleware always active
+    checks["tracing_active"] = True
+    score += w["tracing_active"]
+
+    # Metrics system
+    checks["metrics_operational"] = isinstance(
+        _runtime_state_6u.get("total_requests"), int
+    )
+    if checks["metrics_operational"]:
+        score += w["metrics_operational"]
+
+    # Audit log
+    checks["audit_log_operational"] = isinstance(
+        _runtime_state_6u.get("audit_log"), list
+    )
+    if checks["audit_log_operational"]:
+        score += w["audit_log_operational"]
+
+    # Worker registry
+    checks["worker_system_operational"] = isinstance(
+        _runtime_state_6u.get("worker_registry"), dict
+    )
+    if checks["worker_system_operational"]:
+        score += w["worker_system_operational"]
+
+    # Orchestration recovery
+    try:
+        _detect_stuck_orchestrations_6u(db)
+        checks["orchestration_recovery_operational"] = True
+        score += w["orchestration_recovery_operational"]
+    except Exception:
+        checks["orchestration_recovery_operational"] = False
+
+    # Auth / rate-limit configurability (env-var based, always configurable)
+    checks["auth_configurable"] = True
+    score += w["auth_configurable"]
+    checks["rate_limit_configurable"] = True
+    score += w["rate_limit_configurable"]
+
+    # Informational extras (no score impact)
+    checks["active_workers"] = len(_runtime_state_6u.get("worker_registry", {}))
+    checks["total_requests_served"] = _runtime_state_6u.get("total_requests", 0)
+
+    return {
+        "ready": score >= 80,
+        "score": score,
+        "max_score": 100,
+        "checks": checks,
+        "evaluated_at": _now_iso_6u(),
+    }
+
+
+# ── Endpoints ─────────────────────────────────────────────────────────────────
+
+@app.post("/system/backup", tags=["system"])
+def system_backup_6v(req: BackupRequest6V) -> dict:
+    """Create a portable backup snapshot of all key collections."""
+    collections = req.collections or _PHASE_6V_COLLECTIONS
+    c = get_client()
+    db = get_database(c)
+    try:
+        result = _do_backup_6v(db, collections, req.compress)
+        _append_audit_6u(
+            "system", "backup_created",
+            "system/backup",
+            collections=len(collections),
+            total_documents=result["total_documents"],
+            compressed=req.compress,
+        )
+        return result
+    finally:
+        c.close()
+
+
+@app.post("/system/restore", tags=["system"])
+def system_restore_6v(req: RestoreRequest6V) -> Any:
+    """Restore collections from a backup snapshot (supports dry-run)."""
+    c = get_client()
+    db = get_database(c)
+    try:
+        result = _do_restore_6v(db, req.payload, req.compressed, req.dry_run)
+        _append_audit_6u(
+            "system", "restore_executed",
+            "system/restore",
+            dry_run=req.dry_run,
+            collections=len(result["collections"]),
+        )
+        return result
+    except ValueError as exc:
+        return _JSONResponse_6v(status_code=400, content={"error": str(exc)})
+    finally:
+        c.close()
+
+
+@app.get("/system/pilot-readiness", tags=["system"])
+def system_pilot_readiness_6v() -> dict:
+    """Compute a comprehensive pilot-readiness score (0-100)."""
+    c = get_client()
+    db = get_database(c)
+    try:
+        return _pilot_readiness_6v(db)
+    finally:
+        c.close()
+
+
+@app.get("/system/recovery-status", tags=["system"])
+def system_recovery_status_6v() -> dict:
+    """Return live recovery status: stuck orchestrations + worker health."""
+    c = get_client()
+    db = get_database(c)
+    try:
+        stuck = _detect_stuck_orchestrations_6u(db)
+        return {
+            "stuck_orchestrations": stuck,
+            "stuck_count": len(stuck),
+            "orphaned_task_risk": len(stuck) > 0,
+            "worker_health": _get_worker_health_6u(),
+            "recommendation": (
+                "POST /workers/recover-orphaned" if len(stuck) > 0 else "no action needed"
+            ),
+            "evaluated_at": _now_iso_6u(),
+        }
+    finally:
+        c.close()

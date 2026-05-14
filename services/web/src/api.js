@@ -954,3 +954,25 @@ export function postAuthToken(apiKey, workspaceSlug = "") {
     body: JSON.stringify({ api_key: apiKey, workspace_slug: workspaceSlug }),
   });
 }
+
+// ── Phase 6V — Production Deployment Drill & Pilot Readiness ─────────────────
+export function getSystemPilotReadiness() {
+  return request("/system/pilot-readiness");
+}
+export function getSystemRecoveryStatus() {
+  return request("/system/recovery-status");
+}
+export function postSystemBackup(body = {}) {
+  return request("/system/backup", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+}
+export function postSystemRestore(body) {
+  return request("/system/restore", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+}
