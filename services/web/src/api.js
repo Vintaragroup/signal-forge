@@ -911,3 +911,46 @@ export const api = {
 };
 
 export { API_BASE_URL };
+
+// ── Phase 6U: Production Hardening API functions ──────────────────────────────
+export function getSystemHealthDetailed() {
+  return request("/system/health/detailed");
+}
+export function getSystemMetrics() {
+  return request("/system/metrics");
+}
+export function getSystemTelemetry() {
+  return request("/system/telemetry");
+}
+export function getSystemIndexes() {
+  return request("/system/indexes");
+}
+export function getSystemAuditLog(limit = 50) {
+  return request(`/system/audit-log?limit=${limit}`);
+}
+export function postSystemResetMetrics() {
+  return request("/system/reset-metrics", { method: "POST" });
+}
+export function getWorkersHealth() {
+  return request("/workers/health");
+}
+export function getWorkersQueueDepth() {
+  return request("/workers/queue-depth");
+}
+export function postWorkerHeartbeat(body) {
+  return request("/workers/heartbeat", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+}
+export function postWorkersRecoverOrphaned() {
+  return request("/workers/recover-orphaned", { method: "POST" });
+}
+export function postAuthToken(apiKey, workspaceSlug = "") {
+  return request("/auth/token", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ api_key: apiKey, workspace_slug: workspaceSlug }),
+  });
+}

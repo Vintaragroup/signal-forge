@@ -24,6 +24,7 @@ import OperationalDashboardPage from "./pages/OperationalDashboardPage.jsx";
 import RecommendationsDashboardPage from "./pages/RecommendationsDashboardPage.jsx";
 import AutonomyControlCenter from "./pages/AutonomyControlCenter.jsx";
 import OrchestrationDashboard from "./pages/OrchestrationDashboardPage.jsx";
+import ProductionTelemetryPage from "./pages/ProductionTelemetryPage.jsx";
 import { api, setAppWorkspace } from "./api.js";
 import { ROUTE_MAP } from "./navigation/routeRegistry.js";
 import { NAV_GROUPS } from "./navigation/navGroups.js";
@@ -50,6 +51,7 @@ const PAGE_COMPONENTS = {
     "recommendations": RecommendationsDashboardPage,
     "autonomy-control": AutonomyControlCenter,
     "orchestration-dashboard": OrchestrationDashboard,
+    "production-telemetry": ProductionTelemetryPage,
 };
 
 export default function App() {

@@ -62,6 +62,7 @@ export const ROUTES = [
   { id: "demo",               label: "Demo Mode",         icon: Clapperboard, group: "system", primary: false },
   { id: "admin-onboarding",   label: "Client Onboarding", icon: UserCog,    group: "system", primary: false },
   { id: "client-memory",      label: "Client Memory",     icon: Brain,      group: "system", primary: false },
+  { id: "production-telemetry", label: "Production Telemetry", icon: Activity, group: "system", primary: false },
 ];
 
 /** Keyed by route id — O(1) lookups for active-group detection and title derivation. */

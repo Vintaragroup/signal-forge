@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any, Literal, Optional
 
 from bson import ObjectId
-from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
@@ -376,6 +376,7 @@ def vault_status() -> dict:
 
 
 def mongo_status() -> dict:
+    client = None
     try:
         client = get_client()
         client.admin.command("ping")
@@ -384,7 +385,8 @@ def mongo_status() -> dict:
         return {"ready": False, "detail": f"{exc.__class__.__name__}: {exc}"}
     finally:
         try:
-            client.close()
+            if client is not None:
+                client.close()
         except Exception:
             pass
 
@@ -1127,9 +1129,6 @@ def dashboard_tasks(leads: list[dict], contacts: list[dict], messages: list[dict
     if research:
         tasks.append({"label": "Research leads", "count": research, "tone": "purple"})
 
-        if "task_id" in parameters:
-            kwargs["task_id"] = task_id
-
     open_deals = sum(1 for deal in deals if deal.get("outcome") in ("proposal_sent", "negotiation"))
     if open_deals:
         tasks.append({"label": "Advance open deals", "count": open_deals, "tone": "blue"})
@@ -1243,6 +1242,14 @@ async def lifespan(app: FastAPI):
     print(f"Environment: {os.getenv('SIGNALFORGE_ENV', 'local')}")
     print(f"Vault status: {vault_status()}")
     print(f"MongoDB status: {mongo_status()}")
+    # Phase 6U: ensure production indexes on startup
+    try:
+        _c = get_client()
+        _db = get_database(_c)
+        ensure_indexes_6u(_db)  # type: ignore[name-defined]
+        _c.close()
+    except Exception as _idx_err:
+        print(f"[Phase 6U] Index setup warning: {_idx_err}")
     yield
 
 
@@ -11465,7 +11472,7 @@ def get_client_memory_brief(memory_id: str) -> dict:
 ---
 
 ## Approval Tendencies
-- **Approval rate:** {f"{int(at.get('approval_rate') * 100)}%" if at.get('approval_rate') is not None else '_(not enough data)_'}
+- **Approval rate:** {f"{int((at.get('approval_rate') or 0) * 100)}%" if at.get('approval_rate') is not None else '_(not enough data)_'}
 - **Avg revisions:** {at.get('avg_revision_count') if at.get('avg_revision_count') is not None else '_(not enough data)_'}
 
 **Common rejection reasons:**
@@ -14271,6 +14278,598 @@ def get_agent_utilization(
             "agents": list(utilization.values()),
             "total_running": sum(u["running_nodes"] for u in utilization.values()),
             "period_days": days,
+        }
+    finally:
+        client.close()
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# PHASE 6U — PRODUCTION HARDENING & DEPLOYMENT READINESS
+# ═══════════════════════════════════════════════════════════════════════════════
+
+import logging as _logging_6u
+import time as _time_6u
+import uuid as _uuid_6u
+
+try:
+    import jwt as _pyjwt
+    _PYJWT_AVAILABLE = True
+except Exception:
+    _pyjwt = None  # type: ignore[assignment]
+    _PYJWT_AVAILABLE = False
+
+# ── Configuration flags ───────────────────────────────────────────────────────
+_AUTH_ENABLED_6U: bool = os.getenv("SIGNALFORGE_AUTH_ENABLED", "false").lower() == "true"
+_RATE_LIMIT_ENABLED_6U: bool = os.getenv("SIGNALFORGE_RATE_LIMIT_ENABLED", "false").lower() == "true"
+_JWT_SECRET_6U: str = os.getenv("SIGNALFORGE_JWT_SECRET", "signalforge-dev-secret-change-in-production")
+_JWT_ALGORITHM_6U: str = "HS256"
+_JWT_EXPIRY_HOURS_6U: int = int(os.getenv("SIGNALFORGE_JWT_EXPIRY_HOURS", "24"))
+
+# Default API keys loaded from env (comma-separated key:role pairs, or single key)
+_DEFAULT_API_KEYS_6U: dict[str, dict] = {
+    os.getenv("SIGNALFORGE_API_KEY", "sf-dev-key-change-me"): {
+        "role": "admin",
+        "workspace": "*",
+    },
+}
+
+# ── Structured logging ────────────────────────────────────────────────────────
+_sf_logger_6u = _logging_6u.getLogger("signalforge")
+if not _sf_logger_6u.handlers:
+    _log_handler_6u = _logging_6u.StreamHandler()
+    _log_handler_6u.setFormatter(_logging_6u.Formatter(
+        '{"time":"%(asctime)s","level":"%(levelname)s","logger":"%(name)s","message":%(message)s}'
+    ))
+    _sf_logger_6u.addHandler(_log_handler_6u)
+    _sf_logger_6u.setLevel(_logging_6u.INFO)
+
+
+def _log_event_6u(level: str, event_type: str, **fields: Any) -> None:
+    payload = json.dumps({"event_type": event_type, **fields})
+    getattr(_sf_logger_6u, level, _sf_logger_6u.info)(payload)
+
+
+# ── In-memory runtime state ───────────────────────────────────────────────────
+_runtime_state_6u: dict[str, Any] = {
+    "total_requests": 0,
+    "by_path": {},        # "{METHOD}:{path}" → {count, total_latency_ms, errors, avg_latency_ms}
+    "worker_registry": {},  # worker_id → heartbeat record
+    "audit_log": [],      # capped at 500 entries
+    "rate_buckets": {},   # key → list[float] timestamps
+}
+
+
+def _now_iso_6u() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+# ── Request metrics ───────────────────────────────────────────────────────────
+def _record_request_6u(path: str, method: str, latency_ms: float, status_code: int) -> None:
+    _runtime_state_6u["total_requests"] += 1
+    key = f"{method}:{path}"
+    bucket = _runtime_state_6u["by_path"].setdefault(key, {
+        "count": 0, "total_latency_ms": 0.0, "errors": 0,
+        "avg_latency_ms": 0.0, "last_status_code": 200,
+    })
+    bucket["count"] += 1
+    bucket["total_latency_ms"] += latency_ms
+    bucket["avg_latency_ms"] = round(bucket["total_latency_ms"] / bucket["count"], 2)
+    bucket["last_status_code"] = status_code
+    if status_code >= 400:
+        bucket["errors"] += 1
+
+
+def _append_audit_6u(actor: str, action: str, resource: str, **meta: Any) -> None:
+    entry = {"ts": _now_iso_6u(), "actor": actor, "action": action, "resource": resource, **meta}
+    _runtime_state_6u["audit_log"].append(entry)
+    if len(_runtime_state_6u["audit_log"]) > 500:
+        _runtime_state_6u["audit_log"] = _runtime_state_6u["audit_log"][-500:]
+
+
+# ── Rate limiting ─────────────────────────────────────────────────────────────
+def _check_rate_limit_6u(key: str, max_requests: int = 60, window_seconds: int = 60) -> bool:
+    """Return True if request is allowed, False if rate limited."""
+    if not _RATE_LIMIT_ENABLED_6U:
+        return True
+    now = _time_6u.time()
+    bucket: list[float] = _runtime_state_6u["rate_buckets"].get(key, [])
+    bucket = [t for t in bucket if now - t < window_seconds]
+    if len(bucket) >= max_requests:
+        _runtime_state_6u["rate_buckets"][key] = bucket
+        return False
+    bucket.append(now)
+    _runtime_state_6u["rate_buckets"][key] = bucket
+    return True
+
+
+def _rate_key_6u(request: Request) -> str:
+    forwarded = request.headers.get("X-Forwarded-For")
+    if forwarded:
+        return forwarded.split(",")[0].strip()
+    return getattr(request.client, "host", "unknown") if request.client else "unknown"
+
+
+# ── Auth helpers ──────────────────────────────────────────────────────────────
+def _create_token_6u(payload: dict, expires_hours: int = _JWT_EXPIRY_HOURS_6U) -> str:
+    exp = datetime.now(timezone.utc) + timedelta(hours=expires_hours)
+    to_encode = {**payload, "exp": exp, "iat": datetime.now(timezone.utc)}
+    if _PYJWT_AVAILABLE and _pyjwt is not None:
+        return str(_pyjwt.encode(to_encode, _JWT_SECRET_6U, algorithm=_JWT_ALGORITHM_6U))
+    # Fallback: opaque token (base64-like stub for environments without PyJWT)
+    import base64 as _b64
+    return _b64.urlsafe_b64encode(json.dumps(to_encode, default=str).encode()).decode()
+
+
+def _decode_token_6u(token: str) -> dict:
+    if _PYJWT_AVAILABLE and _pyjwt is not None:
+        return dict(_pyjwt.decode(token, _JWT_SECRET_6U, algorithms=[_JWT_ALGORITHM_6U]))
+    raise HTTPException(
+        status_code=401,
+        detail={"error": True, "code": "jwt_unavailable", "message": "JWT library not available"},
+    )
+
+
+def _require_auth_6u(request: Request) -> dict:
+    """FastAPI dependency: validate Bearer token or API key. Bypassed when auth disabled."""
+    if not _AUTH_ENABLED_6U:
+        return {"role": "admin", "workspace": "*", "sub": "dev-bypass"}
+    auth_header = request.headers.get("Authorization", "")
+    if auth_header.startswith("Bearer "):
+        token = auth_header[7:]
+        if token in _DEFAULT_API_KEYS_6U:
+            return _DEFAULT_API_KEYS_6U[token]
+        try:
+            return _decode_token_6u(token)
+        except Exception:
+            raise HTTPException(
+                status_code=401,
+                detail={"error": True, "code": "invalid_token", "message": "Invalid or expired token"},
+            )
+    raise HTTPException(
+        status_code=401,
+        detail={"error": True, "code": "missing_auth", "message": "Authorization header required"},
+    )
+
+
+def _require_admin_6u(request: Request) -> dict:
+    """FastAPI dependency: require admin role."""
+    identity = _require_auth_6u(request)
+    if identity.get("role") != "admin":
+        raise HTTPException(
+            status_code=403,
+            detail={"error": True, "code": "forbidden", "message": "Admin role required"},
+        )
+    return identity
+
+
+def _error_response_6u(
+    code: str,
+    message: str,
+    details: dict | None = None,
+    trace_id: str | None = None,
+    status_code: int = 400,
+) -> HTTPException:
+    """Build a standardized error HTTPException."""
+    return HTTPException(
+        status_code=status_code,
+        detail={
+            "error": True,
+            "code": code,
+            "message": message,
+            "details": details or {},
+            "trace_id": trace_id or _uuid_6u.uuid4().hex,
+        },
+    )
+
+
+# ── MongoDB index management ──────────────────────────────────────────────────
+def ensure_indexes_6u(db: Any) -> dict[str, Any]:
+    """Create all production indexes. Idempotent — safe to call on every startup."""
+    from pymongo import ASCENDING as _ASC, DESCENDING as _DESC, IndexModel as _IdxModel
+
+    _DIR = {1: _ASC, -1: _DESC}
+
+    index_specs: dict[str, list[list[tuple[str, int]]]] = {
+        "workflow_runs": [
+            [("workspace_slug", 1), ("created_at", -1)],
+            [("status", 1), ("created_at", -1)],
+            [("run_id", 1)],
+        ],
+        "workflow_assets": [
+            [("workspace_slug", 1), ("status", 1)],
+            [("run_id", 1), ("asset_type", 1)],
+            [("created_at", -1)],
+        ],
+        "approval_requests": [
+            [("workspace_slug", 1), ("status", 1)],
+            [("created_at", -1)],
+            [("asset_id", 1)],
+        ],
+        "client_memory": [
+            [("workspace_slug", 1), ("memory_type", 1)],
+            [("workspace_slug", 1), ("updated_at", -1)],
+            [("is_active", 1), ("workspace_slug", 1)],
+        ],
+        "memory_update_proposals": [
+            [("workspace_slug", 1), ("status", 1)],
+            [("proposed_at", -1)],
+            [("governance_level", 1), ("status", 1)],
+        ],
+        "recommendation_statuses": [
+            [("workspace_slug", 1), ("status", 1)],
+            [("created_at", -1)],
+            [("recommendation_type", 1), ("status", 1)],
+        ],
+        "orchestrations": [
+            [("workspace_slug", 1), ("status", 1)],
+            [("created_at", -1)],
+            [("orchestration_id", 1)],
+        ],
+        "autonomy_actions": [
+            [("workspace_slug", 1), ("action_type", 1)],
+            [("created_at", -1)],
+            [("status", 1), ("created_at", -1)],
+        ],
+        "agent_tasks": [
+            [("workspace_slug", 1), ("status", 1)],
+            [("assigned_agent", 1), ("status", 1)],
+            [("created_at", -1)],
+        ],
+    }
+
+    results: dict[str, Any] = {}
+    for collection_name, specs in index_specs.items():
+        try:
+            coll = getattr(db, collection_name)
+            models = [_IdxModel([(f, _DIR[d]) for f, d in spec]) for spec in specs]
+            coll.create_indexes(models)
+            results[collection_name] = {"status": "ok", "indexes": len(specs)}
+        except Exception as e:
+            results[collection_name] = {"status": "error", "error": str(e)}
+
+    return results
+
+
+# ── Worker heartbeat tracking ─────────────────────────────────────────────────
+def _record_worker_heartbeat_6u(
+    worker_id: str,
+    status: str,
+    tasks_processed: int = 0,
+    tasks_failed: int = 0,
+    queue_depth: int = 0,
+    metadata: dict | None = None,
+) -> dict:
+    record = {
+        "worker_id": worker_id,
+        "status": status,
+        "tasks_processed": tasks_processed,
+        "tasks_failed": tasks_failed,
+        "queue_depth": queue_depth,
+        "last_seen": _now_iso_6u(),
+        "metadata": metadata or {},
+    }
+    _runtime_state_6u["worker_registry"][worker_id] = record
+    return record
+
+
+def _get_worker_health_6u() -> dict:
+    registry = _runtime_state_6u["worker_registry"]
+    now_ts = _time_6u.time()
+    stale_threshold_seconds = 60
+    healthy: list[str] = []
+    stale: list[str] = []
+    for worker_id, record in registry.items():
+        try:
+            last_seen_dt = datetime.fromisoformat(record["last_seen"])
+            age = now_ts - last_seen_dt.timestamp()
+            (healthy if age < stale_threshold_seconds else stale).append(worker_id)
+        except Exception:
+            stale.append(worker_id)
+    return {
+        "total_workers": len(registry),
+        "healthy": len(healthy),
+        "stale": len(stale),
+        "healthy_worker_ids": healthy,
+        "stale_worker_ids": stale,
+        "registry": list(registry.values()),
+    }
+
+
+def _detect_stuck_orchestrations_6u(db: Any, threshold_minutes: int = 60) -> list[dict]:
+    """Return orchestrations stuck in running state for longer than threshold."""
+    cutoff = datetime.now(timezone.utc) - timedelta(minutes=threshold_minutes)
+    try:
+        stuck = list(db.orchestrations.find({
+            "status": "running",
+            "created_at": {"$lt": cutoff.isoformat()},
+        }))
+        return [
+            {
+                "orchestration_id": o.get("orchestration_id"),
+                "created_at": o.get("created_at"),
+                "workspace_slug": o.get("workspace_slug"),
+            }
+            for o in stuck
+        ]
+    except Exception:
+        return []
+
+
+def _recover_orphaned_tasks_6u(db: Any) -> dict:
+    """Mark tasks assigned to stale workers as failed (orphan recovery)."""
+    stale_ids = _get_worker_health_6u()["stale_worker_ids"]
+    recovered = 0
+    if stale_ids:
+        try:
+            result = db.agent_tasks.update_many(
+                {"status": "running", "assigned_worker": {"$in": stale_ids}},
+                {"$set": {
+                    "status": "failed",
+                    "error": "orphaned_task_worker_stale",
+                    "recovered_at": _now_iso_6u(),
+                }},
+            )
+            recovered = result.modified_count
+        except Exception:
+            pass
+    return {"recovered_tasks": recovered, "stale_workers": stale_ids}
+
+
+# ── Tracing middleware ────────────────────────────────────────────────────────
+from starlette.middleware.base import BaseHTTPMiddleware as _BaseHTTPMiddleware
+
+
+class _TracingMiddleware6U(_BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next: Any) -> Any:
+        trace_id = request.headers.get("X-Trace-ID") or _uuid_6u.uuid4().hex
+        request.state.trace_id = trace_id
+        start = _time_6u.time()
+        response = await call_next(request)
+        latency_ms = round((_time_6u.time() - start) * 1000, 2)
+        response.headers["X-Trace-ID"] = trace_id
+        response.headers["X-Response-Time-Ms"] = str(latency_ms)
+        _record_request_6u(request.url.path, request.method, latency_ms, response.status_code)
+        return response
+
+
+app.add_middleware(_TracingMiddleware6U)
+
+
+# ── Pydantic models ───────────────────────────────────────────────────────────
+class TokenRequest6U(BaseModel):
+    api_key: str = Field(..., description="API key credential")
+    workspace_slug: str = Field("", description="Target workspace scope")
+
+
+class TokenResponse6U(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
+    expires_in_hours: int = _JWT_EXPIRY_HOURS_6U
+    role: str = "operator"
+
+
+class WorkerHeartbeatRequest6U(BaseModel):
+    worker_id: str
+    status: str = "running"
+    tasks_processed: int = 0
+    tasks_failed: int = 0
+    queue_depth: int = 0
+    metadata: dict = Field(default_factory=dict)
+
+
+# ── Auth endpoints ────────────────────────────────────────────────────────────
+@app.post("/auth/token", tags=["auth"])
+def auth_get_token(body: TokenRequest6U) -> dict:
+    """Issue a JWT access token for a valid API key."""
+    key_record = _DEFAULT_API_KEYS_6U.get(body.api_key)
+    if not key_record:
+        raise _error_response_6u("invalid_api_key", "Invalid API key", status_code=401)
+    token = _create_token_6u({
+        "sub": body.api_key,
+        "role": key_record["role"],
+        "workspace": key_record.get("workspace", "*"),
+    })
+    _append_audit_6u("api_key", "token_issued", "auth", workspace=body.workspace_slug)
+    return {
+        "access_token": token,
+        "token_type": "bearer",
+        "expires_in_hours": _JWT_EXPIRY_HOURS_6U,
+        "role": key_record["role"],
+    }
+
+
+@app.get("/auth/validate", tags=["auth"])
+def auth_validate_token(request: Request, identity: dict = Depends(_require_auth_6u)) -> dict:
+    """Validate the current Bearer token and return identity claims."""
+    return {"valid": True, "identity": identity}
+
+
+# ── System health & metrics endpoints ────────────────────────────────────────
+@app.get("/system/health/detailed", tags=["system"])
+def system_health_detailed() -> dict:
+    """Comprehensive health check including DB, vault, workers, and feature flags."""
+    client = get_client()
+    db_ok = False
+    db_error: str | None = None
+    try:
+        db = get_database(client)
+        db.command("ping")
+        db_ok = True
+    except Exception as e:
+        db_error = str(e)
+    finally:
+        client.close()
+
+    worker_h = _get_worker_health_6u()
+    return {
+        "status": "healthy" if db_ok else "degraded",
+        "environment": os.getenv("SIGNALFORGE_ENV", "local"),
+        "timestamp": _now_iso_6u(),
+        "version": "1.0.0",
+        "components": {
+            "database": {"status": "ok" if db_ok else "error", "error": db_error},
+            "vault": {"status": vault_status()},
+            "workers": {
+                "status": "ok" if worker_h["stale"] == 0 else "degraded",
+                "healthy": worker_h["healthy"],
+                "stale": worker_h["stale"],
+            },
+            "auth": {"enabled": _AUTH_ENABLED_6U},
+            "rate_limiting": {"enabled": _RATE_LIMIT_ENABLED_6U},
+        },
+    }
+
+
+@app.get("/system/metrics", tags=["system"])
+def system_get_metrics(request: Request) -> dict:
+    """Return API request metrics, latency statistics, and error rates."""
+    if not _check_rate_limit_6u(_rate_key_6u(request), max_requests=30, window_seconds=60):
+        raise _error_response_6u("rate_limited", "Too many requests", status_code=429)
+    paths = _runtime_state_6u["by_path"]
+    total = _runtime_state_6u["total_requests"]
+    top_endpoints = sorted(paths.items(), key=lambda x: x[1]["count"], reverse=True)[:10]
+    error_endpoints = [(p, d) for p, d in paths.items() if d["errors"] > 0]
+    return {
+        "total_requests": total,
+        "unique_endpoints": len(paths),
+        "top_endpoints": [{"endpoint": p, **d} for p, d in top_endpoints],
+        "error_endpoints": [{"endpoint": p, **d} for p, d in error_endpoints],
+        "timestamp": _now_iso_6u(),
+    }
+
+
+@app.get("/system/indexes", tags=["system"])
+def system_index_status() -> dict:
+    """Verify and return MongoDB index status for all production collections."""
+    client = get_client()
+    try:
+        db = get_database(client)
+        results = ensure_indexes_6u(db)
+        all_ok = all(v.get("status") == "ok" for v in results.values())
+        return {
+            "status": "ok" if all_ok else "partial",
+            "collections": results,
+            "timestamp": _now_iso_6u(),
+        }
+    finally:
+        client.close()
+
+
+@app.get("/system/telemetry", tags=["system"])
+def system_telemetry() -> dict:
+    """Production telemetry aggregation: API metrics, workers, queue, and DB health."""
+    client = get_client()
+    try:
+        db = get_database(client)
+        db_ok = True
+        try:
+            db.command("ping")
+        except Exception:
+            db_ok = False
+
+        worker_h = _get_worker_health_6u()
+        registry = _runtime_state_6u["worker_registry"]
+        total_queue = sum(w.get("queue_depth", 0) for w in registry.values())
+        total_reqs = _runtime_state_6u["total_requests"]
+        paths = _runtime_state_6u["by_path"]
+        total_errors = sum(d["errors"] for d in paths.values())
+        total_latency = sum(d["total_latency_ms"] for d in paths.values())
+        total_count = sum(d["count"] for d in paths.values())
+        avg_latency = round(total_latency / total_count, 2) if total_count else 0.0
+
+        return {
+            "timestamp": _now_iso_6u(),
+            "database": {"healthy": db_ok},
+            "api": {
+                "total_requests": total_reqs,
+                "total_errors": total_errors,
+                "error_rate": round(total_errors / total_reqs, 4) if total_reqs else 0.0,
+                "avg_latency_ms": avg_latency,
+            },
+            "workers": {
+                "total": worker_h["total_workers"],
+                "healthy": worker_h["healthy"],
+                "stale": worker_h["stale"],
+                "total_queue_depth": total_queue,
+            },
+        }
+    finally:
+        client.close()
+
+
+@app.post("/system/reset-metrics", tags=["system"])
+def system_reset_metrics(
+    request: Request,
+    identity: dict = Depends(_require_admin_6u),
+) -> dict:
+    """Reset in-memory API metrics (admin only)."""
+    _runtime_state_6u["total_requests"] = 0
+    _runtime_state_6u["by_path"] = {}
+    _append_audit_6u(identity.get("sub", "admin"), "reset_metrics", "system/metrics")
+    return {"reset": True, "timestamp": _now_iso_6u()}
+
+
+@app.get("/system/audit-log", tags=["system"])
+def system_audit_log(limit: int = Query(50, ge=1, le=500)) -> dict:
+    """Return recent system audit log entries (capped at 500 total)."""
+    entries = _runtime_state_6u["audit_log"]
+    return {
+        "entries": entries[-limit:],
+        "total_recorded": len(entries),
+        "returned": min(limit, len(entries)),
+        "timestamp": _now_iso_6u(),
+    }
+
+
+# ── Worker endpoints ──────────────────────────────────────────────────────────
+@app.post("/workers/heartbeat", tags=["workers"])
+def worker_heartbeat(body: WorkerHeartbeatRequest6U) -> dict:
+    """Register a worker heartbeat to mark the worker as alive."""
+    if not _check_rate_limit_6u(f"worker:{body.worker_id}", max_requests=120, window_seconds=60):
+        raise _error_response_6u("rate_limited", "Heartbeat rate exceeded", status_code=429)
+    record = _record_worker_heartbeat_6u(
+        body.worker_id, body.status,
+        body.tasks_processed, body.tasks_failed,
+        body.queue_depth, body.metadata,
+    )
+    return {"accepted": True, "worker": record}
+
+
+@app.get("/workers/health", tags=["workers"])
+def workers_health() -> dict:
+    """Return worker registry health summary with healthy/stale classification."""
+    return _get_worker_health_6u()
+
+
+@app.get("/workers/queue-depth", tags=["workers"])
+def workers_queue_depth() -> dict:
+    """Return current queue depth aggregated across all registered workers."""
+    registry = _runtime_state_6u["worker_registry"]
+    total = sum(w.get("queue_depth", 0) for w in registry.values())
+    return {
+        "total_queue_depth": total,
+        "worker_count": len(registry),
+        "per_worker": [
+            {"worker_id": wid, "queue_depth": w.get("queue_depth", 0), "status": w.get("status")}
+            for wid, w in registry.items()
+        ],
+        "timestamp": _now_iso_6u(),
+    }
+
+
+@app.post("/workers/recover-orphaned", tags=["workers"])
+def workers_recover_orphaned() -> dict:
+    """Trigger orphaned task recovery and stuck orchestration detection."""
+    client = get_client()
+    try:
+        db = get_database(client)
+        recovery = _recover_orphaned_tasks_6u(db)
+        stuck = _detect_stuck_orchestrations_6u(db)
+        _append_audit_6u("system", "orphan_recovery", "workers", **recovery)
+        return {
+            "recovery": recovery,
+            "stuck_orchestrations": stuck,
+            "stuck_count": len(stuck),
+            "timestamp": _now_iso_6u(),
         }
     finally:
         client.close()

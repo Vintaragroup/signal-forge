@@ -29,6 +29,6 @@ export const NAV_GROUPS = [
   },
   {
     id: "system",          label: "System",          icon: Settings,        defaultRoute: "workspaces",
-    subRoutes: ["workspaces", "admin-onboarding", "client-memory", "agents", "gpt-diagnostics", "demo"],
+    subRoutes: ["workspaces", "admin-onboarding", "client-memory", "agents", "gpt-diagnostics", "demo", "production-telemetry"],
   },
 ];
