@@ -13,7 +13,7 @@ import { BarChart3, LayoutDashboard, PenLine, Settings, Users } from "lucide-rea
 export const NAV_GROUPS = [
   {
     id: "command-center",  label: "Command Center",  icon: LayoutDashboard, defaultRoute: "workflow",
-    subRoutes: ["workflow", "approvals", "agent-tasks"],
+    subRoutes: ["workflow", "approvals", "agent-tasks", "operations-command-center", "linkedin-pilot"],
   },
   {
     id: "crm",             label: "CRM",             icon: Users,           defaultRoute: "pipeline",

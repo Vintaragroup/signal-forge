@@ -976,3 +976,72 @@ export function postSystemRestore(body) {
     body: JSON.stringify(body),
   });
 }
+
+// ── Phase 6W — Pilot UX & Operator Experience ─────────────────────────────────
+export function getActivityFeed({ workspaceSlug, limit = 50, severity } = {}) {
+  const params = new URLSearchParams();
+  if (workspaceSlug) params.set("workspace_slug", workspaceSlug);
+  params.set("limit", limit);
+  if (severity) params.set("severity", severity);
+  return request(`/activity-feed?${params}`);
+}
+export function getWorkspaceReadiness(workspaceSlug) {
+  return request(`/workspace-readiness?workspace_slug=${encodeURIComponent(workspaceSlug)}`);
+}
+export function getExplainability(entityType, entityId) {
+  return request(`/explainability/${encodeURIComponent(entityType)}/${encodeURIComponent(entityId)}`);
+}
+export function getHealthSummary() {
+  return request("/health-summary");
+}
+export function postDemoWorkspaceSeed(body = {}) {
+  return request("/demo-workspace/seed", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+}
+export function getRoleCapabilities(role = "operator") {
+  return request(`/role-capabilities?role=${encodeURIComponent(role)}`);
+}
+
+// ── Phase 6X: LinkedIn Pilot ──────────────────────────────────────────────────
+export function getLinkedInConnectionStatus(workspaceSlug = "default") {
+  return request(`/connect/linkedin/status?workspace_slug=${encodeURIComponent(workspaceSlug)}`);
+}
+export function postLinkedInConnectStart(workspaceSlug = "default") {
+  return request(`/connect/linkedin/start?workspace_slug=${encodeURIComponent(workspaceSlug)}`, {
+    method: "POST",
+  });
+}
+export function getLinkedInConnectionCallback(code, state, workspaceSlug = "default") {
+  return request(
+    `/connect/linkedin/callback?code=${encodeURIComponent(code)}&state=${encodeURIComponent(state)}&workspace_slug=${encodeURIComponent(workspaceSlug)}`
+  );
+}
+export function postLinkedInPublish(body) {
+  return request("/distribution/linkedin/publish", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+}
+export function postLinkedInRetry(attemptId, body) {
+  return request(`/distribution/linkedin/retry?attempt_id=${encodeURIComponent(attemptId)}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+}
+export function getLinkedInAttemptStatus(attemptId) {
+  return request(`/distribution/linkedin/${encodeURIComponent(attemptId)}/status`);
+}
+export function getExternalExecutions(workspaceSlug = "default", limit = 25) {
+  return request(`/external-executions?workspace_slug=${encodeURIComponent(workspaceSlug)}&limit=${limit}`);
+}
+export function getExternalExecutionDetail(attemptId) {
+  return request(`/external-executions/${encodeURIComponent(attemptId)}`);
+}
+export function getDistributionTelemetry(workspaceSlug = "default") {
+  return request(`/distribution/telemetry?workspace_slug=${encodeURIComponent(workspaceSlug)}`);
+}

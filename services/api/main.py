@@ -15128,3 +15128,1176 @@ def system_recovery_status_6v() -> dict:
         }
     finally:
         c.close()
+
+# =============================================================================
+# PHASE 6W — Pilot UX, Operator Experience & Guided Operations
+# Appended to services/api/main.py
+# =============================================================================
+
+from datetime import datetime as _datetime_6w, timezone as _tz6w_obj, timedelta as _td_6w
+_tz_utc_6w = _tz6w_obj.utc
+
+# ── Role capability map ───────────────────────────────────────────────────────
+_ROLE_CAPABILITIES_6W: dict = {
+    "admin":    ["analytics", "approvals", "recommendations", "orchestration",
+                 "autonomy", "system", "workers", "memory", "onboarding", "demo"],
+    "operator": ["analytics", "approvals", "recommendations", "orchestration",
+                 "workers", "memory", "onboarding"],
+    "reviewer": ["approvals", "recommendations", "analytics"],
+    "observer": ["analytics"],
+}
+
+# ── Readiness check weights (must sum to 100) ─────────────────────────────────
+_READINESS_WEIGHTS_6W: dict = {
+    "client_memory_initialized":  20,
+    "orchestration_healthy":      20,
+    "autonomy_configured":        15,
+    "workflows_active":           15,
+    "workers_healthy":            15,
+    "recommendations_not_blocked": 10,
+    "sources_connected":           5,
+}
+
+# ── Activity event severity mapping ───────────────────────────────────────────
+_ACTIVITY_SEVERITY_6W: dict = {
+    "backup_created":           "info",
+    "restore_executed":         "warning",
+    "worker_recovered":         "warning",
+    "orchestration_escalated":  "error",
+    "memory_updated":           "info",
+    "recommendation_generated": "info",
+    "autonomy_action_applied":  "info",
+    "rollback_executed":        "warning",
+    "retry_triggered":          "info",
+    "workflow_completed":       "info",
+    "demo_workspace_seeded":    "info",
+}
+
+# ── Demo seed document counts ─────────────────────────────────────────────────
+_DEMO_SEED_6W: dict = {
+    "workflows":        3,
+    "orchestrations":   2,
+    "recommendations":  5,
+    "autonomy_actions": 4,
+    "memory_entries":   3,
+}
+
+# ── Explainability entity → collection map ────────────────────────────────────
+_EXPLAIN_COLLECTION_MAP_6W: dict = {
+    "recommendation":  "recommendation_statuses",
+    "autonomy_action": "autonomy_actions",
+    "orchestration":   "orchestrations",
+    "memory_update":   "memory_update_proposals",
+    "workflow_run":    "workflow_runs",
+}
+
+# ── Remediation guidance per readiness check ─────────────────────────────────
+_REMEDIATION_6W: dict = {
+    "client_memory_initialized": {
+        "severity": "high",
+        "message": "Client memory not initialized for this workspace.",
+        "action": "POST /client-memory/{slug}",
+    },
+    "orchestration_healthy": {
+        "severity": "high",
+        "message": "Stuck orchestrations detected (running > 60 min).",
+        "action": "POST /workers/recover-orphaned",
+    },
+    "autonomy_configured": {
+        "severity": "medium",
+        "message": "No autonomy actions configured for this workspace.",
+        "action": "POST /autonomy/actions",
+    },
+    "workflows_active": {
+        "severity": "medium",
+        "message": "No workflow runs found for this workspace.",
+        "action": "POST /workflow-runs",
+    },
+    "workers_healthy": {
+        "severity": "high",
+        "message": "Stale workers detected — tasks may be orphaned.",
+        "action": "POST /workers/recover-orphaned",
+    },
+    "recommendations_not_blocked": {
+        "severity": "medium",
+        "message": "High pending recommendation volume — review queue may be blocked.",
+        "action": "GET /recommendations/pending",
+    },
+    "sources_connected": {
+        "severity": "low",
+        "message": "No source connections detected for this workspace.",
+        "action": "POST /approval-requests",
+    },
+}
+
+
+# ── Helpers ───────────────────────────────────────────────────────────────────
+
+def _workspace_readiness_6w(db, workspace_slug: str) -> dict:
+    """Compute a readiness score (0-100) for a workspace with remediation guidance."""
+    checks: dict = {}
+
+    # client_memory_initialized
+    try:
+        n = db.client_memory.count_documents({"workspace_slug": workspace_slug})
+        checks["client_memory_initialized"] = int(n) > 0
+    except Exception:
+        checks["client_memory_initialized"] = False
+
+    # orchestration_healthy — no stuck orchestrations
+    try:
+        cutoff = (_datetime_6w.now(_tz_utc_6w) - _td_6w(minutes=60)).isoformat()
+        n = db.orchestrations.count_documents({
+            "workspace_slug": workspace_slug,
+            "status": "running",
+            "created_at": {"$lt": cutoff},
+        })
+        checks["orchestration_healthy"] = int(n) == 0
+    except Exception:
+        checks["orchestration_healthy"] = True
+
+    # autonomy_configured
+    try:
+        n = db.autonomy_actions.count_documents({"workspace_slug": workspace_slug})
+        checks["autonomy_configured"] = int(n) > 0
+    except Exception:
+        checks["autonomy_configured"] = False
+
+    # workflows_active
+    try:
+        n = db.workflow_runs.count_documents({"workspace_slug": workspace_slug})
+        checks["workflows_active"] = int(n) > 0
+    except Exception:
+        checks["workflows_active"] = False
+
+    # workers_healthy
+    try:
+        wh = _get_worker_health_6u()
+        checks["workers_healthy"] = wh["total_workers"] == 0 or wh["stale"] == 0
+    except Exception:
+        checks["workers_healthy"] = True
+
+    # recommendations_not_blocked
+    try:
+        n = db.recommendation_statuses.count_documents({
+            "workspace_slug": workspace_slug,
+            "status": "pending",
+        })
+        checks["recommendations_not_blocked"] = int(n) < 10
+    except Exception:
+        checks["recommendations_not_blocked"] = True
+
+    # sources_connected (approval_requests used as proxy)
+    try:
+        n = db.approval_requests.count_documents({"workspace_slug": workspace_slug})
+        checks["sources_connected"] = int(n) > 0
+    except Exception:
+        checks["sources_connected"] = False
+
+    score = sum(_READINESS_WEIGHTS_6W[k] for k, v in checks.items() if v)
+
+    remediation = {
+        k: _REMEDIATION_6W[k]
+        for k, v in checks.items()
+        if not v and k in _REMEDIATION_6W
+    }
+
+    return {
+        "workspace_slug": workspace_slug,
+        "score": score,
+        "max_score": 100,
+        "ready": score >= 70,
+        "checks": checks,
+        "remediation": remediation,
+        "evaluated_at": _now_iso_6u(),
+    }
+
+
+def _build_activity_feed_6w(
+    db, workspace_slug: str | None, limit: int, severity: str | None
+) -> list:
+    """Unified chronological activity feed from audit log + orchestration events."""
+    events: list = []
+
+    # In-memory audit log
+    for entry in _runtime_state_6u.get("audit_log", []):
+        sev = _ACTIVITY_SEVERITY_6W.get(entry.get("action", ""), "info")
+        if severity and sev != severity:
+            continue
+        events.append({
+            "ts": entry.get("ts", ""),
+            "type": entry.get("action", "unknown"),
+            "severity": sev,
+            "entity": entry.get("resource", ""),
+            "actor": entry.get("actor", "system"),
+            "trace_id": entry.get("trace_id", ""),
+            "nav_link": "#" + entry.get("resource", "").split("/")[0],
+            "source": "audit_log",
+        })
+
+    # Recent orchestration events from DB
+    try:
+        cutoff = (_datetime_6w.now(_tz_utc_6w) - _td_6w(minutes=120)).isoformat()
+        query: dict = {"created_at": {"$gt": cutoff}}
+        if workspace_slug:
+            query["workspace_slug"] = workspace_slug
+        for orch in db.orchestrations.find(query):
+            status = orch.get("status", "unknown")
+            sev = "error" if status in ("stuck", "failed") else "info"
+            if severity and sev != severity:
+                continue
+            events.append({
+                "ts": orch.get("updated_at", orch.get("created_at", "")),
+                "type": f"orchestration_{status}",
+                "severity": sev,
+                "entity": f"orchestrations/{orch.get('orchestration_id', '')}",
+                "actor": "system",
+                "trace_id": str(orch.get("_id", "")),
+                "nav_link": "#orchestration-dashboard",
+                "source": "orchestrations",
+            })
+    except Exception:
+        pass
+
+    events.sort(key=lambda e: e.get("ts", ""), reverse=True)
+    return events[:limit]
+
+
+def _explain_entity_6w(db, entity_type: str, entity_id: str) -> dict:
+    """Return an explainability payload for a system entity."""
+    base: dict = {
+        "entity_type": entity_type,
+        "entity_id": entity_id,
+        "found": False,
+        "evidence": [],
+        "policy_checks": [],
+        "confidence": 0.0,
+        "triggering_metrics": {},
+        "lineage_refs": [],
+        "explanation": "",
+        "evaluated_at": _now_iso_6u(),
+    }
+
+    col_name = _EXPLAIN_COLLECTION_MAP_6W.get(entity_type)
+    if not col_name:
+        base["explanation"] = f"Unknown entity type: {entity_type}"
+        return base
+
+    # Try ObjectId lookup first, fall back to string field lookup
+    doc = None
+    try:
+        import bson as _bson_6w  # type: ignore[import]
+        oid = _bson_6w.ObjectId(entity_id)
+        doc = db[col_name].find_one({"_id": oid})
+    except Exception:
+        pass
+    if doc is None:
+        id_field = f"{entity_type}_id"
+        doc = db[col_name].find_one({id_field: entity_id})
+
+    if not doc:
+        base["explanation"] = f"Entity not found: {entity_type}/{entity_id}"
+        return base
+
+    meta = doc.get("metadata", doc.get("meta", {})) or {}
+    base.update({
+        "found": True,
+        "evidence": meta.get("evidence", [f"Sourced from collection: {col_name}"]),
+        "policy_checks": meta.get("policy_checks", []),
+        "confidence": float(doc.get("confidence", meta.get("confidence", 0.8))),
+        "triggering_metrics": meta.get("triggering_metrics", {}),
+        "lineage_refs": meta.get("lineage_refs", []),
+        "explanation": doc.get("explanation", meta.get(
+            "explanation",
+            f"This {entity_type} was generated by the SignalForge autonomous pipeline.",
+        )),
+        "status": doc.get("status", "unknown"),
+        "workspace_slug": doc.get("workspace_slug", ""),
+    })
+    return base
+
+
+def _health_summary_6w(db) -> dict:
+    """Unified health indicators across all system dimensions."""
+    # MongoDB connectivity
+    try:
+        db.command("ping")
+        mongo_ok = True
+    except Exception:
+        mongo_ok = False
+
+    # Worker health
+    wh = _get_worker_health_6u()
+    worker_score = 100 if wh["total_workers"] == 0 else max(0, 100 - wh["stale"] * 25)
+
+    # Orchestration health
+    try:
+        cutoff = (_datetime_6w.now(_tz_utc_6w) - _td_6w(minutes=60)).isoformat()
+        stuck = int(db.orchestrations.count_documents({
+            "status": "running",
+            "created_at": {"$lt": cutoff},
+        }))
+        orch_score = max(0, 100 - stuck * 20)
+    except Exception:
+        orch_score = 100
+        stuck = 0
+
+    # Memory health (presence of client memory docs)
+    try:
+        mem_count = int(db.client_memory.count_documents({}))
+        mem_score = min(100, mem_count * 20) if mem_count > 0 else 0
+    except Exception:
+        mem_score = 0
+
+    # Recommendation quality (accepted ratio)
+    try:
+        total = int(db.recommendation_statuses.count_documents({}))
+        approved = int(db.recommendation_statuses.count_documents({"status": "accepted"}))
+        rec_quality = int((approved / total) * 100) if total > 0 else 100
+    except Exception:
+        rec_quality = 100
+
+    # Autonomy confidence based on request volume
+    total_req = _runtime_state_6u.get("total_requests", 0)
+    autonomy_confidence = min(100, total_req) if total_req > 0 else 50
+
+    system_health = int((
+        (100 if mongo_ok else 0) + worker_score + orch_score
+    ) / 3)
+
+    # Reuse Phase 6V pilot readiness
+    pilot = _pilot_readiness_6v(db)
+
+    return {
+        "system_health": system_health,
+        "autonomy_confidence": autonomy_confidence,
+        "memory_health": mem_score,
+        "orchestration_health": orch_score,
+        "worker_health": worker_score,
+        "recommendation_quality": rec_quality,
+        "pilot_readiness": pilot["score"],
+        "pilot_ready": pilot["ready"],
+        "indicators": {
+            "mongodb":         "ok" if mongo_ok else "error",
+            "workers":         "ok" if wh["stale"] == 0 else "degraded",
+            "orchestrations":  "ok" if stuck == 0 else "degraded",
+        },
+        "evaluated_at": _now_iso_6u(),
+    }
+
+
+def _seed_demo_workspace_6w(db, workspace_slug: str) -> dict:
+    """Insert sample entities for a demo/pilot workspace."""
+    created: dict = {k: 0 for k in _DEMO_SEED_6W}
+    now = _now_iso_6u()
+
+    # Workflow runs
+    wf_docs = [
+        {
+            "workspace_slug": workspace_slug,
+            "workflow_id": f"demo-wf-{i + 1}",
+            "status": ["completed", "running", "pending"][i % 3],
+            "created_at": now, "updated_at": now,
+            "metadata": {"demo": True, "step": i + 1},
+        }
+        for i in range(_DEMO_SEED_6W["workflows"])
+    ]
+    try:
+        db.workflow_runs.insert_many(wf_docs)
+        created["workflows"] = len(wf_docs)
+    except Exception:
+        pass
+
+    # Orchestrations
+    orch_docs = [
+        {
+            "workspace_slug": workspace_slug,
+            "orchestration_id": f"demo-orch-{i + 1}",
+            "status": "running",
+            "created_at": now, "updated_at": now,
+            "metadata": {"demo": True},
+        }
+        for i in range(_DEMO_SEED_6W["orchestrations"])
+    ]
+    try:
+        db.orchestrations.insert_many(orch_docs)
+        created["orchestrations"] = len(orch_docs)
+    except Exception:
+        pass
+
+    # Recommendations
+    rec_docs = [
+        {
+            "workspace_slug": workspace_slug,
+            "recommendation_id": f"demo-rec-{i + 1}",
+            "status": ["pending", "accepted", "rejected"][i % 3],
+            "confidence": round(0.60 + i * 0.08, 2),
+            "explanation": f"Demo recommendation {i + 1}: optimize campaign targeting.",
+            "metadata": {"demo": True, "evidence": ["signal_score > 0.7"]},
+            "created_at": now,
+        }
+        for i in range(_DEMO_SEED_6W["recommendations"])
+    ]
+    try:
+        db.recommendation_statuses.insert_many(rec_docs)
+        created["recommendations"] = len(rec_docs)
+    except Exception:
+        pass
+
+    # Autonomy actions
+    auto_docs = [
+        {
+            "workspace_slug": workspace_slug,
+            "action_id": f"demo-auto-{i + 1}",
+            "action_type": ["outreach_send", "memory_update", "workflow_trigger"][i % 3],
+            "status": "applied",
+            "confidence": 0.75,
+            "created_at": now,
+            "metadata": {"demo": True},
+        }
+        for i in range(_DEMO_SEED_6W["autonomy_actions"])
+    ]
+    try:
+        db.autonomy_actions.insert_many(auto_docs)
+        created["autonomy_actions"] = len(auto_docs)
+    except Exception:
+        pass
+
+    # Client memory
+    mem_docs = [
+        {
+            "workspace_slug": workspace_slug,
+            "key": f"demo_signal_{i + 1}",
+            "value": {"score": round(0.5 + i * 0.1, 2), "source": "demo"},
+            "updated_at": now,
+            "metadata": {"demo": True},
+        }
+        for i in range(_DEMO_SEED_6W["memory_entries"])
+    ]
+    try:
+        db.client_memory.insert_many(mem_docs)
+        created["memory_entries"] = len(mem_docs)
+    except Exception:
+        pass
+
+    _append_audit_6u("system", "demo_workspace_seeded", f"demo/{workspace_slug}",
+                     entities=created)
+
+    return {
+        "workspace_slug": workspace_slug,
+        "created": created,
+        "total_entities": sum(created.values()),
+        "seeded_at": now,
+    }
+
+
+# ── Pydantic models ───────────────────────────────────────────────────────────
+
+class DemoSeedRequest6W(BaseModel):
+    workspace_slug: str = "demo-workspace"
+
+
+# ── Endpoints ─────────────────────────────────────────────────────────────────
+
+@app.get("/activity-feed", tags=["operator-ux"])
+def activity_feed_6w(
+    workspace_slug: str | None = None,
+    limit: int = 50,
+    severity: str | None = None,
+) -> dict:
+    """Unified chronological activity feed (audit + orchestration events)."""
+    c = get_client()
+    db = get_database(c)
+    try:
+        events = _build_activity_feed_6w(db, workspace_slug, min(limit, 200), severity)
+        return {"events": events, "count": len(events), "retrieved_at": _now_iso_6u()}
+    finally:
+        c.close()
+
+
+@app.get("/workspace-readiness", tags=["operator-ux"])
+def workspace_readiness_6w(workspace_slug: str) -> dict:
+    """Compute workspace readiness score with remediation guidance."""
+    c = get_client()
+    db = get_database(c)
+    try:
+        return _workspace_readiness_6w(db, workspace_slug)
+    finally:
+        c.close()
+
+
+@app.get("/explainability/{entity_type}/{entity_id}", tags=["operator-ux"])
+def explainability_6w(entity_type: str, entity_id: str) -> dict:
+    """Return explainability payload for any autonomous system entity."""
+    c = get_client()
+    db = get_database(c)
+    try:
+        return _explain_entity_6w(db, entity_type, entity_id)
+    finally:
+        c.close()
+
+
+@app.get("/health-summary", tags=["operator-ux"])
+def health_summary_6w() -> dict:
+    """Unified health summary across all system dimensions."""
+    c = get_client()
+    db = get_database(c)
+    try:
+        return _health_summary_6w(db)
+    finally:
+        c.close()
+
+
+@app.post("/demo-workspace/seed", tags=["operator-ux"])
+def demo_workspace_seed_6w(req: DemoSeedRequest6W = DemoSeedRequest6W()) -> dict:
+    """Seed a demo workspace with sample entities for pilots, demos, and QA."""
+    c = get_client()
+    db = get_database(c)
+    try:
+        return _seed_demo_workspace_6w(db, req.workspace_slug)
+    finally:
+        c.close()
+
+
+@app.get("/role-capabilities", tags=["operator-ux"])
+def role_capabilities_6w(role: str = "operator") -> dict:
+    """Return capability set for a given role."""
+    caps = _ROLE_CAPABILITIES_6W.get(role)
+    if caps is None:
+        from fastapi import HTTPException as _HTTPException_6w
+        raise _HTTPException_6w(
+            status_code=400,
+            detail=f"Unknown role: '{role}'. Valid roles: {list(_ROLE_CAPABILITIES_6W)}",
+        )
+    return {
+        "role": role,
+        "capabilities": caps,
+        "all_roles": list(_ROLE_CAPABILITIES_6W),
+    }
+
+# ╔══════════════════════════════════════════════════════════════════════════════╗
+# ║  PHASE 6X — First Live External Workflow Execution (LinkedIn Pilot)         ║
+# ║  Appended to main.py                                                         ║
+# ╚══════════════════════════════════════════════════════════════════════════════╝
+
+import secrets as _secrets_6x
+
+# ── Constants ─────────────────────────────────────────────────────────────────
+
+_DISTRIBUTION_STATES_6X = [
+    "pending", "verified", "failed", "retrying", "escalated"
+]
+
+_PUBLISH_RETRY_LIMITS_6X = {
+    "token_expired":   3,
+    "network_failure": 4,
+    "rate_limit":      3,
+    "rejection":       1,  # no auto-retry on explicit rejection
+}
+
+_TELEMETRY_KEYS_6X = [
+    "publish_success_rate",
+    "publish_latency_ms",
+    "retry_frequency",
+    "verification_failures",
+    "distribution_completion_rate",
+    "external_api_latency_ms",
+]
+
+_LINKEDIN_SIGNAL_THRESHOLDS_6X = {
+    "success_rate_high":  0.90,
+    "success_rate_low":   0.70,
+    "latency_fast_ms":    3000,
+    "latency_slow_ms":    10000,
+}
+
+
+# ── Helpers ────────────────────────────────────────────────────────────────────
+
+def _get_linkedin_integration_6x(db: Any, workspace_slug: str) -> dict | None:
+    """Return the stored LinkedIn integration record for a workspace, or None."""
+    try:
+        rec = db.external_integrations.find_one(
+            {"workspace_slug": workspace_slug, "provider": "linkedin"}
+        )
+        if rec:
+            rec.pop("_id", None)
+            # Never return raw tokens in API responses
+            rec.pop("access_token", None)
+            rec.pop("refresh_token", None)
+        return rec
+    except Exception:
+        return None
+
+
+def _upsert_linkedin_integration_6x(db: Any, workspace_slug: str, update: dict) -> None:
+    """Insert or update a LinkedIn integration record."""
+    update.setdefault("workspace_slug", workspace_slug)
+    update.setdefault("provider", "linkedin")
+    update["updated_at"] = _now_iso_6u()
+    try:
+        db.external_integrations.update_one(
+            {"workspace_slug": workspace_slug, "provider": "linkedin"},
+            {"$set": update},
+            upsert=True,
+        )
+    except Exception:
+        pass
+
+
+def _create_distribution_attempt_6x(
+    db: Any,
+    workspace_slug: str,
+    workflow_asset_id: str,
+    content_text: str,
+) -> dict:
+    """Create and persist a new distribution_attempts record; returns the full record."""
+    attempt_id = f"da_{_secrets_6x.token_hex(8)}"
+    now = _now_iso_6u()
+    doc = {
+        "distribution_attempt_id": attempt_id,
+        "workspace_slug":          workspace_slug,
+        "workflow_asset_id":       workflow_asset_id,
+        "provider":                "linkedin",
+        "status":                  "pending",
+        "distribution_verification_status": "pending",
+        "content_text":            content_text,
+        "external_post_id":        None,
+        "published_url":           None,
+        "request_trace_id":        None,
+        "retry_count":             0,
+        "verified":                False,
+        "escalated":               False,
+        "created_at":              now,
+        "updated_at":              now,
+        "metadata":                {},
+    }
+    try:
+        db.distribution_attempts.insert_one(doc.copy())
+    except Exception:
+        pass
+    doc.pop("_id", None)
+    _append_audit_6u("system", "distribution_attempt_created",
+                     f"distribution/{attempt_id}",
+                     workspace=workspace_slug, provider="linkedin")
+    return doc
+
+
+def _update_distribution_attempt_6x(db: Any, attempt_id: str, update: dict) -> None:
+    """Patch an existing distribution_attempts record."""
+    update["updated_at"] = _now_iso_6u()
+    try:
+        db.distribution_attempts.update_one(
+            {"distribution_attempt_id": attempt_id},
+            {"$set": update},
+        )
+    except Exception:
+        pass
+
+
+def _get_distribution_attempt_6x(db: Any, attempt_id: str) -> dict | None:
+    try:
+        rec = db.distribution_attempts.find_one({"distribution_attempt_id": attempt_id})
+        if rec:
+            rec.pop("_id", None)
+        return rec
+    except Exception:
+        return None
+
+
+def _check_duplicate_publish_6x(db: Any, workflow_asset_id: str) -> bool:
+    """
+    Return True if a successful (verified) publish already exists for this asset.
+    Prevents accidental duplicate publishing.
+    """
+    try:
+        existing = db.distribution_attempts.count_documents({
+            "workflow_asset_id": workflow_asset_id,
+            "provider":          "linkedin",
+            "verified":          True,
+        })
+        return int(existing) > 0
+    except Exception:
+        return False
+
+
+def _simulate_linkedin_publish_6x(content_text: str, author_urn: str,
+                                   idempotency_key: str) -> dict:
+    """
+    Internal simulation of LinkedIn publish for environments where live
+    LinkedIn credentials are not configured.  Returns a deterministic stub
+    response that mimics the real client output.
+    """
+    stub_id = f"urn:li:share:{abs(hash(idempotency_key)) % 10_000_000_000}"
+    return {
+        "external_post_id": stub_id,
+        "published_url":    f"https://www.linkedin.com/feed/update/{stub_id}",
+        "request_trace_id": f"sim_{_secrets_6x.token_hex(6)}",
+        "published_at":     _now_iso_6u(),
+        "raw_response":     {"id": stub_id, "lifecycleState": "PUBLISHED", "_simulated": True},
+        "_simulated":       True,
+    }
+
+
+def _execute_linkedin_publish_6x(
+    db: Any, workspace_slug: str, attempt: dict
+) -> dict:
+    """
+    Core publish execution — uses live LinkedIn client if token available,
+    otherwise falls back to simulation.  Mutates and persists the attempt record.
+    """
+    attempt_id      = attempt["distribution_attempt_id"]
+    asset_id        = attempt["workflow_asset_id"]
+    content_text    = attempt["content_text"]
+    idempotency_key = f"{workspace_slug}:{asset_id}"
+
+    # Fetch token from DB (not returned to callers)
+    access_token: str | None = None
+    author_urn: str = "urn:li:person:placeholder"
+    try:
+        raw = db.external_integrations.find_one(
+            {"workspace_slug": workspace_slug, "provider": "linkedin"}
+        )
+        if raw:
+            access_token = raw.get("access_token")
+            author_urn   = raw.get("author_urn", author_urn)
+    except Exception:
+        pass
+
+    simulated = False
+    try:
+        if access_token:
+            # Real execution path
+            from linkedin_client import (
+                publish_post,
+                LinkedInDuplicateError,
+                LinkedInTokenExpiredError,
+                LinkedInPublishError,
+                refresh_access_token,
+            )
+            try:
+                result = publish_post(access_token, author_urn, content_text,
+                                      idempotency_key=idempotency_key)
+            except LinkedInTokenExpiredError:
+                # Attempt token refresh
+                try:
+                    raw2 = db.external_integrations.find_one(
+                        {"workspace_slug": workspace_slug, "provider": "linkedin"}
+                    )
+                    refresh_token = raw2.get("refresh_token") if raw2 else None
+                    if refresh_token:
+                        token_data = refresh_access_token(refresh_token)
+                        _upsert_linkedin_integration_6x(db, workspace_slug, {
+                            "access_token": token_data["access_token"],
+                            "refresh_token": token_data.get("refresh_token", refresh_token),
+                        })
+                        result = publish_post(token_data["access_token"], author_urn,
+                                              content_text, idempotency_key=idempotency_key)
+                    else:
+                        raise
+                except Exception as exc2:
+                    _update_distribution_attempt_6x(db, attempt_id, {
+                        "status": "failed",
+                        "distribution_verification_status": "failed",
+                        "failure_reason": f"token_refresh_failed: {str(exc2)[:200]}",
+                    })
+                    _append_audit_6u("system", "distribution_publish_failed",
+                                     f"distribution/{attempt_id}",
+                                     reason="token_refresh_failed", workspace=workspace_slug)
+                    return {**attempt, "status": "failed", "failure_reason": str(exc2)[:200]}
+        else:
+            # Simulation fallback
+            result = _simulate_linkedin_publish_6x(content_text, author_urn, idempotency_key)
+            simulated = True
+    except Exception as exc:
+        retry_count = attempt.get("retry_count", 0)
+        new_status  = "retrying" if retry_count < _PUBLISH_RETRY_LIMITS_6X["network_failure"] else "failed"
+        _update_distribution_attempt_6x(db, attempt_id, {
+            "status":                  new_status,
+            "distribution_verification_status": "failed",
+            "failure_reason":          str(exc)[:300],
+            "retry_count":             retry_count + 1,
+        })
+        _append_audit_6u("system", "distribution_publish_failed",
+                         f"distribution/{attempt_id}",
+                         reason=str(exc)[:200], workspace=workspace_slug)
+        return {**attempt, "status": new_status, "failure_reason": str(exc)[:200]}
+
+    # Success — persist result
+    updates = {
+        "status":                  "verified" if result.get("external_post_id") else "failed",
+        "distribution_verification_status": "verified" if result.get("external_post_id") else "failed",
+        "external_post_id":        result.get("external_post_id"),
+        "published_url":           result.get("published_url"),
+        "request_trace_id":        result.get("request_trace_id"),
+        "verified":                bool(result.get("external_post_id")),
+        "published_at":            result.get("published_at"),
+        "simulated":               simulated,
+        "metadata":                {"raw_response": result.get("raw_response", {})},
+    }
+    _update_distribution_attempt_6x(db, attempt_id, updates)
+
+    _append_audit_6u("system", "distribution_published",
+                     f"distribution/{attempt_id}",
+                     provider="linkedin",
+                     post_id=result.get("external_post_id"),
+                     workspace=workspace_slug,
+                     simulated=simulated)
+
+    # Generate recommendation signal on successful publish
+    _generate_publish_signal_6x(db, workspace_slug, attempt_id, result)
+
+    return {**attempt, **updates}
+
+
+def _generate_publish_signal_6x(db: Any, workspace_slug: str,
+                                  attempt_id: str, publish_result: dict) -> None:
+    """
+    On successful publish, insert a recommendation_signal and memory_proposal
+    for the learning loop.
+    """
+    now = _now_iso_6u()
+    signal = {
+        "workspace_slug": workspace_slug,
+        "signal_type":    "distribution_success",
+        "provider":       "linkedin",
+        "attempt_id":     attempt_id,
+        "post_id":        publish_result.get("external_post_id"),
+        "created_at":     now,
+        "metadata":       {"channel": "linkedin", "source": "6x_publish_loop"},
+    }
+    proposal = {
+        "workspace_slug": workspace_slug,
+        "key":            "linkedin_distribution_success_count",
+        "proposed_value": {"increment": 1, "last_post_id": publish_result.get("external_post_id")},
+        "source":         "6x_publish_signal",
+        "created_at":     now,
+    }
+    try:
+        db.recommendation_signals.insert_one(signal)
+    except Exception:
+        pass
+    try:
+        db.memory_proposals.insert_one(proposal)
+    except Exception:
+        pass
+
+
+def _build_distribution_telemetry_6x(db: Any, workspace_slug: str | None) -> dict:
+    """
+    Compute delivery telemetry metrics for the telemetry / analytics dashboards.
+    """
+    q: dict = {}
+    if workspace_slug:
+        q["workspace_slug"] = workspace_slug
+    q_li = {**q, "provider": "linkedin"}
+    now  = _now_iso_6u()
+    try:
+        total        = int(db.distribution_attempts.count_documents(q_li))
+        verified     = int(db.distribution_attempts.count_documents({**q_li, "verified": True}))
+        failed       = int(db.distribution_attempts.count_documents({**q_li, "status": "failed"}))
+        retrying     = int(db.distribution_attempts.count_documents({**q_li, "status": "retrying"}))
+        escalated    = int(db.distribution_attempts.count_documents({**q_li, "status": "escalated"}))
+        pending      = int(db.distribution_attempts.count_documents({**q_li, "status": "pending"}))
+
+        success_rate = round(verified / total, 3) if total > 0 else 0.0
+        channels     = {"linkedin": {"total": total, "verified": verified,
+                                     "failed": failed, "retrying": retrying}}
+    except Exception:
+        total = verified = failed = retrying = escalated = pending = 0
+        success_rate = 0.0
+        channels     = {}
+
+    return {
+        "workspace_slug":       workspace_slug,
+        "publish_success_rate": success_rate,
+        "publish_latency_ms":   None,         # populated from real execution data
+        "retry_frequency":      retrying,
+        "verification_failures": failed,
+        "distribution_completion_rate": success_rate,
+        "external_api_latency_ms": None,      # populated from real execution data
+        "totals": {
+            "total": total, "verified": verified, "failed": failed,
+            "retrying": retrying, "escalated": escalated, "pending": pending,
+        },
+        "channels":  channels,
+        "evaluated_at": now,
+    }
+
+
+def _get_all_external_executions_6x(db: Any, workspace_slug: str | None,
+                                     limit: int) -> list[dict]:
+    """Return a list of distribution_attempts, newest first."""
+    q: dict = {}
+    if workspace_slug:
+        q["workspace_slug"] = workspace_slug
+    results = []
+    try:
+        cursor = db.distribution_attempts.find(q).sort("created_at", -1).limit(limit)
+        for doc in cursor:
+            doc.pop("_id", None)
+            results.append(doc)
+    except Exception:
+        pass
+    return results
+
+
+# ── Pydantic Models ────────────────────────────────────────────────────────────
+
+class LinkedInPublishRequest6X(BaseModel):
+    workspace_slug:    str
+    workflow_asset_id: str
+    content_text:      str
+
+
+class LinkedInRetryRequest6X(BaseModel):
+    workspace_slug: str
+
+
+class LinkedInCallbackRequest6X(BaseModel):
+    code:  str
+    state: str
+    workspace_slug: str = "default"
+
+
+# ── Endpoints ─────────────────────────────────────────────────────────────────
+
+# OAuth
+
+@app.get("/connect/linkedin/status", tags=["linkedin"])
+def linkedin_connection_status_6x(workspace_slug: str = "default") -> dict:
+    """Return LinkedIn connection status for a workspace."""
+    c = get_client()
+    db = get_database(c)
+    try:
+        integration = _get_linkedin_integration_6x(db, workspace_slug)
+        if not integration:
+            return {
+                "workspace_slug": workspace_slug,
+                "provider":       "linkedin",
+                "status":         "not_connected",
+                "connected":      False,
+            }
+        return {
+            "workspace_slug": workspace_slug,
+            "provider":       "linkedin",
+            "status":         integration.get("status", "unknown"),
+            "connected":      integration.get("status") == "connected",
+            "connected_by":   integration.get("connected_by"),
+            "expires_at":     integration.get("expires_at"),
+            "created_at":     integration.get("created_at"),
+        }
+    finally:
+        c.close()
+
+
+@app.post("/connect/linkedin/start", tags=["linkedin"])
+def linkedin_connect_start_6x(workspace_slug: str = "default") -> dict:
+    """Generate a LinkedIn OAuth authorization URL and persist a state token."""
+    from linkedin_client import build_authorization_url, LINKEDIN_CLIENT_ID
+    state = _secrets_6x.token_hex(16)
+    c = get_client()
+    db = get_database(c)
+    try:
+        # Persist state for callback verification
+        _upsert_linkedin_integration_6x(db, workspace_slug, {
+            "status":       "pending_oauth",
+            "oauth_state":  state,
+            "connected_by": "operator",
+            "created_at":   _now_iso_6u(),
+        })
+        auth_url = build_authorization_url(state)
+        _append_audit_6u("operator", "linkedin_oauth_started",
+                         f"connect/{workspace_slug}")
+        return {
+            "workspace_slug":   workspace_slug,
+            "authorization_url": auth_url,
+            "state":            state,
+            "client_configured": bool(LINKEDIN_CLIENT_ID),
+        }
+    finally:
+        c.close()
+
+
+@app.get("/connect/linkedin/callback", tags=["linkedin"])
+def linkedin_connect_callback_6x(
+    code: str,
+    state: str,
+    workspace_slug: str = "default",
+) -> dict:
+    """
+    Handle LinkedIn OAuth callback — exchange code for token and persist.
+    In a real deployment this endpoint is hit by the browser after LinkedIn redirect.
+    """
+    from linkedin_client import exchange_code_for_token, LINKEDIN_CLIENT_ID
+    from datetime import timedelta
+
+    c = get_client()
+    db = get_database(c)
+    try:
+        # Verify state
+        rec = db.external_integrations.find_one(
+            {"workspace_slug": workspace_slug, "provider": "linkedin"}
+        )
+        stored_state = rec.get("oauth_state") if rec else None
+        if stored_state and stored_state != state:
+            from fastapi import HTTPException as _HTTPException_6x
+            raise _HTTPException_6x(status_code=400, detail="OAuth state mismatch — possible CSRF")
+
+        if not LINKEDIN_CLIENT_ID:
+            # Simulation mode — store a placeholder token
+            expires_at = _now_iso_6u()
+            _upsert_linkedin_integration_6x(db, workspace_slug, {
+                "status":        "connected",
+                "access_token":  f"sim_{_secrets_6x.token_hex(16)}",
+                "refresh_token": f"sim_rt_{_secrets_6x.token_hex(16)}",
+                "expires_at":    expires_at,
+                "author_urn":    "urn:li:person:simulated",
+                "oauth_state":   None,
+                "simulated":     True,
+            })
+            _append_audit_6u("operator", "linkedin_oauth_completed",
+                             f"connect/{workspace_slug}", simulated=True)
+            return {"workspace_slug": workspace_slug, "status": "connected",
+                    "simulated": True}
+
+        token_data = exchange_code_for_token(code)
+        expires_sec = token_data.get("expires_in", 5184000)
+        expires_dt  = datetime.now(timezone.utc) + timedelta(seconds=expires_sec)
+        _upsert_linkedin_integration_6x(db, workspace_slug, {
+            "status":        "connected",
+            "access_token":  token_data["access_token"],
+            "refresh_token": token_data.get("refresh_token"),
+            "expires_at":    expires_dt.isoformat(),
+            "oauth_state":   None,
+            "simulated":     False,
+        })
+        _append_audit_6u("operator", "linkedin_oauth_completed",
+                         f"connect/{workspace_slug}", simulated=False)
+        return {"workspace_slug": workspace_slug, "status": "connected", "simulated": False}
+    finally:
+        c.close()
+
+
+# Distribution
+
+@app.post("/distribution/linkedin/publish", tags=["linkedin"])
+def linkedin_publish_6x(req: LinkedInPublishRequest6X) -> dict:
+    """
+    Publish a content asset to LinkedIn.
+    Performs duplicate-publish check before executing.
+    """
+    c = get_client()
+    db = get_database(c)
+    try:
+        if _check_duplicate_publish_6x(db, req.workflow_asset_id):
+            from fastapi import HTTPException as _HTTPException_6x
+            raise _HTTPException_6x(
+                status_code=409,
+                detail=f"Asset {req.workflow_asset_id!r} has already been verified as published to LinkedIn.",
+            )
+        attempt = _create_distribution_attempt_6x(
+            db, req.workspace_slug, req.workflow_asset_id, req.content_text
+        )
+        result = _execute_linkedin_publish_6x(db, req.workspace_slug, attempt)
+        return result
+    finally:
+        c.close()
+
+
+@app.post("/distribution/linkedin/retry", tags=["linkedin"])
+def linkedin_retry_6x(attempt_id: str, req: LinkedInRetryRequest6X) -> dict:
+    """
+    Manually retry a failed or retrying distribution attempt.
+    Requires operator acknowledgment (body required).
+    """
+    c = get_client()
+    db = get_database(c)
+    try:
+        attempt = _get_distribution_attempt_6x(db, attempt_id)
+        if not attempt:
+            from fastapi import HTTPException as _HTTPException_6x
+            raise _HTTPException_6x(status_code=404, detail=f"Attempt {attempt_id!r} not found")
+        if attempt.get("status") not in ("failed", "retrying"):
+            from fastapi import HTTPException as _HTTPException_6x
+            raise _HTTPException_6x(
+                status_code=400,
+                detail=f"Cannot retry attempt in state: {attempt.get('status')!r}"
+            )
+        retry_count = attempt.get("retry_count", 0)
+        max_retries = _PUBLISH_RETRY_LIMITS_6X["network_failure"]
+        if retry_count >= max_retries:
+            _update_distribution_attempt_6x(db, attempt_id, {"status": "escalated", "escalated": True})
+            _append_audit_6u("operator", "distribution_escalated",
+                             f"distribution/{attempt_id}",
+                             workspace=req.workspace_slug)
+            return {**attempt, "status": "escalated",
+                    "message": "Retry limit reached — attempt escalated for operator review"}
+
+        _append_audit_6u("operator", "distribution_retry_requested",
+                         f"distribution/{attempt_id}",
+                         workspace=req.workspace_slug, retry_count=retry_count + 1)
+        result = _execute_linkedin_publish_6x(db, req.workspace_slug, attempt)
+        return result
+    finally:
+        c.close()
+
+
+@app.get("/distribution/linkedin/{attempt_id}/status", tags=["linkedin"])
+def linkedin_attempt_status_6x(attempt_id: str) -> dict:
+    """Return the current status of a distribution attempt."""
+    c = get_client()
+    db = get_database(c)
+    try:
+        attempt = _get_distribution_attempt_6x(db, attempt_id)
+        if not attempt:
+            from fastapi import HTTPException as _HTTPException_6x
+            raise _HTTPException_6x(status_code=404, detail=f"Attempt {attempt_id!r} not found")
+        return attempt
+    finally:
+        c.close()
+
+
+# External Executions (audit trail)
+
+@app.get("/external-executions", tags=["linkedin"])
+def external_executions_list_6x(
+    workspace_slug: str | None = None,
+    limit: int = 50,
+) -> dict:
+    """Return a paginated list of all external distribution execution records."""
+    c = get_client()
+    db = get_database(c)
+    try:
+        items = _get_all_external_executions_6x(db, workspace_slug, min(limit, 200))
+        return {"executions": items, "count": len(items), "retrieved_at": _now_iso_6u()}
+    finally:
+        c.close()
+
+
+@app.get("/external-executions/{attempt_id}", tags=["linkedin"])
+def external_execution_detail_6x(attempt_id: str) -> dict:
+    """Return full detail for a single external execution record."""
+    c = get_client()
+    db = get_database(c)
+    try:
+        attempt = _get_distribution_attempt_6x(db, attempt_id)
+        if not attempt:
+            from fastapi import HTTPException as _HTTPException_6x
+            raise _HTTPException_6x(status_code=404, detail=f"Execution {attempt_id!r} not found")
+        return attempt
+    finally:
+        c.close()
+
+
+# Telemetry
+
+@app.get("/distribution/telemetry", tags=["linkedin"])
+def distribution_telemetry_6x(workspace_slug: str | None = None) -> dict:
+    """Delivery telemetry metrics for LinkedIn distribution channel."""
+    c = get_client()
+    db = get_database(c)
+    try:
+        return _build_distribution_telemetry_6x(db, workspace_slug)
+    finally:
+        c.close()

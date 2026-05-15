@@ -24,12 +24,14 @@ import {
   Gauge,
   ListChecks,
   Mail,
+  MonitorDot,
   PenLine,
   SearchCheck,
   UserCog,
   Users,
   Workflow,
   GitBranch,
+  Share2,
 } from "lucide-react";
 
 export const ROUTES = [
@@ -37,6 +39,8 @@ export const ROUTES = [
   { id: "workflow",        label: "Workflow",         icon: Workflow,      group: "command-center",  primary: true  },
   { id: "approvals",       label: "Approvals",        icon: ClipboardCheck, group: "command-center", primary: false },
   { id: "agent-tasks",     label: "Agent Tasks",      icon: ListChecks,    group: "command-center",  primary: false },
+  { id: "operations-command-center", label: "Operations Command Center", icon: MonitorDot, group: "command-center", primary: false },
+  { id: "linkedin-pilot",             label: "LinkedIn Pilot",             icon: Share2,      group: "command-center", primary: false },
 
   // ── CRM ──────────────────────────────────────────────────────────────────
   { id: "pipeline",        label: "Pipeline",         icon: Users,         group: "crm",             primary: true  },
