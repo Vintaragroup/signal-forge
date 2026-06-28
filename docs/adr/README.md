@@ -22,3 +22,4 @@ Do not rewrite accepted ADRs to change repository history. If a new approved dec
 ## Accepted ADRs
 
 - [0001: Containerized Development Environment](0001-containerized-development-environment.md)
+- [0002: Shared Container Image for Development and Testing](0002-shared-container-image-for-development-and-testing.md)
