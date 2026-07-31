@@ -13,6 +13,7 @@ import {
   Activity,
   BarChart3,
   Bot,
+  ClipboardList,
   Lightbulb,
   Shield,
   Brain,
@@ -55,9 +56,10 @@ export const ROUTES = [
   { id: "overview",             label: "Overview",             icon: Gauge,     group: "analytics", primary: true  },
   { id: "reports",              label: "Reports",              icon: FileText,  group: "analytics", primary: false },
   { id: "analytics-dashboard",  label: "Operational Analytics",  icon: BarChart3,  group: "analytics", primary: false },
-  { id: "recommendations",       label: "Recommendations",         icon: Lightbulb, group: "analytics", primary: false },
-  { id: "autonomy-control",       label: "Autonomy Control",         icon: Shield,    group: "analytics", primary: false },
-  { id: "orchestration-dashboard",  label: "Orchestration",            icon: GitBranch, group: "analytics", primary: false },
+  { id: "recommendations",       label: "Recommendations",         icon: Lightbulb,     group: "analytics", primary: false },
+  { id: "autonomy-control",       label: "Autonomy Control",         icon: Shield,        group: "analytics", primary: false },
+  { id: "orchestration-dashboard",  label: "Orchestration",            icon: GitBranch,     group: "analytics", primary: false },
+  { id: "output-quality",           label: "Output Quality",           icon: ClipboardList, group: "analytics", primary: false },
 
   // ── System ────────────────────────────────────────────────────────────────
   { id: "workspaces",         label: "Workspaces",        icon: Briefcase,  group: "system", primary: true  },

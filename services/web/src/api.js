@@ -1045,3 +1045,61 @@ export function getExternalExecutionDetail(attemptId) {
 export function getDistributionTelemetry(workspaceSlug = "default") {
   return request(`/distribution/telemetry?workspace_slug=${encodeURIComponent(workspaceSlug)}`);
 }
+
+// ── Phase 6Y — Output Quality ─────────────────────────────────────────────
+export function postPilotWorkspaceSeed(body) {
+  return request("/quality/pilot-workspace/seed", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+}
+export function postQualityReview(body) {
+  return request("/quality/reviews", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+}
+export function getQualityReview(reviewId) {
+  return request(`/quality/reviews/${encodeURIComponent(reviewId)}`);
+}
+export function patchQualityReview(reviewId, body) {
+  return request(`/quality/reviews/${encodeURIComponent(reviewId)}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+}
+export function getQualityReviews(params = {}) {
+  const qs = new URLSearchParams(
+    Object.fromEntries(Object.entries(params).filter(([, v]) => v != null))
+  ).toString();
+  return request(`/quality/reviews${qs ? `?${qs}` : ""}`);
+}
+export function postContentPackage(body) {
+  return request("/quality/content-package", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+}
+export function postMemoryComparison(body) {
+  return request("/quality/memory-comparison", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+}
+export function postRevisionLoop(reviewId, workspaceSlug) {
+  return request(
+    `/quality/revision-loop/${encodeURIComponent(reviewId)}?workspace_slug=${encodeURIComponent(workspaceSlug)}`,
+    { method: "POST" }
+  );
+}
+export function getQualityMetrics(workspaceSlug) {
+  return request(`/quality/metrics${workspaceSlug ? `?workspace_slug=${encodeURIComponent(workspaceSlug)}` : ""}`);
+}
+export function getPublishReady(workspaceSlug, limit = 20) {
+  return request(`/quality/publish-ready?workspace_slug=${encodeURIComponent(workspaceSlug || "")}&limit=${limit}`);
+}

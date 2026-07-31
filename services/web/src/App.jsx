@@ -27,6 +27,7 @@ import OrchestrationDashboard from "./pages/OrchestrationDashboardPage.jsx";
 import ProductionTelemetryPage from "./pages/ProductionTelemetryPage.jsx";
 import OperationsCommandCenter from "./pages/OperationsCommandCenter.jsx";
 import LinkedInPilotPage from "./pages/LinkedInPilotPage.jsx";
+import OutputQualityPage from "./pages/OutputQualityPage.jsx";
 import { api, setAppWorkspace } from "./api.js";
 import { ROUTE_MAP } from "./navigation/routeRegistry.js";
 import { NAV_GROUPS } from "./navigation/navGroups.js";
@@ -56,6 +57,7 @@ const PAGE_COMPONENTS = {
     "production-telemetry": ProductionTelemetryPage,
     "operations-command-center": OperationsCommandCenter,
     "linkedin-pilot":             LinkedInPilotPage,
+    "output-quality":             OutputQualityPage,
 };
 
 export default function App() {

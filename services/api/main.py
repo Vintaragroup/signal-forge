@@ -16301,3 +16301,857 @@ def distribution_telemetry_6x(workspace_slug: str | None = None) -> dict:
         return _build_distribution_telemetry_6x(db, workspace_slug)
     finally:
         c.close()
+
+# ╔══════════════════════════════════════════════════════════════════════════════╗
+# ║  PHASE 6Y — Agent Output Quality & Real Workflow Content Validation         ║
+# ║  Appended to main.py                                                         ║
+# ╚══════════════════════════════════════════════════════════════════════════════╝
+
+# ── Constants ─────────────────────────────────────────────────────────────────
+
+_QUALITY_DIMENSIONS_6Y: list[str] = [
+    "relevance",
+    "clarity",
+    "client_fit",
+    "publish_readiness",
+    "strategic_value",
+]
+
+_QUALITY_MAX_SCORE_6Y:  int = 5
+_QUALITY_MIN_PUBLISH_6Y: float = 3.5  # avg score threshold to mark publish-ready
+
+_CONTENT_PACKAGE_TYPES_6Y: dict[str, int] = {
+    "linkedin_post":     5,
+    "content_hook":      5,
+    "video_concept":     3,
+    "outreach_angle":    3,
+    "campaign_summary":  1,
+}
+
+_MEMORY_IMPROVEMENT_THRESHOLD_6Y: float = 0.15  # 15 % avg score lift = "improved"
+
+_PILOT_WORKSPACE_SLUG_6Y: str = "pilot-john-maxwell"
+
+_PILOT_CLIENT_PROFILE_6Y: dict = {
+    "workspace_slug":     _PILOT_WORKSPACE_SLUG_6Y,
+    "client_name":        "John Maxwell",
+    "offer":              "Leadership coaching, keynote speaking, and bestselling book series",
+    "audience":           "Mid-level managers, executives, and emerging leaders aged 30-55",
+    "tone":               "Authoritative, warm, story-driven, practical",
+    "positioning":        "The world's foremost leadership expert — accessible wisdom for everyday leaders",
+    "content_goals":      "Build thought leadership, grow LinkedIn following, drive book sales and speaking inquiries",
+    "source_inputs":      "Book excerpts (The 21 Irrefutable Laws of Leadership), podcast transcripts, keynote clips",
+    "preferred_channels": ["linkedin", "email", "podcast_repurpose"],
+    "blocked_claims":     ["guaranteed results", "overnight success", "get rich quickly"],
+    "winning_patterns":   ["story-first hooks", "numbered frameworks", "direct CTAs to book or speaking page"],
+    "metadata":           {"pilot": True, "phase": "6Y"},
+}
+
+_REVISION_REASONS_6Y: list[str] = [
+    "tone_mismatch",
+    "off_brand",
+    "too_generic",
+    "factually_unsafe",
+    "weak_cta",
+    "off_audience",
+    "too_long",
+    "too_short",
+    "not_original",
+    "blocked_claim",
+]
+
+_QUALITY_METRIC_KEYS_6Y: list[str] = [
+    "approval_rate",
+    "revision_rate",
+    "publish_ready_rate",
+    "avg_quality_score",
+    "memory_improvement_delta",
+]
+
+
+# ── Pydantic models ───────────────────────────────────────────────────────────
+
+class QualityReviewCreate6Y(BaseModel):
+    workspace_slug:     str
+    content_item_id:    str
+    content_type:       str  # e.g. linkedin_post, content_hook
+    content_text:       str
+    scores:             dict[str, int]  # dimension -> 0-5
+    approved:           bool = False
+    publish_ready:      bool = False
+    revision_requested: bool = False
+    revision_reason:    str | None = None
+    reviewer_notes:     str | None = None
+    memory_version:     int = 0  # client memory version used when generating
+
+
+class QualityReviewUpdate6Y(BaseModel):
+    approved:           bool | None = None
+    publish_ready:      bool | None = None
+    revision_requested: bool | None = None
+    revision_reason:    str | None = None
+    reviewer_notes:     str | None = None
+    scores:             dict[str, int] | None = None
+
+
+class ContentPackageRequest6Y(BaseModel):
+    workspace_slug: str
+    client_name:    str = "John Maxwell"
+    use_memory:     bool = True
+
+
+class MemoryComparisonRequest6Y(BaseModel):
+    workspace_slug:  str
+    content_type:    str = "linkedin_post"
+    content_text:    str
+    baseline_scores: dict[str, int]
+    memory_scores:   dict[str, int]
+
+
+class PilotWorkspaceSeedRequest6Y(BaseModel):
+    workspace_slug: str = _PILOT_WORKSPACE_SLUG_6Y
+    force:          bool = False
+
+
+# ── Helper: generate content text for pilot workspace ─────────────────────────
+
+def _generate_pilot_content_6y(content_type: str, index: int, use_memory: bool) -> dict:
+    """
+    Return a realistic, client-relevant content item for the John Maxwell pilot.
+    Uses embedded templates rather than live LLM calls so tests are deterministic
+    while still producing copy that demonstrates quality review mechanics.
+    """
+    memory_tag = " [memory-informed]" if use_memory else ""
+
+    linkedin_posts = [
+        (
+            "The best leaders I've worked with all share one trait: they don't manage people — "
+            "they multiply them.\n\n"
+            "Law #1 of leadership isn't authority. It's influence.\n\n"
+            "When you invest in someone's growth, you don't lose — you compound.\n\n"
+            "Who are you multiplying today? 👇\n\n"
+            "#Leadership #JohnMaxwell #21Laws"
+        ),
+        (
+            "Most managers wait for motivation to arrive.\n\n"
+            "Great leaders create the conditions for it.\n\n"
+            "3 things I've seen transform team energy:\n"
+            "→ Clear vision they believe in\n"
+            "→ Progress they can see\n"
+            "→ A leader who notices the small wins\n\n"
+            "Motivation isn't a mystery. It's a discipline.\n\n"
+            "#LeadershipDevelopment #Management"
+        ),
+        (
+            "I've coached Fortune 500 CEOs and front-line supervisors.\n\n"
+            "The gap between them isn't intelligence.\n\n"
+            "It's this: top leaders ask better questions.\n\n"
+            "Not \"why did this fail?\" — but \"what can we learn?\"\n"
+            "Not \"who's responsible?\" — but \"how do we move forward?\"\n\n"
+            "The question shapes the culture.\n\n"
+            "What's one question you could ask your team this week?\n\n"
+            "#ExecutiveLeadership #Coaching #GrowthMindset"
+        ),
+        (
+            "Leadership is not a title. It's a choice you make every single day.\n\n"
+            "I've seen janitors lead with more influence than VPs.\n\n"
+            "Because influence comes from character — not a corner office.\n\n"
+            "You don't need permission to start leading.\n\n"
+            "→ Share this with someone who needs to hear it today.\n\n"
+            "#Leadership #CharacterMatters #MaxwellLeadership"
+        ),
+        (
+            "The 21 Irrefutable Laws of Leadership weren't written from a boardroom.\n\n"
+            "They came from 40 years of watching what actually works.\n\n"
+            "Law #17: The Law of Magnetism — you attract who you are, not who you want.\n\n"
+            "Want better team members? Become a better leader first.\n\n"
+            "📖 Link to the book in bio.\n\n"
+            "#21Laws #LeadershipBooks #PersonalGrowth"
+        ),
+    ]
+
+    hooks = [
+        f"Most leaders plateau not because they stop working — but because they stop growing.{memory_tag}",
+        f"The conversation your team needs you to start — but you keep putting off.{memory_tag}",
+        f"5 words that changed how I think about influence: 'People buy into the leader first.'{memory_tag}",
+        f"You can have the best strategy in the room. But without trust, it goes nowhere.{memory_tag}",
+        f"Leadership pain point no one talks about: the loneliness of the top chair.{memory_tag}",
+    ]
+
+    video_concepts = [
+        {
+            "title":       f"The Law of the Lid — Why Your Team's Growth Is Capped By Yours{memory_tag}",
+            "format":      "60-second vertical reel",
+            "hook":        "If your team isn't growing, the lid might be you.",
+            "structure":   "Hook → Law explanation (15s) → Story example (30s) → CTA to book (15s)",
+            "cta":         "Download the free leadership assessment — link in bio.",
+        },
+        {
+            "title":       f"3 Questions Every Great Leader Asks in a 1:1{memory_tag}",
+            "format":      "LinkedIn native video, 90 seconds",
+            "hook":        "Stop running 1:1s that feel like status updates.",
+            "structure":   "Hook (10s) → 3 questions with brief rationale each (60s) → CTA (20s)",
+            "cta":         "Reply with your go-to 1:1 question — I'll share the best ones.",
+        },
+        {
+            "title":       f"From Manager to Multiplier: The Shift That Changes Everything{memory_tag}",
+            "format":      "LinkedIn carousel repurposed as voiceover reel",
+            "hook":        "There's a moment every good manager has — where they realize managing isn't enough.",
+            "structure":   "Story hook (20s) → The shift explained (40s) → Practical step (20s) → Book CTA (10s)",
+            "cta":         "Grab 'The 21 Irrefutable Laws' — link in comments.",
+        },
+    ]
+
+    outreach_angles = [
+        {
+            "angle":   f"Warm intro for speaking inquiry{memory_tag}",
+            "subject": "Bringing John Maxwell's leadership framework to your next event",
+            "body":    (
+                "Hi [Name],\n\n"
+                "Your team is doing extraordinary work in [industry]. "
+                "I'm reaching out because John Maxwell's Leadership Keynote has been transforming "
+                "exactly the kind of culture you're building — with practical, story-driven frameworks "
+                "that stick long after the event.\n\n"
+                "Would it make sense to explore a 2026 keynote or leadership workshop?\n\n"
+                "Best,\nThe Maxwell Leadership Team"
+            ),
+        },
+        {
+            "angle":   f"Book launch outreach to HR leaders{memory_tag}",
+            "subject": "A leadership resource your team leads have been asking for",
+            "body":    (
+                "Hi [Name],\n\n"
+                "Many HR directors I speak with are looking for one thing: "
+                "a leadership development resource their managers will actually use.\n\n"
+                "The 21 Irrefutable Laws has been that resource for 3M+ leaders worldwide — "
+                "practical, memorable, and directly applicable.\n\n"
+                "I'd love to share a complimentary copy for your team. Interested?\n\n"
+                "Best,\nJohn Maxwell"
+            ),
+        },
+        {
+            "angle":   f"Podcast collab pitch{memory_tag}",
+            "subject": "John Maxwell + [Your Podcast] — leadership conversation your audience will love",
+            "body":    (
+                "Hi [Host],\n\n"
+                "Your audience cares deeply about growth — which is exactly what John brings "
+                "to every conversation.\n\n"
+                "With 40+ years of leadership experience, 100+ books, and frameworks used by "
+                "Fortune 500 teams worldwide, he delivers insights your listeners can apply Monday morning.\n\n"
+                "Would you be open to a 30-minute exploratory call?\n\n"
+                "Best,\nThe Maxwell Leadership Team"
+            ),
+        },
+    ]
+
+    campaign_summary = {
+        "campaign_name":    f"John Maxwell Leadership Thought-Leadership Sprint — Q3 2026{memory_tag}",
+        "objective":        "Establish dominant LinkedIn presence, drive speaking inquiries, accelerate book sales",
+        "target_audience":  "Managers and executives aged 30-55 across mid-large enterprises",
+        "core_message":     "Leadership is a choice and a skill — John Maxwell gives you both the why and the how",
+        "content_calendar": "5 LinkedIn posts/week (2 original, 2 repurposed, 1 engagement) + 1 video/week",
+        "success_kpis":     ["500+ net new LinkedIn followers/month", "15+ speaking inquiry leads/quarter",
+                             "10% lift in book referral traffic from LinkedIn"],
+        "memory_enabled":   use_memory,
+    }
+
+    if content_type == "linkedin_post":
+        i = min(index, len(linkedin_posts) - 1)
+        text = linkedin_posts[i]
+        return {"content_type": content_type, "content_text": text, "index": index}
+    elif content_type == "content_hook":
+        i = min(index, len(hooks) - 1)
+        return {"content_type": content_type, "content_text": hooks[i], "index": index}
+    elif content_type == "video_concept":
+        i = min(index, len(video_concepts) - 1)
+        vc = video_concepts[i]
+        return {"content_type": content_type, "content_text": str(vc), "structured": vc, "index": index}
+    elif content_type == "outreach_angle":
+        i = min(index, len(outreach_angles) - 1)
+        oa = outreach_angles[i]
+        return {"content_type": content_type, "content_text": oa["body"], "structured": oa, "index": index}
+    else:  # campaign_summary
+        return {"content_type": content_type, "content_text": str(campaign_summary), "structured": campaign_summary, "index": 0}
+
+
+# ── Helper: seed pilot workspace ──────────────────────────────────────────────
+
+def _seed_pilot_workspace_6y(db, workspace_slug: str, force: bool = False) -> dict:
+    now = _now_iso_6u()
+    created: dict[str, int] = {}
+
+    # Workspace record
+    existing_ws = db.workspaces.find_one({"slug": workspace_slug})
+    if existing_ws and not force:
+        return {
+            "workspace_slug": workspace_slug,
+            "already_exists":  True,
+            "created":         {},
+            "seeded_at":       now,
+        }
+
+    db.workspaces.update_one(
+        {"slug": workspace_slug},
+        {"$set": {
+            "slug":        workspace_slug,
+            "name":        "John Maxwell — Leadership Growth",
+            "module":      "artist_growth",
+            "status":      "active",
+            "created_at":  now,
+            "metadata":    {"pilot": True, "phase": "6Y"},
+        }},
+        upsert=True,
+    )
+    created["workspace"] = 1
+
+    # Client profile
+    profile = {**_PILOT_CLIENT_PROFILE_6Y, "created_at": now, "updated_at": now}
+    db.client_profiles.update_one(
+        {"workspace_slug": workspace_slug},
+        {"$set": profile},
+        upsert=True,
+    )
+    created["client_profile"] = 1
+
+    # Client memory v1 (baseline — no winning patterns loaded yet)
+    db.client_memory.update_one(
+        {"workspace_slug": workspace_slug, "memory_version": 1},
+        {"$set": {
+            "workspace_slug":  workspace_slug,
+            "memory_version":  1,
+            "tone":            "Authoritative, warm, story-driven, practical",
+            "blocked_claims":  _PILOT_CLIENT_PROFILE_6Y["blocked_claims"],
+            "winning_patterns": [],
+            "approved_topics": ["leadership", "personal growth", "team development", "book promotion"],
+            "created_at":      now,
+            "is_baseline":     True,
+        }},
+        upsert=True,
+    )
+    created["memory_baseline"] = 1
+
+    # Client memory v2 (memory-informed — winning patterns loaded)
+    db.client_memory.update_one(
+        {"workspace_slug": workspace_slug, "memory_version": 2},
+        {"$set": {
+            "workspace_slug":  workspace_slug,
+            "memory_version":  2,
+            "tone":            "Authoritative, warm, story-driven, practical",
+            "blocked_claims":  _PILOT_CLIENT_PROFILE_6Y["blocked_claims"],
+            "winning_patterns": _PILOT_CLIENT_PROFILE_6Y["winning_patterns"],
+            "approved_topics": ["leadership", "personal growth", "team development", "book promotion",
+                                "21 laws", "keynote", "multiplier mindset"],
+            "created_at":      now,
+            "is_baseline":     False,
+            "improvements_applied": ["story-first hooks", "numbered frameworks", "direct CTAs"],
+        }},
+        upsert=True,
+    )
+    created["memory_v2"] = 1
+
+    # Pre-seed a content package with quality reviews
+    pkg_id = f"pkg_{workspace_slug[:8]}_{_now_iso_6u()[:10].replace('-', '')}"
+    db.content_packages_6y.update_one(
+        {"package_id": pkg_id},
+        {"$setOnInsert": {
+            "package_id":     pkg_id,
+            "workspace_slug": workspace_slug,
+            "client_name":    "John Maxwell",
+            "status":         "generated",
+            "created_at":     now,
+            "item_counts":    _CONTENT_PACKAGE_TYPES_6Y,
+        }},
+        upsert=True,
+    )
+    created["content_package"] = 1
+
+    _append_audit_6u("system", "pilot_workspace_seeded", workspace_slug,
+                     workspace_slug=workspace_slug, entities=created)
+    return {
+        "workspace_slug": workspace_slug,
+        "already_exists":  False,
+        "created":         created,
+        "total_entities":  sum(created.values()),
+        "seeded_at":       now,
+    }
+
+
+# ── Helper: create quality review ─────────────────────────────────────────────
+
+def _create_quality_review_6y(db, payload_dict: dict) -> dict:
+    now   = _now_iso_6u()
+    ws    = payload_dict.get("workspace_slug", "default")
+    scores: dict = payload_dict.get("scores", {})
+
+    # Clamp all scores 0-5
+    clamped = {
+        dim: max(0, min(_QUALITY_MAX_SCORE_6Y, int(scores.get(dim, 0))))
+        for dim in _QUALITY_DIMENSIONS_6Y
+    }
+    total_dims = len(_QUALITY_DIMENSIONS_6Y)
+    avg_score  = sum(clamped.values()) / total_dims if total_dims else 0.0
+
+    # Auto-detect publish readiness if not explicitly set
+    publish_ready = payload_dict.get("publish_ready", False)
+    if not publish_ready and avg_score >= _QUALITY_MIN_PUBLISH_6Y:
+        publish_ready = True
+
+    review_id = f"qr_{_now_iso_6u()[:10].replace('-','')}_{__import__('secrets').token_hex(4)}"
+    doc = {
+        "review_id":          review_id,
+        "workspace_slug":     ws,
+        "content_item_id":    payload_dict.get("content_item_id", ""),
+        "content_type":       payload_dict.get("content_type", "unknown"),
+        "content_text":       payload_dict.get("content_text", ""),
+        "scores":             clamped,
+        "avg_score":          round(avg_score, 3),
+        "approved":           bool(payload_dict.get("approved", False)),
+        "publish_ready":      publish_ready,
+        "revision_requested": bool(payload_dict.get("revision_requested", False)),
+        "revision_reason":    payload_dict.get("revision_reason"),
+        "reviewer_notes":     payload_dict.get("reviewer_notes"),
+        "memory_version":     int(payload_dict.get("memory_version", 0)),
+        "created_at":         now,
+        "updated_at":         now,
+    }
+    try:
+        db.quality_reviews_6y.insert_one(doc)
+    except Exception:
+        pass
+
+    if bool(payload_dict.get("revision_requested")):
+        _append_audit_6u("operator", "quality_review_revision_requested",
+                         f"review/{review_id}",
+                         workspace_slug=ws,
+                         reason=payload_dict.get("revision_reason"))
+        # Auto-generate memory proposal on revision
+        _propose_quality_memory_update_6y(db, ws, doc)
+    else:
+        _append_audit_6u("operator", "quality_review_created",
+                         f"review/{review_id}",
+                         workspace_slug=ws,
+                         avg_score=avg_score)
+
+    return doc
+
+
+# ── Helper: update quality review ─────────────────────────────────────────────
+
+def _update_quality_review_6y(db, review_id: str, update_dict: dict) -> dict | None:
+    now = _now_iso_6u()
+    existing = db.quality_reviews_6y.find_one({"review_id": review_id})
+    if not existing:
+        return None
+
+    patch: dict = {"updated_at": now}
+
+    if "scores" in update_dict and update_dict["scores"]:
+        new_scores = {
+            dim: max(0, min(_QUALITY_MAX_SCORE_6Y, int(update_dict["scores"].get(dim, 0))))
+            for dim in _QUALITY_DIMENSIONS_6Y
+        }
+        patch["scores"]    = new_scores
+        patch["avg_score"] = round(sum(new_scores.values()) / len(_QUALITY_DIMENSIONS_6Y), 3)
+        # Re-evaluate publish readiness
+        patch["publish_ready"] = (
+            update_dict.get("publish_ready", False)
+            or patch["avg_score"] >= _QUALITY_MIN_PUBLISH_6Y
+        )
+    for field in ("approved", "publish_ready", "revision_requested",
+                  "revision_reason", "reviewer_notes"):
+        if update_dict.get(field) is not None:
+            patch[field] = update_dict[field]
+
+    try:
+        db.quality_reviews_6y.update_one({"review_id": review_id}, {"$set": patch})
+        updated = db.quality_reviews_6y.find_one({"review_id": review_id})
+        _append_audit_6u("operator", "quality_review_updated",
+                         f"review/{review_id}",
+                         workspace_slug=existing.get("workspace_slug"))
+        return updated
+    except Exception:
+        return existing
+
+
+# ── Helper: memory proposal from quality feedback ─────────────────────────────
+
+def _propose_quality_memory_update_6y(db, workspace_slug: str, review: dict) -> None:
+    """Insert a memory_proposals doc when a review triggers revision feedback."""
+    now = _now_iso_6u()
+    try:
+        db.memory_proposals.insert_one({
+            "workspace_slug":  workspace_slug,
+            "source":          "quality_review_6y",
+            "review_id":       review.get("review_id"),
+            "content_type":    review.get("content_type"),
+            "revision_reason": review.get("revision_reason"),
+            "avg_score":       review.get("avg_score", 0.0),
+            "proposal":        f"Avoid '{review.get('revision_reason','unknown')}' in future {review.get('content_type','content')} outputs",
+            "status":          "pending",
+            "created_at":      now,
+        })
+    except Exception:
+        pass
+
+
+# ── Helper: generate content package ─────────────────────────────────────────
+
+def _generate_content_package_6y(db, workspace_slug: str, client_name: str, use_memory: bool) -> dict:
+    now  = _now_iso_6u()
+    items: list[dict] = []
+
+    for ctype, count in _CONTENT_PACKAGE_TYPES_6Y.items():
+        for idx in range(count):
+            item = _generate_pilot_content_6y(ctype, idx, use_memory)
+            item_id = f"ci_{ctype[:6]}_{idx}_{__import__('secrets').token_hex(3)}"
+            doc = {
+                "item_id":        item_id,
+                "workspace_slug": workspace_slug,
+                "client_name":    client_name,
+                "content_type":   ctype,
+                "content_text":   item.get("content_text", ""),
+                "structured":     item.get("structured"),
+                "use_memory":     use_memory,
+                "status":         "draft",
+                "created_at":     now,
+            }
+            try:
+                db.content_items_6y.insert_one(doc)
+            except Exception:
+                pass
+            items.append(doc)
+
+    pkg_id = f"pkg_{__import__('secrets').token_hex(6)}"
+    pkg = {
+        "package_id":     pkg_id,
+        "workspace_slug": workspace_slug,
+        "client_name":    client_name,
+        "use_memory":     use_memory,
+        "item_counts":    {k: sum(1 for i in items if i["content_type"] == k)
+                           for k in _CONTENT_PACKAGE_TYPES_6Y},
+        "total_items":    len(items),
+        "status":         "generated",
+        "created_at":     now,
+    }
+    try:
+        db.content_packages_6y.insert_one(pkg)
+    except Exception:
+        pass
+
+    _append_audit_6u("system", "content_package_generated", pkg_id,
+                     workspace_slug=workspace_slug, total=len(items), use_memory=use_memory)
+    return {**pkg, "items": items}
+
+
+# ── Helper: memory comparison ─────────────────────────────────────────────────
+
+def _compare_memory_impact_6y(baseline_scores: dict, memory_scores: dict) -> dict:
+    dims = _QUALITY_DIMENSIONS_6Y
+    base_avg = sum(baseline_scores.get(d, 0) for d in dims) / len(dims)
+    mem_avg  = sum(memory_scores.get(d, 0) for d in dims) / len(dims)
+    delta    = mem_avg - base_avg
+    improved = delta >= _MEMORY_IMPROVEMENT_THRESHOLD_6Y * _QUALITY_MAX_SCORE_6Y
+
+    dim_deltas = {
+        d: round(memory_scores.get(d, 0) - baseline_scores.get(d, 0), 3)
+        for d in dims
+    }
+    return {
+        "baseline_avg":      round(base_avg, 3),
+        "memory_avg":        round(mem_avg, 3),
+        "delta":             round(delta, 3),
+        "improved":          improved,
+        "dimension_deltas":  dim_deltas,
+        "threshold_required": round(_MEMORY_IMPROVEMENT_THRESHOLD_6Y * _QUALITY_MAX_SCORE_6Y, 3),
+        "evaluated_at":      _now_iso_6u(),
+    }
+
+
+# ── Helper: quality metrics dashboard ────────────────────────────────────────
+
+def _build_quality_metrics_6y(db, workspace_slug: str | None) -> dict:
+    now = _now_iso_6u()
+    q: dict = {}
+    if workspace_slug:
+        q["workspace_slug"] = workspace_slug
+    try:
+        total      = db.quality_reviews_6y.count_documents(q)
+        approved   = db.quality_reviews_6y.count_documents({**q, "approved": True})
+        revised    = db.quality_reviews_6y.count_documents({**q, "revision_requested": True})
+        pub_ready  = db.quality_reviews_6y.count_documents({**q, "publish_ready": True})
+
+        avg_score  = 0.0
+        if total > 0:
+            pipeline = [{"$match": q}, {"$group": {"_id": None, "avg": {"$avg": "$avg_score"}}}]
+            agg      = list(db.quality_reviews_6y.aggregate(pipeline))
+            avg_score = round(agg[0]["avg"], 3) if agg else 0.0
+
+        # Memory delta: compare avg_score of memory_version==0 vs memory_version>=1
+        baseline_agg = list(db.quality_reviews_6y.aggregate([
+            {"$match": {**q, "memory_version": 0}},
+            {"$group": {"_id": None, "avg": {"$avg": "$avg_score"}}},
+        ]))
+        memory_agg = list(db.quality_reviews_6y.aggregate([
+            {"$match": {**q, "memory_version": {"$gte": 1}}},
+            {"$group": {"_id": None, "avg": {"$avg": "$avg_score"}}},
+        ]))
+        baseline_avg  = round(baseline_agg[0]["avg"], 3) if baseline_agg else 0.0
+        memory_avg    = round(memory_agg[0]["avg"],   3) if memory_agg   else 0.0
+        memory_delta  = round(memory_avg - baseline_avg, 3)
+
+        return {
+            "workspace_slug":        workspace_slug,
+            "total_reviews":         total,
+            "approval_rate":         round(approved / total, 3) if total else 0.0,
+            "revision_rate":         round(revised  / total, 3) if total else 0.0,
+            "publish_ready_rate":    round(pub_ready / total, 3) if total else 0.0,
+            "avg_quality_score":     avg_score,
+            "memory_improvement_delta": memory_delta,
+            "totals": {
+                "approved":          approved,
+                "revised":           revised,
+                "publish_ready":     pub_ready,
+                "total":             total,
+            },
+            "evaluated_at": now,
+        }
+    except Exception:
+        return {
+            "workspace_slug":          workspace_slug,
+            "total_reviews":           0,
+            "approval_rate":           0.0,
+            "revision_rate":           0.0,
+            "publish_ready_rate":      0.0,
+            "avg_quality_score":       0.0,
+            "memory_improvement_delta": 0.0,
+            "totals":                  {},
+            "evaluated_at":            now,
+        }
+
+
+# ── Helper: filter publish-ready reviews ──────────────────────────────────────
+
+def _get_publish_ready_reviews_6y(db, workspace_slug: str | None, limit: int) -> list[dict]:
+    q: dict = {"publish_ready": True}
+    if workspace_slug:
+        q["workspace_slug"] = workspace_slug
+    try:
+        return list(
+            db.quality_reviews_6y.find(q).sort("created_at", -1).limit(limit)
+        )
+    except Exception:
+        return []
+
+
+# ── Helper: revision loop — rerun content after feedback ─────────────────────
+
+def _run_revision_loop_6y(db, review_id: str, workspace_slug: str) -> dict:
+    now = _now_iso_6u()
+    existing = db.quality_reviews_6y.find_one({"review_id": review_id})
+    if not existing:
+        return {"error": f"review {review_id!r} not found"}
+
+    ctype = existing.get("content_type", "linkedin_post")
+    # Generate a fresh content item — use memory (memory_version=2)
+    new_item = _generate_pilot_content_6y(ctype, 0, use_memory=True)
+
+    # Build a revised review stub (operator will re-score)
+    new_review_id = f"qr_rev_{__import__('secrets').token_hex(5)}"
+    revised_doc = {
+        "review_id":            new_review_id,
+        "workspace_slug":       workspace_slug,
+        "content_item_id":      existing.get("content_item_id", ""),
+        "content_type":         ctype,
+        "content_text":         new_item.get("content_text", ""),
+        "scores":               {d: 0 for d in _QUALITY_DIMENSIONS_6Y},
+        "avg_score":            0.0,
+        "approved":             False,
+        "publish_ready":        False,
+        "revision_requested":   False,
+        "revision_reason":      None,
+        "reviewer_notes":       None,
+        "memory_version":       2,
+        "parent_review_id":     review_id,
+        "is_revision":          True,
+        "created_at":           now,
+        "updated_at":           now,
+    }
+    try:
+        db.quality_reviews_6y.insert_one(revised_doc)
+    except Exception:
+        pass
+
+    _append_audit_6u("operator", "revision_loop_executed",
+                     f"review/{review_id}→{new_review_id}",
+                     workspace_slug=workspace_slug)
+    return {
+        "original_review_id": review_id,
+        "new_review_id":      new_review_id,
+        "content_type":       ctype,
+        "new_content_text":   new_item.get("content_text", ""),
+        "memory_version":     2,
+        "is_revision":        True,
+        "created_at":         now,
+    }
+
+
+# ── Helper: get review by ID ──────────────────────────────────────────────────
+
+def _get_review_6y(db, review_id: str) -> dict | None:
+    try:
+        return db.quality_reviews_6y.find_one({"review_id": review_id})
+    except Exception:
+        return None
+
+
+# ── Endpoints ─────────────────────────────────────────────────────────────────
+
+@app.post("/quality/pilot-workspace/seed", tags=["quality"])
+def seed_pilot_workspace_6y(req: PilotWorkspaceSeedRequest6Y = PilotWorkspaceSeedRequest6Y()) -> dict:
+    """Seed the John Maxwell pilot workspace with client profile, memory versions, and content package."""
+    c = get_client()
+    db = get_database(c)
+    try:
+        return _seed_pilot_workspace_6y(db, req.workspace_slug, req.force)
+    finally:
+        c.close()
+
+
+@app.post("/quality/reviews", tags=["quality"])
+def create_quality_review_6y(payload: QualityReviewCreate6Y) -> dict:
+    """Create a quality review for a content item with dimension scores."""
+    c = get_client()
+    db = get_database(c)
+    try:
+        return _create_quality_review_6y(db, payload.dict())
+    finally:
+        c.close()
+
+
+@app.get("/quality/reviews/{review_id}", tags=["quality"])
+def get_quality_review_6y(review_id: str) -> dict:
+    """Retrieve a single quality review by ID."""
+    c = get_client()
+    db = get_database(c)
+    try:
+        review = _get_review_6y(db, review_id)
+        if not review:
+            from fastapi import HTTPException as _HTTPException_6y
+            raise _HTTPException_6y(status_code=404, detail=f"Review {review_id!r} not found")
+        return review
+    finally:
+        c.close()
+
+
+@app.patch("/quality/reviews/{review_id}", tags=["quality"])
+def update_quality_review_6y(review_id: str, payload: QualityReviewUpdate6Y) -> dict:
+    """Update scores, approval, publish-readiness, or revision status of a review."""
+    c = get_client()
+    db = get_database(c)
+    try:
+        updated = _update_quality_review_6y(db, review_id, payload.dict(exclude_none=True))
+        if not updated:
+            from fastapi import HTTPException as _HTTPException_6y
+            raise _HTTPException_6y(status_code=404, detail=f"Review {review_id!r} not found")
+        return updated
+    finally:
+        c.close()
+
+
+@app.get("/quality/reviews", tags=["quality"])
+def list_quality_reviews_6y(
+    workspace_slug: str | None = None,
+    publish_ready:  bool | None = None,
+    approved:       bool | None = None,
+    content_type:   str  | None = None,
+    limit:          int  = 50,
+) -> dict:
+    """List quality reviews with optional filters."""
+    c = get_client()
+    db = get_database(c)
+    try:
+        q: dict = {}
+        if workspace_slug:   q["workspace_slug"] = workspace_slug
+        if publish_ready is not None: q["publish_ready"] = publish_ready
+        if approved is not None:      q["approved"] = approved
+        if content_type:     q["content_type"] = content_type
+        try:
+            items = list(db.quality_reviews_6y.find(q).sort("created_at", -1).limit(min(limit, 200)))
+        except Exception:
+            items = []
+        return {"reviews": items, "count": len(items), "retrieved_at": _now_iso_6u()}
+    finally:
+        c.close()
+
+
+@app.post("/quality/content-package", tags=["quality"])
+def generate_content_package_6y(req: ContentPackageRequest6Y) -> dict:
+    """Generate a full content package for a pilot workspace client."""
+    c = get_client()
+    db = get_database(c)
+    try:
+        return _generate_content_package_6y(db, req.workspace_slug, req.client_name, req.use_memory)
+    finally:
+        c.close()
+
+
+@app.get("/quality/content-package", tags=["quality"])
+def list_content_packages_6y(workspace_slug: str | None = None, limit: int = 20) -> dict:
+    """List generated content packages."""
+    c = get_client()
+    db = get_database(c)
+    try:
+        q: dict = {}
+        if workspace_slug:
+            q["workspace_slug"] = workspace_slug
+        try:
+            pkgs = list(db.content_packages_6y.find(q).sort("created_at", -1).limit(min(limit, 100)))
+        except Exception:
+            pkgs = []
+        return {"packages": pkgs, "count": len(pkgs), "retrieved_at": _now_iso_6u()}
+    finally:
+        c.close()
+
+
+@app.post("/quality/memory-comparison", tags=["quality"])
+def memory_comparison_6y(req: MemoryComparisonRequest6Y) -> dict:
+    """Compare baseline vs memory-informed quality scores and compute improvement delta."""
+    return _compare_memory_impact_6y(req.baseline_scores, req.memory_scores)
+
+
+@app.post("/quality/revision-loop/{review_id}", tags=["quality"])
+def revision_loop_6y(review_id: str, workspace_slug: str = _PILOT_WORKSPACE_SLUG_6Y) -> dict:
+    """Execute a revision loop: generate fresh memory-informed content for a rejected review."""
+    c = get_client()
+    db = get_database(c)
+    try:
+        result = _run_revision_loop_6y(db, review_id, workspace_slug)
+        if result.get("error"):
+            from fastapi import HTTPException as _HTTPException_6y
+            raise _HTTPException_6y(status_code=404, detail=result["error"])
+        return result
+    finally:
+        c.close()
+
+
+@app.get("/quality/publish-ready", tags=["quality"])
+def publish_ready_6y(workspace_slug: str | None = None, limit: int = 20) -> dict:
+    """Return all publish-ready content reviews."""
+    c = get_client()
+    db = get_database(c)
+    try:
+        items = _get_publish_ready_reviews_6y(db, workspace_slug, min(limit, 100))
+        return {"publish_ready": items, "count": len(items), "retrieved_at": _now_iso_6u()}
+    finally:
+        c.close()
+
+
+@app.get("/quality/metrics", tags=["quality"])
+def quality_metrics_6y(workspace_slug: str | None = None) -> dict:
+    """Return agent quality metrics dashboard: approval rate, revision rate, avg score, memory delta."""
+    c = get_client()
+    db = get_database(c)
+    try:
+        return _build_quality_metrics_6y(db, workspace_slug)
+    finally:
+        c.close()

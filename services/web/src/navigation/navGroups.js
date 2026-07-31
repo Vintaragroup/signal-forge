@@ -25,7 +25,7 @@ export const NAV_GROUPS = [
   },
   {
     id: "analytics",       label: "Analytics",       icon: BarChart3,       defaultRoute: "overview",
-    subRoutes: ["overview", "reports", "analytics-dashboard", "recommendations", "autonomy-control", "orchestration-dashboard"],
+    subRoutes: ["overview", "reports", "analytics-dashboard", "recommendations", "autonomy-control", "orchestration-dashboard", "output-quality"],
   },
   {
     id: "system",          label: "System",          icon: Settings,        defaultRoute: "workspaces",
