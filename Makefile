@@ -3,10 +3,16 @@ BUSINESS_TYPE ?= roofing contractor
 LOCATION ?= Austin, TX
 LEAD_COUNT ?= 5
 
-.PHONY: up down api web dashboard pipeline report revenue-report check test gpt-agent-test
+.PHONY: up down dev api web dashboard pipeline report revenue-report check test gpt-agent-test
 
 up:
 	docker compose up -d --build
+
+# Local hot-reload inner loop: swaps web to the Vite dev server on :5173.
+# Explicit -f so plain `make up` / `docker compose up` always stays
+# production-shape (see docker-compose.dev.yml).
+dev:
+	docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build
 
 down:
 	docker compose down
