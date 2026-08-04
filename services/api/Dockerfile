@@ -26,6 +26,7 @@ COPY services/api/media_folder_scanner.py .
 COPY services/api/approved_url_downloader.py .
 COPY services/api/discovery_engine.py .
 COPY services/api/tavily_client.py .
+COPY services/api/instagram_client.py .
 COPY agents ./agents
 COPY tools ./tools
 COPY modules ./modules

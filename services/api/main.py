@@ -16016,6 +16016,10 @@ def _build_distribution_telemetry_6x(db: Any, workspace_slug: str | None) -> dic
         success_rate = round(verified / total, 3) if total > 0 else 0.0
         channels     = {"linkedin": {"total": total, "verified": verified,
                                      "failed": failed, "retrying": retrying}}
+        # Instagram channel appended below; resolved at call time since the whole
+        # module is loaded before any request is handled (function defined later
+        # in this file, same pattern as every other forward-reference here).
+        channels["instagram"] = _build_instagram_distribution_telemetry_ig(db, workspace_slug)
     except Exception:
         total = verified = failed = retrying = escalated = pending = 0
         success_rate = 0.0
@@ -16312,6 +16316,526 @@ def distribution_telemetry_6x(workspace_slug: str | None = None) -> dict:
     db = get_database(c)
     try:
         return _build_distribution_telemetry_6x(db, workspace_slug)
+    finally:
+        c.close()
+
+# ╔══════════════════════════════════════════════════════════════════════════════╗
+# ║  Pillar 2 — Instagram Publishing                                             ║
+# ║  Mirrors the Phase 6X LinkedIn block above. Appended to main.py              ║
+# ╚══════════════════════════════════════════════════════════════════════════════╝
+
+import secrets as _secrets_ig
+
+# ── Helpers ────────────────────────────────────────────────────────────────────
+
+def _get_instagram_integration_ig(db: Any, workspace_slug: str) -> dict | None:
+    """Return the stored Instagram integration record for a workspace, or None."""
+    try:
+        rec = db.external_integrations.find_one(
+            {"workspace_slug": workspace_slug, "provider": "instagram"}
+        )
+        if rec:
+            rec.pop("_id", None)
+            # Never return raw tokens in API responses
+            rec.pop("access_token", None)
+        return rec
+    except Exception:
+        return None
+
+
+def _upsert_instagram_integration_ig(db: Any, workspace_slug: str, update: dict) -> None:
+    """Insert or update an Instagram integration record."""
+    update.setdefault("workspace_slug", workspace_slug)
+    update.setdefault("provider", "instagram")
+    update["updated_at"] = _now_iso_6u()
+    try:
+        db.external_integrations.update_one(
+            {"workspace_slug": workspace_slug, "provider": "instagram"},
+            {"$set": update},
+            upsert=True,
+        )
+    except Exception:
+        pass
+
+
+def _find_asset_render_ig(db: Any, render_id: str) -> dict | None:
+    try:
+        query: dict = {"_id": render_id}
+        if ObjectId.is_valid(render_id):
+            query = {"$or": [{"_id": ObjectId(render_id)}, {"_id": render_id}]}
+        return db.asset_renders.find_one(query)
+    except Exception:
+        return None
+
+
+def _create_distribution_attempt_ig(
+    db: Any,
+    workspace_slug: str,
+    source_asset_render_id: str,
+    caption: str,
+    media_url: str,
+    media_type: str,
+) -> dict:
+    """Create and persist a new Instagram distribution_attempts record; returns the full record."""
+    attempt_id = f"da_{_secrets_ig.token_hex(8)}"
+    now = _now_iso_6u()
+    doc = {
+        "distribution_attempt_id": attempt_id,
+        "workspace_slug":          workspace_slug,
+        "source_asset_render_id":  source_asset_render_id,
+        "provider":                "instagram",
+        "status":                  "pending",
+        "distribution_verification_status": "pending",
+        "caption":                 caption,
+        "media_url":               media_url,
+        "media_type":              media_type,
+        "external_post_id":        None,
+        "published_url":           None,
+        "retry_count":             0,
+        "verified":                False,
+        "escalated":               False,
+        "created_at":              now,
+        "updated_at":              now,
+        "metadata":                {},
+    }
+    try:
+        db.distribution_attempts.insert_one(doc.copy())
+    except Exception:
+        pass
+    doc.pop("_id", None)
+    _append_audit_6u("system", "distribution_attempt_created",
+                     f"distribution/{attempt_id}",
+                     workspace=workspace_slug, provider="instagram")
+    return doc
+
+
+def _check_duplicate_publish_ig(db: Any, source_asset_render_id: str) -> bool:
+    """Return True if a successful (verified) Instagram publish already exists for this render."""
+    try:
+        existing = db.distribution_attempts.count_documents({
+            "source_asset_render_id": source_asset_render_id,
+            "provider":               "instagram",
+            "verified":               True,
+        })
+        return int(existing) > 0
+    except Exception:
+        return False
+
+
+def _simulate_instagram_publish_ig(source_asset_render_id: str) -> dict:
+    """
+    Internal simulation of Instagram publish for environments where live
+    Instagram credentials are not configured. Returns a deterministic stub
+    response that mimics the real client output.
+    """
+    stub_id = f"ig_{abs(hash(source_asset_render_id)) % 10_000_000_000}"
+    return {
+        "external_post_id": stub_id,
+        "published_url":    f"https://www.instagram.com/p/{stub_id}/",
+        "published_at":     _now_iso_6u(),
+        "raw_response":     {"id": stub_id, "_simulated": True},
+        "_simulated":       True,
+    }
+
+
+def _execute_instagram_publish_ig(
+    db: Any, workspace_slug: str, attempt: dict
+) -> dict:
+    """
+    Core publish execution — uses live Instagram client if token available,
+    otherwise falls back to simulation. Mutates and persists the attempt record.
+    """
+    attempt_id = attempt["distribution_attempt_id"]
+    render_id  = attempt["source_asset_render_id"]
+
+    access_token: str | None = None
+    ig_user_id: str = os.getenv("INSTAGRAM_BUSINESS_ACCOUNT_ID", "")
+    try:
+        raw = db.external_integrations.find_one(
+            {"workspace_slug": workspace_slug, "provider": "instagram"}
+        )
+        if raw:
+            access_token = raw.get("access_token")
+            ig_user_id   = raw.get("ig_user_id") or ig_user_id
+    except Exception:
+        pass
+
+    simulated = False
+    try:
+        if access_token and ig_user_id:
+            from instagram_client import (
+                create_media_container,
+                publish_container,
+                InstagramTokenExpiredError,
+                InstagramPublishError,
+            )
+            try:
+                container = create_media_container(
+                    access_token, ig_user_id, attempt["media_url"],
+                    attempt.get("caption", ""), attempt.get("media_type", "IMAGE"),
+                )
+                result = publish_container(access_token, ig_user_id, container["creation_id"])
+            except InstagramTokenExpiredError as exc:
+                _update_distribution_attempt_6x(db, attempt_id, {
+                    "status": "failed",
+                    "distribution_verification_status": "failed",
+                    "failure_reason": f"token_expired: {str(exc)[:200]}",
+                })
+                _append_audit_6u("system", "distribution_publish_failed",
+                                 f"distribution/{attempt_id}",
+                                 reason="token_expired", workspace=workspace_slug)
+                return {**attempt, "status": "failed", "failure_reason": str(exc)[:200]}
+        else:
+            # Simulation fallback — INSTAGRAM_ENABLED not true, or no token/ig_user_id configured
+            result = _simulate_instagram_publish_ig(render_id)
+            simulated = True
+    except Exception as exc:
+        retry_count = attempt.get("retry_count", 0)
+        new_status  = "retrying" if retry_count < _PUBLISH_RETRY_LIMITS_6X["network_failure"] else "failed"
+        _update_distribution_attempt_6x(db, attempt_id, {
+            "status":                  new_status,
+            "distribution_verification_status": "failed",
+            "failure_reason":          str(exc)[:300],
+            "retry_count":             retry_count + 1,
+        })
+        _append_audit_6u("system", "distribution_publish_failed",
+                         f"distribution/{attempt_id}",
+                         reason=str(exc)[:200], workspace=workspace_slug)
+        return {**attempt, "status": new_status, "failure_reason": str(exc)[:300]}
+
+    updates = {
+        "status":                  "verified" if result.get("external_post_id") else "failed",
+        "distribution_verification_status": "verified" if result.get("external_post_id") else "failed",
+        "external_post_id":        result.get("external_post_id"),
+        "published_url":           result.get("published_url"),
+        "verified":                bool(result.get("external_post_id")),
+        "published_at":            result.get("published_at"),
+        "simulated":               simulated,
+        "metadata":                {"raw_response": result.get("raw_response", {})},
+    }
+    _update_distribution_attempt_6x(db, attempt_id, updates)
+
+    _append_audit_6u("system", "distribution_published",
+                     f"distribution/{attempt_id}",
+                     provider="instagram",
+                     post_id=result.get("external_post_id"),
+                     workspace=workspace_slug,
+                     simulated=simulated)
+
+    _generate_instagram_publish_signal_ig(db, workspace_slug, attempt_id, result)
+
+    return {**attempt, **updates}
+
+
+def _generate_instagram_publish_signal_ig(db: Any, workspace_slug: str,
+                                            attempt_id: str, publish_result: dict) -> None:
+    """
+    On successful publish, insert a recommendation_signal and memory_proposal
+    for the learning loop — mirrors _generate_publish_signal_6x for LinkedIn.
+    """
+    now = _now_iso_6u()
+    signal = {
+        "workspace_slug": workspace_slug,
+        "signal_type":    "distribution_success",
+        "provider":       "instagram",
+        "attempt_id":     attempt_id,
+        "post_id":        publish_result.get("external_post_id"),
+        "created_at":     now,
+        "metadata":       {"channel": "instagram", "source": "instagram_publish_loop"},
+    }
+    proposal = {
+        "workspace_slug": workspace_slug,
+        "key":            "instagram_distribution_success_count",
+        "proposed_value": {"increment": 1, "last_post_id": publish_result.get("external_post_id")},
+        "source":         "instagram_publish_signal",
+        "created_at":     now,
+    }
+    try:
+        db.recommendation_signals.insert_one(signal)
+    except Exception:
+        pass
+    try:
+        db.memory_proposals.insert_one(proposal)
+    except Exception:
+        pass
+
+
+def _build_instagram_distribution_telemetry_ig(db: Any, workspace_slug: str | None) -> dict:
+    """Delivery telemetry for the Instagram channel — same shape as LinkedIn's."""
+    q: dict = {}
+    if workspace_slug:
+        q["workspace_slug"] = workspace_slug
+    q_ig = {**q, "provider": "instagram"}
+    try:
+        total     = int(db.distribution_attempts.count_documents(q_ig))
+        verified  = int(db.distribution_attempts.count_documents({**q_ig, "verified": True}))
+        failed    = int(db.distribution_attempts.count_documents({**q_ig, "status": "failed"}))
+        retrying  = int(db.distribution_attempts.count_documents({**q_ig, "status": "retrying"}))
+        return {"total": total, "verified": verified, "failed": failed, "retrying": retrying}
+    except Exception:
+        return {"total": 0, "verified": 0, "failed": 0, "retrying": 0}
+
+
+# ── Pydantic Models ────────────────────────────────────────────────────────────
+
+class InstagramPublishRequest(BaseModel):
+    workspace_slug:          str
+    source_asset_render_id:  str
+    caption:                 str
+    media_url:               str
+    media_type:              Literal["IMAGE", "REELS"] = "IMAGE"
+
+
+class InstagramRetryRequest(BaseModel):
+    workspace_slug: str
+
+
+class InstagramCallbackRequest(BaseModel):
+    code:  str
+    state: str
+    workspace_slug: str = "default"
+
+
+# ── Endpoints ─────────────────────────────────────────────────────────────────
+
+# OAuth
+
+@app.get("/connect/instagram/status", tags=["instagram"])
+def instagram_connection_status(workspace_slug: str = "default") -> dict:
+    """Return Instagram connection status for a workspace."""
+    c = get_client()
+    db = get_database(c)
+    try:
+        integration = _get_instagram_integration_ig(db, workspace_slug)
+        if not integration:
+            return {
+                "workspace_slug": workspace_slug,
+                "provider":       "instagram",
+                "status":         "not_connected",
+                "connected":      False,
+            }
+        return {
+            "workspace_slug": workspace_slug,
+            "provider":       "instagram",
+            "status":         integration.get("status", "unknown"),
+            "connected":      integration.get("status") == "connected",
+            "connected_by":   integration.get("connected_by"),
+            "expires_at":     integration.get("expires_at"),
+            "created_at":     integration.get("created_at"),
+        }
+    finally:
+        c.close()
+
+
+@app.post("/connect/instagram/start", tags=["instagram"])
+def instagram_connect_start(workspace_slug: str = "default") -> dict:
+    """Generate an Instagram (Facebook Login) OAuth authorization URL and persist a state token."""
+    from instagram_client import build_authorization_url, INSTAGRAM_CLIENT_ID
+    state = _secrets_ig.token_hex(16)
+    c = get_client()
+    db = get_database(c)
+    try:
+        _upsert_instagram_integration_ig(db, workspace_slug, {
+            "status":       "pending_oauth",
+            "oauth_state":  state,
+            "connected_by": "operator",
+            "created_at":   _now_iso_6u(),
+        })
+        auth_url = build_authorization_url(state)
+        _append_audit_6u("operator", "instagram_oauth_started",
+                         f"connect/{workspace_slug}")
+        return {
+            "workspace_slug":     workspace_slug,
+            "authorization_url":  auth_url,
+            "state":              state,
+            "client_configured":  bool(INSTAGRAM_CLIENT_ID),
+        }
+    finally:
+        c.close()
+
+
+@app.get("/connect/instagram/callback", tags=["instagram"])
+def instagram_connect_callback(
+    code: str,
+    state: str,
+    workspace_slug: str = "default",
+) -> dict:
+    """
+    Handle Instagram OAuth callback — exchange code for a short-lived token,
+    then exchange that for a long-lived (~60 day) token and persist it.
+    """
+    from instagram_client import exchange_code_for_token, get_long_lived_token, INSTAGRAM_CLIENT_ID
+    from datetime import timedelta
+
+    c = get_client()
+    db = get_database(c)
+    try:
+        rec = db.external_integrations.find_one(
+            {"workspace_slug": workspace_slug, "provider": "instagram"}
+        )
+        stored_state = rec.get("oauth_state") if rec else None
+        if stored_state and stored_state != state:
+            from fastapi import HTTPException as _HTTPException_ig
+            raise _HTTPException_ig(status_code=400, detail="OAuth state mismatch — possible CSRF")
+
+        if not INSTAGRAM_CLIENT_ID:
+            # Simulation mode — store a placeholder token
+            expires_at = _now_iso_6u()
+            _upsert_instagram_integration_ig(db, workspace_slug, {
+                "status":       "connected",
+                "access_token": f"sim_{_secrets_ig.token_hex(16)}",
+                "ig_user_id":   os.getenv("INSTAGRAM_BUSINESS_ACCOUNT_ID", "sim_ig_user"),
+                "expires_at":   expires_at,
+                "oauth_state":  None,
+                "simulated":    True,
+            })
+            _append_audit_6u("operator", "instagram_oauth_completed",
+                             f"connect/{workspace_slug}", simulated=True)
+            return {"workspace_slug": workspace_slug, "status": "connected", "simulated": True}
+
+        short_lived = exchange_code_for_token(code)
+        long_lived  = get_long_lived_token(short_lived["access_token"])
+        expires_sec = long_lived.get("expires_in", 5184000)  # ~60 days
+        expires_dt  = datetime.now(timezone.utc) + timedelta(seconds=expires_sec)
+        _upsert_instagram_integration_ig(db, workspace_slug, {
+            "status":       "connected",
+            "access_token": long_lived["access_token"],
+            "ig_user_id":   os.getenv("INSTAGRAM_BUSINESS_ACCOUNT_ID", ""),
+            "expires_at":   expires_dt.isoformat(),
+            "oauth_state":  None,
+            "simulated":    False,
+        })
+        _append_audit_6u("operator", "instagram_oauth_completed",
+                         f"connect/{workspace_slug}", simulated=False)
+        return {"workspace_slug": workspace_slug, "status": "connected", "simulated": False}
+    finally:
+        c.close()
+
+
+# Distribution
+
+@app.post("/distribution/instagram/publish", tags=["instagram"])
+def instagram_publish(req: InstagramPublishRequest) -> dict:
+    """
+    Publish a rendered asset to Instagram.
+    The referenced asset_renders record must have status="approved".
+    Performs a duplicate-publish check before executing.
+    Media is published by URL — Instagram fetches it; the operator supplies a
+    publicly-reachable media_url. SignalForge does not auto-host media.
+    """
+    c = get_client()
+    db = get_database(c)
+    try:
+        render = _find_asset_render_ig(db, req.source_asset_render_id)
+        if not render:
+            from fastapi import HTTPException as _HTTPException_ig
+            raise _HTTPException_ig(status_code=404, detail=f"asset_render {req.source_asset_render_id!r} not found")
+        if render.get("status") != "approved":
+            from fastapi import HTTPException as _HTTPException_ig
+            raise _HTTPException_ig(
+                status_code=422,
+                detail=f"asset_render {req.source_asset_render_id!r} must be status='approved' before publishing (current: {render.get('status')!r}).",
+            )
+        if _check_duplicate_publish_ig(db, req.source_asset_render_id):
+            from fastapi import HTTPException as _HTTPException_ig
+            raise _HTTPException_ig(
+                status_code=409,
+                detail=f"Render {req.source_asset_render_id!r} has already been verified as published to Instagram.",
+            )
+        attempt = _create_distribution_attempt_ig(
+            db, req.workspace_slug, req.source_asset_render_id,
+            req.caption, req.media_url, req.media_type,
+        )
+        result = _execute_instagram_publish_ig(db, req.workspace_slug, attempt)
+        return result
+    finally:
+        c.close()
+
+
+@app.post("/distribution/instagram/retry", tags=["instagram"])
+def instagram_retry(attempt_id: str, req: InstagramRetryRequest) -> dict:
+    """Manually retry a failed or retrying Instagram distribution attempt."""
+    c = get_client()
+    db = get_database(c)
+    try:
+        attempt = _get_distribution_attempt_6x(db, attempt_id)
+        if not attempt:
+            from fastapi import HTTPException as _HTTPException_ig
+            raise _HTTPException_ig(status_code=404, detail=f"Attempt {attempt_id!r} not found")
+        if attempt.get("status") not in ("failed", "retrying"):
+            from fastapi import HTTPException as _HTTPException_ig
+            raise _HTTPException_ig(
+                status_code=400,
+                detail=f"Cannot retry attempt in state: {attempt.get('status')!r}"
+            )
+        retry_count = attempt.get("retry_count", 0)
+        max_retries = _PUBLISH_RETRY_LIMITS_6X["network_failure"]
+        if retry_count >= max_retries:
+            _update_distribution_attempt_6x(db, attempt_id, {"status": "escalated", "escalated": True})
+            _append_audit_6u("operator", "distribution_escalated",
+                             f"distribution/{attempt_id}",
+                             workspace=req.workspace_slug)
+            return {**attempt, "status": "escalated",
+                    "message": "Retry limit reached — attempt escalated for operator review"}
+
+        _append_audit_6u("operator", "distribution_retry_requested",
+                         f"distribution/{attempt_id}",
+                         workspace=req.workspace_slug, retry_count=retry_count + 1)
+        result = _execute_instagram_publish_ig(db, req.workspace_slug, attempt)
+        return result
+    finally:
+        c.close()
+
+
+@app.get("/distribution/instagram/{attempt_id}/status", tags=["instagram"])
+def instagram_attempt_status(attempt_id: str) -> dict:
+    """Return the current status of an Instagram distribution attempt."""
+    c = get_client()
+    db = get_database(c)
+    try:
+        attempt = _get_distribution_attempt_6x(db, attempt_id)
+        if not attempt:
+            from fastapi import HTTPException as _HTTPException_ig
+            raise _HTTPException_ig(status_code=404, detail=f"Attempt {attempt_id!r} not found")
+        return attempt
+    finally:
+        c.close()
+
+
+@app.get("/distribution/instagram/limit", tags=["instagram"])
+def instagram_publishing_limit(workspace_slug: str = "default") -> dict:
+    """
+    Check the current Instagram publishing-limit usage (100 posts / rolling 24h).
+    Returns a simulated zero-usage result when not configured with real credentials.
+    """
+    c = get_client()
+    db = get_database(c)
+    try:
+        integration = db.external_integrations.find_one(
+            {"workspace_slug": workspace_slug, "provider": "instagram"}
+        ) or {}
+        access_token = integration.get("access_token")
+        ig_user_id   = integration.get("ig_user_id") or os.getenv("INSTAGRAM_BUSINESS_ACCOUNT_ID", "")
+        if not access_token or not ig_user_id:
+            return {"workspace_slug": workspace_slug, "quota_usage": 0, "config": {}, "simulated": True}
+        from instagram_client import get_publishing_limit
+        result = get_publishing_limit(access_token, ig_user_id)
+        return {"workspace_slug": workspace_slug, **result, "simulated": False}
+    except Exception as exc:
+        return {"workspace_slug": workspace_slug, "quota_usage": 0, "config": {}, "simulated": True, "error": str(exc)[:200]}
+    finally:
+        c.close()
+
+
+# Telemetry
+
+@app.get("/distribution/instagram/telemetry", tags=["instagram"])
+def instagram_distribution_telemetry(workspace_slug: str | None = None) -> dict:
+    """Delivery telemetry metrics for the Instagram distribution channel."""
+    c = get_client()
+    db = get_database(c)
+    try:
+        return _build_instagram_distribution_telemetry_ig(db, workspace_slug)
     finally:
         c.close()
 

@@ -14,12 +14,22 @@ x-signalforge-env: &signalforge-env
   MONGO_URI: ${MONGO_URI:-mongodb://mongo:27017/signalforge}
   REDIS_URL: ${REDIS_URL:-redis://redis:6379}
   LINKEDIN_COOKIE: ${LINKEDIN_COOKIE:-}
+  # Phase 6X — LinkedIn OAuth publish (real path; simulated when unset)
+  LINKEDIN_CLIENT_ID: ${LINKEDIN_CLIENT_ID:-}
+  LINKEDIN_CLIENT_SECRET: ${LINKEDIN_CLIENT_SECRET:-}
+  LINKEDIN_REDIRECT_URI: ${LINKEDIN_REDIRECT_URI:-http://localhost:8000/connect/linkedin/callback}
   X_API_KEY: ${X_API_KEY:-}
   APIFY_TOKEN: ${APIFY_TOKEN:-}
   SERPAPI_KEY: ${SERPAPI_KEY:-}
   # Phase 6Z — Tavily trend/content discovery search (read-only, disabled by default)
   TAVILY_ENABLED: ${TAVILY_ENABLED:-false}
   TAVILY_API_KEY: ${TAVILY_API_KEY:-}
+  # Pillar 2 — Instagram OAuth publish (real path; simulated when unset)
+  INSTAGRAM_ENABLED: ${INSTAGRAM_ENABLED:-false}
+  INSTAGRAM_CLIENT_ID: ${INSTAGRAM_CLIENT_ID:-}
+  INSTAGRAM_CLIENT_SECRET: ${INSTAGRAM_CLIENT_SECRET:-}
+  INSTAGRAM_REDIRECT_URI: ${INSTAGRAM_REDIRECT_URI:-http://localhost:8000/connect/instagram/callback}
+  INSTAGRAM_BUSINESS_ACCOUNT_ID: ${INSTAGRAM_BUSINESS_ACCOUNT_ID:-}
   SIGNALFORGE_ENV: production
   VAULT_PATH: /vault
   PYTHONPATH: /app
