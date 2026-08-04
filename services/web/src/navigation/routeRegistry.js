@@ -34,6 +34,7 @@ import {
   GitBranch,
   Share2,
   Instagram,
+  DollarSign,
 } from "lucide-react";
 
 export const ROUTES = [
@@ -44,6 +45,7 @@ export const ROUTES = [
   { id: "operations-command-center", label: "Operations Command Center", icon: MonitorDot, group: "command-center", primary: false },
   { id: "linkedin-pilot",             label: "LinkedIn Pilot",             icon: Share2,      group: "command-center", primary: false },
   { id: "instagram-pilot",            label: "Instagram Pilot",            icon: Instagram,   group: "command-center", primary: false },
+  { id: "commerce",                   label: "Commerce",                   icon: DollarSign,  group: "command-center", primary: false },
 
   // ── CRM ──────────────────────────────────────────────────────────────────
   { id: "pipeline",        label: "Pipeline",         icon: Users,         group: "crm",             primary: true  },

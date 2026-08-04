@@ -28,6 +28,7 @@ COPY services/api/discovery_engine.py .
 COPY services/api/tavily_client.py .
 COPY services/api/instagram_client.py .
 COPY services/api/runway_client.py .
+COPY services/api/stripe_client.py .
 COPY agents ./agents
 COPY tools ./tools
 COPY modules ./modules

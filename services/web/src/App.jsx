@@ -28,6 +28,7 @@ import ProductionTelemetryPage from "./pages/ProductionTelemetryPage.jsx";
 import OperationsCommandCenter from "./pages/OperationsCommandCenter.jsx";
 import LinkedInPilotPage from "./pages/LinkedInPilotPage.jsx";
 import InstagramPilotPage from "./pages/InstagramPilotPage.jsx";
+import CommercePage from "./pages/CommercePage.jsx";
 import OutputQualityPage from "./pages/OutputQualityPage.jsx";
 import { api, setAppWorkspace } from "./api.js";
 import { ROUTE_MAP } from "./navigation/routeRegistry.js";
@@ -59,6 +60,7 @@ const PAGE_COMPONENTS = {
     "operations-command-center": OperationsCommandCenter,
     "linkedin-pilot":             LinkedInPilotPage,
     "instagram-pilot":            InstagramPilotPage,
+    "commerce":                   CommercePage,
     "output-quality":             OutputQualityPage,
 };
 

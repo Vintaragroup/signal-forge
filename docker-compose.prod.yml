@@ -46,6 +46,12 @@ x-signalforge-env: &signalforge-env
   RUNWAY_API_KEY: ${RUNWAY_API_KEY:-}
   RUNWAY_IMAGE_MODEL: ${RUNWAY_IMAGE_MODEL:-gen4_image}
   RUNWAY_IMAGE_RATIO: ${RUNWAY_IMAGE_RATIO:-1080:1920}
+  # Pillar 3 — Stripe Checkout for digital-asset sales (disabled by default;
+  # simulated checkout URL when unset, card data never touches this server)
+  STRIPE_ENABLED: ${STRIPE_ENABLED:-false}
+  STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY:-}
+  STRIPE_WEBHOOK_SECRET: ${STRIPE_WEBHOOK_SECRET:-}
+  SIGNALFORGE_PUBLIC_BASE_URL: ${SIGNALFORGE_PUBLIC_BASE_URL:-http://localhost:5174}
   COMFYUI_ENABLED: ${COMFYUI_ENABLED:-false}
   COMFY_CLOUD_ENABLED: ${COMFY_CLOUD_ENABLED:-false}
   YTDLP_ENABLED: ${YTDLP_ENABLED:-false}

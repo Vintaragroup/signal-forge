@@ -12,7 +12,7 @@ from typing import Any, Literal, Optional
 from bson import ObjectId
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 from pydantic import BaseModel, Field
 from pymongo import MongoClient
 
@@ -8034,6 +8034,434 @@ def review_campaign_export(export_id: str, payload: CampaignExportReviewRequest)
         }
     finally:
         client.close()
+
+# ===========================================================================
+# Pillar 3: Commerce — trackable link + hosted checkout for digital assets
+# ===========================================================================
+#
+# Stripe Checkout (hosted payment page) only — card data never touches this
+# server. Gated behind STRIPE_ENABLED (default false); simulated/no-key mode
+# returns a fake checkout URL with zero network calls, same fallback
+# precedent as every other real integration in this file. An offer's public
+# link (/o/{slug}) 404s until an operator explicitly approves it, mirroring
+# every other approval gate in this codebase (snippets, prompt generations,
+# asset renders, campaign exports). The two lead-facing endpoints (webhook,
+# download) are NOT protected by _require_auth_6u (nothing in this app is,
+# by default) — they carry their own explicit security: Stripe signature
+# verification, and a download gate keyed on a completed transaction rather
+# than a guessable file path.
+
+VALID_OFFER_REVIEW_DECISIONS = {"approve", "reject"}
+
+
+@app.get("/settings/stripe-status")
+def stripe_status() -> dict:
+    from stripe_client import is_configured, health_check  # noqa: PLC0415
+
+    configured = is_configured()
+    reachability = health_check() if configured else {"reachable": False, "error": "not configured"}
+    return {
+        "enabled": env_enabled(os.getenv("STRIPE_ENABLED", "false")),
+        "configured": configured,
+        **reachability,
+    }
+
+
+class CommerceOfferCreateRequest(BaseModel):
+    workspace_slug: str = ""
+    client_id: str = ""
+    title: str
+    description: str = ""
+    price_cents: int
+    currency: str = "usd"
+    source_campaign_export_id: str
+
+
+class CommerceOfferReviewRequest(BaseModel):
+    decision: str
+    note: str = ""
+
+
+def _generate_offer_slug(db: Any) -> str:
+    import secrets as _secrets_commerce  # noqa: PLC0415
+
+    for _ in range(10):
+        slug = _secrets_commerce.token_urlsafe(6).replace("_", "").replace("-", "")[:8].lower()
+        if slug and not db.commerce_offers.find_one({"slug": slug}):
+            return slug
+    raise HTTPException(status_code=500, detail="Could not generate a unique offer slug.")
+
+
+@app.post("/commerce/offers")
+def create_commerce_offer(payload: CommerceOfferCreateRequest) -> dict:
+    """
+    Create a draft offer for a digital asset. Draft offers have no live
+    public link — only an approved offer's /o/{slug} link is reachable.
+    """
+    if payload.price_cents <= 0:
+        raise HTTPException(status_code=422, detail="price_cents must be greater than 0.")
+    now = utc_now()
+    client = get_client()
+    try:
+        db = get_database(client)
+
+        try:
+            export_oid = ObjectId(payload.source_campaign_export_id)
+        except Exception:
+            raise HTTPException(status_code=422, detail="Invalid source_campaign_export_id format.")
+        export = db.campaign_exports.find_one({"_id": export_oid})
+        if not export:
+            raise HTTPException(status_code=404, detail="Campaign export not found.")
+        if export.get("export_status") != "approved":
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    "Campaign export must be approved before it can be sold. "
+                    f"Current status: {export.get('export_status', 'unknown')}"
+                ),
+            )
+
+        doc = {
+            "workspace_slug": clean_text(payload.workspace_slug) or export.get("workspace_slug", ""),
+            "client_id": clean_text(payload.client_id) or export.get("client_id", ""),
+            "title": clean_text(payload.title),
+            "description": clean_text(payload.description),
+            "price_cents": int(payload.price_cents),
+            "currency": (clean_text(payload.currency) or "usd").lower(),
+            "source_campaign_export_id": str(export["_id"]),
+            "slug": _generate_offer_slug(db),
+            "status": "draft",
+            "click_count": 0,
+            "review_events": [],
+            "simulation_only": True,
+            "outbound_actions_taken": 0,
+            "created_at": now,
+            "updated_at": now,
+        }
+        result = db.commerce_offers.insert_one(doc)
+        created = db.commerce_offers.find_one({"_id": result.inserted_id})
+        return {
+            "item": serialize(created),
+            "message": "Offer created as draft. Approve it before its public link goes live.",
+            "simulation_only": True,
+            "outbound_actions_taken": 0,
+        }
+    finally:
+        client.close()
+
+
+@app.get("/commerce/offers")
+def list_commerce_offers(
+    workspace_slug: str = Query(""),
+    client_id: str = Query(""),
+    status: str = Query(""),
+    limit: int = Query(100),
+) -> dict:
+    client = get_client()
+    try:
+        db = get_database(client)
+        query: dict[str, Any] = {}
+        if workspace_slug:
+            query["workspace_slug"] = workspace_slug
+        if client_id:
+            query["client_id"] = client_id
+        if status:
+            query["status"] = status
+        cursor = db.commerce_offers.find(query).sort("created_at").limit(limit)
+        items = [serialize(d) for d in cursor]
+        return {
+            "items": items,
+            "total": len(items),
+            "simulation_only": True,
+            "outbound_actions_taken": 0,
+        }
+    finally:
+        client.close()
+
+
+@app.get("/commerce/offers/{offer_id}")
+def get_commerce_offer(offer_id: str) -> dict:
+    client = get_client()
+    try:
+        db = get_database(client)
+        try:
+            oid = ObjectId(offer_id)
+        except Exception:
+            raise HTTPException(status_code=422, detail="Invalid offer_id format.")
+        offer = db.commerce_offers.find_one({"_id": oid})
+        if not offer:
+            raise HTTPException(status_code=404, detail="Offer not found.")
+        return {
+            "item": serialize(offer),
+            "simulation_only": True,
+            "outbound_actions_taken": 0,
+        }
+    finally:
+        client.close()
+
+
+@app.post("/commerce/offers/{offer_id}/review")
+def review_commerce_offer(offer_id: str, payload: CommerceOfferReviewRequest) -> dict:
+    """
+    Approve or reject an offer. Only an approved offer's /o/{slug} link is
+    publicly reachable — this is the sole gate between a draft offer and a
+    real, chargeable Stripe Checkout link.
+    """
+    if payload.decision not in VALID_OFFER_REVIEW_DECISIONS:
+        raise HTTPException(
+            status_code=422,
+            detail=f"decision must be one of: {sorted(VALID_OFFER_REVIEW_DECISIONS)}",
+        )
+    now = utc_now()
+    client = get_client()
+    try:
+        db = get_database(client)
+        try:
+            oid = ObjectId(offer_id)
+        except Exception:
+            raise HTTPException(status_code=422, detail="Invalid offer_id format.")
+        offer = db.commerce_offers.find_one({"_id": oid})
+        if not offer:
+            raise HTTPException(status_code=404, detail="Offer not found.")
+
+        new_status = "approved" if payload.decision == "approve" else "rejected"
+        review_event = {"decision": payload.decision, "note": payload.note, "reviewed_at": now}
+        db.commerce_offers.update_one(
+            {"_id": oid},
+            {
+                "$set": {"status": new_status, "updated_at": now},
+                "$push": {"review_events": review_event},
+            },
+        )
+        updated = db.commerce_offers.find_one({"_id": oid})
+        return {
+            "item": serialize(updated),
+            "message": f"Offer {payload.decision}d.",
+            "simulation_only": True,
+            "outbound_actions_taken": 0,
+        }
+    finally:
+        client.close()
+
+
+@app.get("/commerce/transactions")
+def list_commerce_transactions(
+    offer_id: str = Query(""),
+    workspace_slug: str = Query(""),
+    status: str = Query(""),
+    limit: int = Query(100),
+) -> dict:
+    client = get_client()
+    try:
+        db = get_database(client)
+        query: dict[str, Any] = {}
+        if status:
+            query["status"] = status
+        if offer_id:
+            query["offer_id"] = offer_id
+        elif workspace_slug:
+            offer_ids = [
+                str(o["_id"]) for o in db.commerce_offers.find({"workspace_slug": workspace_slug}, {"_id": 1})
+            ]
+            query["offer_id"] = {"$in": offer_ids}
+        cursor = db.checkout_transactions.find(query).sort("occurred_at", -1).limit(limit)
+        items = [serialize(d) for d in cursor]
+        return {
+            "items": items,
+            "total": len(items),
+            "simulation_only": True,
+            "outbound_actions_taken": 0,
+        }
+    finally:
+        client.close()
+
+
+# ── Public/lead-facing endpoints — no _require_auth_6u, explicit own security ──
+
+@app.get("/o/{slug}")
+def commerce_offer_redirect(slug: str) -> RedirectResponse:
+    """
+    Public trackable link. 404s unless the offer is approved. Creates a
+    Stripe Checkout Session and redirects the browser to Stripe's hosted
+    payment page — no card data ever reaches this server.
+    """
+    from stripe_client import create_checkout_session  # noqa: PLC0415
+
+    client = get_client()
+    try:
+        db = get_database(client)
+        offer = db.commerce_offers.find_one({"slug": slug, "status": "approved"})
+        if not offer:
+            raise HTTPException(status_code=404, detail="Offer not found or not available.")
+
+        db.commerce_offers.update_one({"_id": offer["_id"]}, {"$inc": {"click_count": 1}})
+
+        base_url = os.getenv("SIGNALFORGE_PUBLIC_BASE_URL", "http://localhost:5174").rstrip("/")
+        success_url = f"{base_url}/api/o/{slug}/success?session_id={{CHECKOUT_SESSION_ID}}"
+        cancel_url = f"{base_url}/api/o/{slug}/cancel"
+
+        session = create_checkout_session(
+            {
+                "offer_id": str(offer["_id"]),
+                "title": offer["title"],
+                "price_cents": offer["price_cents"],
+                "currency": offer["currency"],
+            },
+            success_url=success_url,
+            cancel_url=cancel_url,
+        )
+
+        db.checkout_transactions.insert_one({
+            "offer_id": str(offer["_id"]),
+            "stripe_session_id": session["session_id"],
+            "stripe_payment_intent_id": "",
+            "status": "pending",
+            "amount_cents": offer["price_cents"],
+            "currency": offer["currency"],
+            "buyer_email": "",
+            "occurred_at": utc_now(),
+            "simulation_only": session.get("simulated", True),
+        })
+
+        return RedirectResponse(url=session["checkout_url"], status_code=302)
+    finally:
+        client.close()
+
+
+@app.get("/o/{slug}/success")
+def commerce_offer_success(slug: str, session_id: str = Query("")) -> HTMLResponse:
+    """
+    Landing point after Stripe Checkout. Verifies payment (via the
+    webhook-recorded transaction, falling back to a live Stripe lookup if
+    the webhook hasn't landed yet) before revealing the download link — the
+    download itself is gated again, independently, at download time.
+    """
+    from stripe_client import retrieve_session  # noqa: PLC0415
+
+    client = get_client()
+    try:
+        db = get_database(client)
+        offer = db.commerce_offers.find_one({"slug": slug})
+        if not offer:
+            raise HTTPException(status_code=404, detail="Offer not found.")
+
+        txn = db.checkout_transactions.find_one({"stripe_session_id": session_id})
+        paid = bool(txn and txn.get("status") == "completed")
+
+        if not paid and session_id.startswith("sim_session_"):
+            # Simulated mode: no real Stripe to confirm against — mark paid
+            # immediately since STRIPE_ENABLED=false means this is a dry run.
+            db.checkout_transactions.update_one(
+                {"stripe_session_id": session_id}, {"$set": {"status": "completed"}}
+            )
+            paid = True
+        elif not paid and session_id:
+            try:
+                remote = retrieve_session(session_id)
+                if remote.get("payment_status") == "paid":
+                    db.checkout_transactions.update_one(
+                        {"stripe_session_id": session_id},
+                        {"$set": {
+                            "status": "completed",
+                            "buyer_email": (remote.get("customer_details") or {}).get("email", ""),
+                        }},
+                    )
+                    paid = True
+            except Exception:
+                pass
+
+        if paid:
+            body = (
+                f"<h1>Thank you!</h1><p>Your download is ready: "
+                f"<a href=\"/api/commerce/download/{session_id}\">Download {offer.get('title', '')}</a></p>"
+            )
+        else:
+            body = "<h1>Payment not yet confirmed</h1><p>Please refresh this page in a moment.</p>"
+        return HTMLResponse(content=body)
+    finally:
+        client.close()
+
+
+@app.get("/o/{slug}/cancel")
+def commerce_offer_cancel(slug: str) -> HTMLResponse:
+    return HTMLResponse(content="<h1>Checkout cancelled</h1><p>No payment was made.</p>")
+
+
+@app.post("/webhooks/stripe")
+async def stripe_webhook(request: Request) -> dict:
+    """
+    Stripe webhook receiver. Verifies the Stripe-Signature header before
+    trusting anything in the payload — this is the one endpoint in the app
+    where a bypassed check would be a real financial/data-integrity issue.
+    """
+    from stripe_client import verify_webhook_signature, StripeWebhookError  # noqa: PLC0415
+
+    raw_body = await request.body()
+    sig_header = request.headers.get("stripe-signature")
+
+    try:
+        event = verify_webhook_signature(raw_body, sig_header)
+    except StripeWebhookError as exc:
+        raise HTTPException(status_code=400, detail=f"Webhook verification failed: {exc}")
+
+    client = get_client()
+    try:
+        db = get_database(client)
+        if event.get("type") == "checkout.session.completed":
+            session = (event.get("data") or {}).get("object") or {}
+            session_id = session.get("id", "")
+            if session_id:
+                db.checkout_transactions.update_one(
+                    {"stripe_session_id": session_id},
+                    {"$set": {
+                        "status": "completed",
+                        "stripe_payment_intent_id": session.get("payment_intent", ""),
+                        "buyer_email": (session.get("customer_details") or {}).get("email", ""),
+                    }},
+                )
+        return {"received": True}
+    finally:
+        client.close()
+
+
+@app.get("/commerce/download/{stripe_session_id}")
+def commerce_download(stripe_session_id: str) -> FileResponse:
+    """
+    Serve the purchased file. Gated on a COMPLETED transaction for this
+    exact session id — not a guessable file path. Reuses the same
+    path-traversal guard as GET /asset-renders/{render_id}/stream.
+    """
+    client = get_client()
+    try:
+        db = get_database(client)
+        txn = db.checkout_transactions.find_one(
+            {"stripe_session_id": stripe_session_id, "status": "completed"}
+        )
+        if not txn:
+            raise HTTPException(status_code=404, detail="No completed purchase found for this session.")
+
+        try:
+            offer = db.commerce_offers.find_one({"_id": ObjectId(txn["offer_id"])})
+            export = (
+                db.campaign_exports.find_one({"_id": ObjectId(offer["source_campaign_export_id"])})
+                if offer else None
+            )
+        except Exception:
+            offer, export = None, None
+        if not offer or not export or not export.get("export_path"):
+            raise HTTPException(status_code=404, detail="Deliverable file not found.")
+
+        real_path = os.path.realpath(export["export_path"])
+        allowed_dir = os.path.realpath(EXPORT_BASE_DIR)
+        if not (real_path.startswith(allowed_dir + os.sep) or real_path == allowed_dir):
+            raise HTTPException(status_code=403, detail="File is outside the allowed export directory.")
+        if not os.path.isfile(real_path):
+            raise HTTPException(status_code=404, detail="Export file not found on disk.")
+
+        return FileResponse(real_path, filename=os.path.basename(real_path))
+    finally:
+        client.close()
+
 
 # ===========================================================================
 # v9.5: Client Intelligence Layer

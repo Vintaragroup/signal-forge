@@ -577,6 +577,35 @@ export const api = {
           body: JSON.stringify({ ...wsParam(), ...payload }),
         }),
 
+  // Pillar 3: Commerce — trackable link + hosted checkout
+  stripeStatus: () => request("/settings/stripe-status"),
+
+  commerceOffers: (params = {}) =>
+    isDemoModeEnabled()
+      ? Promise.resolve({ items: demoItems("commerce_offers"), simulation_only: true })
+      : request(`/commerce/offers?${new URLSearchParams({ ...wsParam(), ...params })}`),
+
+  createCommerceOffer: (payload) =>
+    isDemoModeEnabled()
+      ? Promise.resolve({ item: { ...payload, _id: "demo-offer-new", slug: "demo1234", status: "draft", click_count: 0, is_demo: true }, message: "Demo offer created.", simulation_only: true })
+      : request("/commerce/offers", {
+          method: "POST",
+          body: JSON.stringify({ ...wsParam(), ...payload }),
+        }),
+
+  reviewCommerceOffer: (offerId, payload) =>
+    isDemoModeEnabled()
+      ? Promise.resolve({ item: { ...(demoItems("commerce_offers").find((o) => o._id === offerId) || {}), status: payload.decision === "approve" ? "approved" : "rejected" }, message: "Demo offer reviewed.", simulation_only: true })
+      : request(`/commerce/offers/${offerId}/review`, {
+          method: "POST",
+          body: JSON.stringify(payload),
+        }),
+
+  commerceTransactions: (params = {}) =>
+    isDemoModeEnabled()
+      ? Promise.resolve({ items: demoItems("checkout_transactions"), simulation_only: true })
+      : request(`/commerce/transactions?${new URLSearchParams({ ...wsParam(), ...params })}`),
+
   // v9.5: Client Intelligence Layer
   clientIntelligence: (params = {}) =>
     isDemoModeEnabled()
