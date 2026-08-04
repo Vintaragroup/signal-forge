@@ -1855,14 +1855,16 @@ export default function WorkflowPage({ activeProfile = "custom", demoMode = fals
                 {pendingInsights.length} pending review
               </span>
             )}
-            <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-semibold text-slate-500">
-              Simulated benchmark signals
+            <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-semibold text-emerald-700">
+              Live Tavily search
             </span>
           </div>
           <p className="text-xs text-slate-500">
-            Illustrative trend patterns, not live search results — separate from the real content the
-            Content Discovery Run above finds. Real discovered candidates land in Campaign Studio →
-            Source Content for review, not here.
+            Real web search results (via Tavily), scored and ranked — requires TAVILY_ENABLED +
+            TAVILY_API_KEY, otherwise Content Discovery Run completes with no insights. Each insight
+            links back to its real source. A separate pipeline stages curated candidates in Campaign
+            Studio → Source Content for clipping — this panel is for trend/opportunity intelligence,
+            not raw content candidates.
           </p>
 
           {/* Phase 6D: Discovery summary header */}

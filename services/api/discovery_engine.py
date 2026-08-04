@@ -1,9 +1,11 @@
 """Phase 6D/6E — Discovery Intelligence Engine
 
-Generates discovery insights from mock signal sources, existing workflow data,
-heuristic scoring, and (Phase 6E) configured client sources.
-No external APIs, scraping, or credentials required.
-All trend signals are deterministic and seeded by module + workspace context.
+Generates discovery insights from real Tavily web search (topic="news",
+recency + relevance filtered — see get_real_social_trends()), existing
+workflow data, heuristic scoring, and (Phase 6E) configured client sources.
+Gated behind TAVILY_ENABLED/TAVILY_API_KEY; returns no insights (not mock
+ones) when disabled or unconfigured — same fallback precedent as every
+other real integration in this codebase.
 Safe to call multiple times — each call generates a fresh batch tagged with source_run_id.
 """
 
@@ -12,312 +14,6 @@ from __future__ import annotations
 import hashlib
 from datetime import datetime, timezone
 from typing import Any
-
-# ── Mock trend catalog ─────────────────────────────────────────────────────────
-MOCK_TRENDS: dict[str, list[dict]] = {
-    "media_growth": [
-        {
-            "id": "executive_burnout",
-            "keyword": "executive burnout recovery",
-            "title": "Executive burnout content outperforming standard leadership advice on LinkedIn",
-            "summary": (
-                "Vulnerability-forward burnout narratives are consistently outperforming conventional leadership "
-                "content by 3–4x on LinkedIn. Audiences are seeking authenticity and operational honesty "
-                "from senior leaders, not polished advice."
-            ),
-            "insight_type": "content_opportunity",
-            "platforms": ["LinkedIn", "YouTube Shorts"],
-            "asset_types": ["script_draft", "linkedin_post", "video_prompt"],
-            "next_stage": "generate_content",
-            "rationale": (
-                "Search demand for burnout recovery from executives has risen 34% over 90 days. "
-                "Competing creators in this niche have low production quality — high upside for authority content."
-            ),
-            "base_score": 0.88,
-            "signal_type": "search_trend",
-            "metric": "monthly_searches",
-            "value": 48200.0,
-            "growth_pct": 34.5,
-        },
-        {
-            "id": "contradiction_hooks",
-            "keyword": "leadership contradiction hooks short-form",
-            "title": "Short-form contradiction hooks outperforming long-form clips on YouTube Shorts",
-            "summary": (
-                "Hooks that open with a counter-intuitive leadership claim — 'The decision that cost me $2M was "
-                "the best one I made' — are driving 4–6x average completion rates compared to advice-forward openers."
-            ),
-            "insight_type": "content_format",
-            "platforms": ["YouTube Shorts", "TikTok", "Instagram"],
-            "asset_types": ["script_draft", "video_prompt"],
-            "next_stage": "generate_content",
-            "rationale": (
-                "Contradiction hook formats have grown 28% month-over-month on short-form platforms. "
-                "Completion rates favour counter-intuitive claims over advice-first content."
-            ),
-            "base_score": 0.82,
-            "signal_type": "format_trend",
-            "metric": "avg_completion_rate_delta",
-            "value": 4.3,
-            "growth_pct": 28.0,
-        },
-        {
-            "id": "decision_fatigue_carousel",
-            "keyword": "decision fatigue carousel framework",
-            "title": "Decision fatigue carousels gaining saves and shares on Instagram",
-            "summary": (
-                "Carousel posts exploring cognitive load and decision-making frameworks are generating "
-                "high save rates on Instagram — particularly when they include actionable frameworks or checklists."
-            ),
-            "insight_type": "content_opportunity",
-            "platforms": ["Instagram", "LinkedIn"],
-            "asset_types": ["carousel_outline", "linkedin_post"],
-            "next_stage": "generate_content",
-            "rationale": (
-                "Decision fatigue as a topic sees consistent organic growth with low competition in the "
-                "executive coaching and leadership space. Save-heavy content builds long-term reach."
-            ),
-            "base_score": 0.75,
-            "signal_type": "engagement_signal",
-            "metric": "save_rate_delta",
-            "value": 2.8,
-            "growth_pct": 21.0,
-        },
-        {
-            "id": "operational_clarity_series",
-            "keyword": "operational clarity founder transparency",
-            "title": "Operational clarity and business transparency series building long-term authority",
-            "summary": (
-                "Founders and operators sharing real operational data, decision logs, and business clarity posts "
-                "are building outsized authority in their niche. Audiences favour transparency over polished messaging."
-            ),
-            "insight_type": "authority_signal",
-            "platforms": ["LinkedIn", "Podcast"],
-            "asset_types": ["linkedin_post", "newsletter_section", "script_draft"],
-            "next_stage": "generate_content",
-            "rationale": (
-                "Transparency-driven content consistently outperforms promotional content in B2B audiences. "
-                "This format creates compounding authority and trust-building without paid promotion."
-            ),
-            "base_score": 0.79,
-            "signal_type": "engagement_signal",
-            "metric": "authority_score_delta",
-            "value": 3.1,
-            "growth_pct": 18.5,
-        },
-        {
-            "id": "what_i_wish_i_knew",
-            "keyword": "what I wish I knew as a founder",
-            "title": "'What I wish I knew' retrospective format gaining traction on YouTube Shorts",
-            "summary": (
-                "Retrospective formats — where experienced operators share hindsight lessons — are consistently "
-                "top-performing on YouTube Shorts and LinkedIn. They resonate strongly with early-stage founders "
-                "and aspiring operators."
-            ),
-            "insight_type": "content_format",
-            "platforms": ["YouTube Shorts", "LinkedIn"],
-            "asset_types": ["script_draft", "video_prompt", "carousel_outline"],
-            "next_stage": "generate_content",
-            "rationale": (
-                "The 'what I wish I knew' format leverages high-authority positioning while appealing "
-                "to aspirational audiences. Short-form videos using this format see 22% higher shares."
-            ),
-            "base_score": 0.77,
-            "signal_type": "format_trend",
-            "metric": "share_rate_delta",
-            "value": 1.8,
-            "growth_pct": 22.0,
-        },
-    ],
-    "artist_growth": [
-        {
-            "id": "fan_connection_bts",
-            "keyword": "artist behind the scenes fan connection",
-            "title": "Behind-the-scenes fan connection content driving streaming uplift",
-            "summary": (
-                "Artists sharing authentic creation process content — studio sessions, songwriting breakdowns, "
-                "personal narratives — are seeing measurable streaming and follower growth."
-            ),
-            "insight_type": "content_opportunity",
-            "platforms": ["Instagram", "TikTok", "YouTube Shorts"],
-            "asset_types": ["video_prompt", "script_draft", "social_caption"],
-            "next_stage": "generate_content",
-            "rationale": (
-                "Fan connection content builds parasocial loyalty and increases repeat streaming behaviour. "
-                "Audiences are rewarding transparency with saves, shares, and follows."
-            ),
-            "base_score": 0.84,
-            "signal_type": "engagement_signal",
-            "metric": "follower_growth_rate",
-            "value": 12.5,
-            "growth_pct": 31.0,
-        },
-        {
-            "id": "release_countdown_series",
-            "keyword": "artist release countdown engagement series",
-            "title": "Release countdown content series compounding pre-release engagement",
-            "summary": (
-                "Artists using structured countdown content (30/20/10/3/1 day formats) are seeing "
-                "significantly higher first-week streaming numbers than single-announcement releases."
-            ),
-            "insight_type": "content_format",
-            "platforms": ["Instagram", "TikTok", "Twitter/X"],
-            "asset_types": ["social_caption", "carousel_outline", "video_prompt"],
-            "next_stage": "generate_content",
-            "rationale": (
-                "Structured countdown campaigns create anticipation loops and repeat platform signals, "
-                "boosting algorithmic reach at the moment of release."
-            ),
-            "base_score": 0.80,
-            "signal_type": "format_trend",
-            "metric": "pre_release_engagement_delta",
-            "value": 2.6,
-            "growth_pct": 26.0,
-        },
-        {
-            "id": "collaboration_cross_promo",
-            "keyword": "artist collaboration cross-promotion audience",
-            "title": "Cross-promotion collaboration content multiplying audience reach",
-            "summary": (
-                "Collaboration content between artists in adjacent genres is consistently outperforming "
-                "solo promotional content — especially when each creator genuinely endorses the other."
-            ),
-            "insight_type": "audience_signal",
-            "platforms": ["Instagram", "YouTube Shorts", "TikTok"],
-            "asset_types": ["video_prompt", "script_draft"],
-            "next_stage": "generate_content",
-            "rationale": (
-                "Genre-adjacent collaboration creates new audience overlap without cannibalising existing fans. "
-                "Cross-promo posts see 2x average reach compared to solo content."
-            ),
-            "base_score": 0.72,
-            "signal_type": "engagement_signal",
-            "metric": "reach_multiplier",
-            "value": 2.1,
-            "growth_pct": 19.0,
-        },
-    ],
-    "contractor_growth": [
-        {
-            "id": "spring_home_prep",
-            "keyword": "spring home maintenance checklist",
-            "title": "Spring home preparation queries spiking — peak local search volume of the year",
-            "summary": (
-                "Seasonal search queries for home maintenance services are at their annual peak. "
-                "Contractors publishing timely content around spring preparation are capturing "
-                "high-intent homeowners actively seeking service providers."
-            ),
-            "insight_type": "seasonal_signal",
-            "platforms": ["Google My Business", "Facebook", "Instagram"],
-            "asset_types": ["content_brief", "linkedin_post", "social_caption"],
-            "next_stage": "generate_content",
-            "rationale": (
-                "Seasonal intent spikes create a narrow window for first-mover advantage "
-                "in local search and social. Publishing now maximises visibility before competitors."
-            ),
-            "base_score": 0.87,
-            "signal_type": "search_trend",
-            "metric": "monthly_searches",
-            "value": 32400.0,
-            "growth_pct": 41.0,
-        },
-        {
-            "id": "before_after_transformation",
-            "keyword": "contractor before after project transformation",
-            "title": "Before/after transformation posts generating highest contractor engagement rates",
-            "summary": (
-                "Before/after project documentation posts are consistently the highest-performing "
-                "content format for local contractors — 3x average engagement versus service listing posts."
-            ),
-            "insight_type": "content_format",
-            "platforms": ["Instagram", "Facebook", "TikTok"],
-            "asset_types": ["content_brief", "social_caption", "video_prompt"],
-            "next_stage": "generate_content",
-            "rationale": (
-                "Visual transformation content activates social proof and drives referral enquiries "
-                "from local audiences. Authenticity outperforms polish."
-            ),
-            "base_score": 0.83,
-            "signal_type": "engagement_signal",
-            "metric": "engagement_rate_multiplier",
-            "value": 3.2,
-            "growth_pct": 33.0,
-        },
-        {
-            "id": "homeowner_pain_point",
-            "keyword": "homeowner pain point service education",
-            "title": "Pain-point-first content outperforming promotional posts for contractor leads",
-            "summary": (
-                "Content that opens with a homeowner frustration or problem — 'Why your HVAC breaks every winter' — "
-                "is generating 4x more enquiries than promotional service listings."
-            ),
-            "insight_type": "content_opportunity",
-            "platforms": ["Facebook", "Instagram"],
-            "asset_types": ["content_brief", "social_caption"],
-            "next_stage": "generate_content",
-            "rationale": (
-                "Pain-point framing creates immediate relevance and positions the contractor "
-                "as the trusted solution provider before any pitch is made."
-            ),
-            "base_score": 0.76,
-            "signal_type": "engagement_signal",
-            "metric": "enquiry_rate_delta",
-            "value": 4.1,
-            "growth_pct": 25.0,
-        },
-    ],
-    "insurance_growth": [
-        {
-            "id": "cyber_risk_awareness",
-            "keyword": "small business cyber insurance coverage",
-            "title": "Cyber risk awareness content seeing 40% search growth following recent breach news",
-            "summary": (
-                "Small business owners are actively searching for cyber insurance information following "
-                "high-profile breach incidents. Educational content explaining coverage gaps is gaining "
-                "significant organic traction."
-            ),
-            "insight_type": "content_opportunity",
-            "platforms": ["LinkedIn", "Google My Business", "Email newsletter"],
-            "asset_types": ["newsletter_section", "linkedin_post", "content_brief"],
-            "next_stage": "generate_content",
-            "rationale": (
-                "Real-time search demand spike creates a narrow window to establish authority "
-                "and capture high-intent enquiries before the news cycle moves on."
-            ),
-            "base_score": 0.86,
-            "signal_type": "search_trend",
-            "metric": "monthly_searches",
-            "value": 28600.0,
-            "growth_pct": 40.0,
-        },
-        {
-            "id": "life_event_triggers",
-            "keyword": "insurance life event new business home purchase",
-            "title": "Life event trigger content driving highest-quality insurance enquiries",
-            "summary": (
-                "Content connected to life events — new business formation, home purchase, growing family — "
-                "is consistently generating the highest-quality insurance leads. Audiences in these moments "
-                "have high intent and low price sensitivity."
-            ),
-            "insight_type": "audience_signal",
-            "platforms": ["LinkedIn", "Facebook", "Email newsletter"],
-            "asset_types": ["newsletter_section", "content_brief", "outreach_email"],
-            "next_stage": "generate_content",
-            "rationale": (
-                "Life event triggers create natural, non-pushy insurance conversations and attract "
-                "prospects at the ideal decision moment."
-            ),
-            "base_score": 0.81,
-            "signal_type": "audience_signal",
-            "metric": "lead_quality_score",
-            "value": 8.4,
-            "growth_pct": 23.0,
-        },
-    ],
-}
-
-# Fallback for unknown modules
-MOCK_TRENDS["_default"] = MOCK_TRENDS["media_growth"][:3]
 
 # ── Asset type display labels ──────────────────────────────────────────────────
 ASSET_TYPE_LABELS: dict[str, str] = {
@@ -338,20 +34,119 @@ def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
 
-def _seed_float(seed_str: str, lo: float = 0.0, hi: float = 1.0) -> float:
-    """Deterministic float in [lo, hi) derived from a string seed."""
-    digest = int(hashlib.md5(seed_str.encode()).hexdigest()[:8], 16)
-    return lo + (digest % 100_000) / 100_000 * (hi - lo)
+# ── Signal collection (real search) ─────────────────────────────────────────────
+
+_PLATFORM_DOMAINS: dict[str, str] = {
+    "tiktok.com": "TikTok",
+    "youtube.com": "YouTube",
+    "youtu.be": "YouTube",
+    "instagram.com": "Instagram",
+    "linkedin.com": "LinkedIn",
+    "twitter.com": "X",
+    "x.com": "X",
+    "facebook.com": "Facebook",
+    "threads.net": "Threads",
+    "reddit.com": "Reddit",
+    "pinterest.com": "Pinterest",
+}
 
 
-# ── Signal collection ──────────────────────────────────────────────────────────
+def _infer_platform_from_url(url: str) -> str:
+    """Best-effort platform label from a result URL's hostname. Not a
+    verified source — just enough to populate evidence.platform honestly
+    from what the URL actually says, same spirit as
+    trend_discovery_agent.py's _best_effort_creator_handle()."""
+    try:
+        from urllib.parse import urlparse  # noqa: PLC0415
 
-def get_mock_social_trends(module: str) -> list[dict]:
-    """Return the mock trend signals for a given module.
+        host = (urlparse(url).hostname or "").lower()
+        host = host[4:] if host.startswith("www.") else host
+        for domain, label in _PLATFORM_DOMAINS.items():
+            if host == domain or host.endswith("." + domain):
+                return label
+    except Exception:
+        pass
+    return "Web"
 
-    Returns a non-empty list for any module — falls back to _default.
+
+def get_real_social_trends(
+    module: str,
+    workspace_slug: str,
+    client_profile_slug: str | None,
+    db: Any,
+    max_results: int = 4,
+) -> list[dict]:
+    """Real, Tavily-search-derived trend signals, shaped identically to what
+    the former mock catalog produced so score_opportunity()/
+    derive_quality_tags()/build_evidence()/build_recommendation() work
+    unchanged. Gated behind TAVILY_ENABLED/TAVILY_API_KEY via
+    tavily_client.search() — returns [] (not fabricated data) when
+    disabled, unconfigured, or no results clear the relevance floor.
+
+    client_profile_slug is accepted for signature compatibility but not
+    used to filter client_profiles — every current caller passes None, and
+    the working real pipeline (agents/trend_discovery_agent.py) already
+    filters by workspace_slug only.
     """
-    return list(MOCK_TRENDS.get(module, MOCK_TRENDS["_default"]))
+    from tavily_client import search as tavily_search  # noqa: PLC0415
+
+    try:
+        from agents.base_agent import SUPPORTED_MODULES  # noqa: PLC0415
+
+        module_label = SUPPORTED_MODULES.get(module, {}).get("label", "") or module.replace("_", " ").title()
+    except Exception:
+        module_label = module.replace("_", " ").title()
+
+    profile: dict[str, Any] = {}
+    try:
+        profile = db.client_profiles.find_one({"workspace_slug": workspace_slug}) or {}
+    except Exception:
+        profile = {}
+
+    audience = (profile.get("audience") or "").strip()
+    content_goals = (profile.get("content_goals") or "").strip()
+    is_generic_fallback = not audience and not content_goals
+
+    parts = [module_label]
+    if audience:
+        parts.append(f"content relevant to: {audience}")
+    if content_goals:
+        parts.append(f"aligned with goal: {content_goals}")
+    if is_generic_fallback:
+        parts.append("trending audience content this week")
+    query = " — ".join(parts)
+
+    result = tavily_search(query, max_results=max_results, topic="news", days=30, min_score=0.3)
+    if result.get("simulated") or not result.get("results"):
+        return []
+
+    rationale = f"Discovered via Tavily search for '{query}'."
+    if is_generic_fallback:
+        rationale = (
+            "Warning: client profile has no audience/content_goals set, so this used a generic "
+            "fallback query and may be less targeted than usual. " + rationale
+        )
+
+    trends: list[dict] = []
+    for item in result["results"]:
+        url = item.get("url", "")
+        if not url:
+            continue
+        trends.append({
+            "id": hashlib.sha1(url.encode()).hexdigest()[:12],
+            "keyword": query,
+            "title": item.get("title") or url,
+            "summary": item.get("content") or "",
+            "insight_type": "content_opportunity",
+            "platforms": [_infer_platform_from_url(url)],
+            "asset_types": ["content_brief"],
+            "next_stage": "generate_content",
+            "rationale": rationale,
+            "base_score": float(item.get("score") or 0.0),
+            "signal_type": "search_trend",
+            "source_url": url,
+        })
+    return trends
 
 
 def get_recent_workflow_assets(workspace_slug: str, db: Any) -> list[dict]:
@@ -602,9 +397,8 @@ def build_evidence(
         "signal_type": trend.get("signal_type", "search_trend"),
         "keyword": trend.get("keyword"),
         "growth_pct": trend.get("growth_pct"),
-        "notes": (
-            f"Simulated signal — {trend.get('insight_type', 'opportunity')} "
-            "detected via discovery analysis."
+        "notes": trend.get("rationale") or (
+            f"{trend.get('insight_type', 'opportunity')} detected via discovery analysis."
         ),
         "source_label": None,
         "source_type": None,
@@ -614,6 +408,8 @@ def build_evidence(
         primary["metric"] = trend["metric"]
     if trend.get("value") is not None:
         primary["value"] = float(trend["value"])
+    if trend.get("source_url"):
+        primary["source_url"] = trend["source_url"]
     if platforms:
         primary["platform"] = platforms[0]
         matched_src = source_by_platform.get(platforms[0])
@@ -697,7 +493,7 @@ def generate_discovery_insights(
     """Orchestrate discovery intelligence generation.
 
     Pipeline:
-      1. Collect mock trend signals for the module
+      1. Collect real, Tavily-search-derived trend signals for the module
       2. Load recent approved content for prior-success context
       3. Load existing insight keywords for recurrence detection
       4. Score and rank each opportunity
@@ -709,7 +505,7 @@ def generate_discovery_insights(
     bad document never fails the whole batch.
     """
     now = _utc_now()
-    trends = get_mock_social_trends(module)
+    trends = get_real_social_trends(module, workspace_slug, client_profile_slug, db, max_results=max_insights)
     approved_content = get_recent_approved_content(workspace_slug, db)
     existing_kws = get_existing_insight_keywords(workspace_slug, db)
     # Phase 6E: fetch configured client sources to make discovery client-aware

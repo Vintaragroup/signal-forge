@@ -54,15 +54,15 @@ export const WORKFLOW_TEMPLATES = {
       {
         id: "content_discovery",
         label: "Content Discovery Run",
-        description: "Searches the web (via Tavily) for content relevant to this client's audience and stages candidates as Source Content for review — no automated download, clip, or reuse.",
+        description: "Searches the web (via Tavily) for audience-relevant trend signals and stages them as Discovery Intelligence insights below for review — no automated download, clip, or reuse.",
         icon: "Search",
-        agent_name: "trend_discovery",
+        agent_name: "content_discovery",
         task_type: "discover_trends",
         defaultModule: "media_growth",
         defaultPriority: "normal",
         defaultLimit: 5,
         isLive: true,
-        modalHint: "This run searches for real, audience-relevant content and stages each result as a Source Content candidate in Campaign Studio → Source Content, tagged third_party_curated with best-effort creator attribution. Nothing is downloaded or reused until you approve it there. The search query is built from this client's Audience and Content Goals fields — set those on the client profile for more relevant results. Requires TAVILY_ENABLED + TAVILY_API_KEY; otherwise this run completes with no candidates.",
+        modalHint: "This run searches for real, audience-relevant trend signals and stages each result as a Discovery Intelligence insight in the panel below — scored, tagged, and linked back to its real source. Nothing is downloaded, clipped, or reused automatically; review and approve insights here before generating content from them. The search query is built from this client's Audience and Content Goals fields — set those on the client profile for more relevant results. Requires TAVILY_ENABLED + TAVILY_API_KEY; otherwise this run completes with no insights.",
         modalFields: [
           { id: "limit", label: "Output Quantity", type: "number", min: 1, max: 20, defaultValue: 5 },
           { id: "priority", label: "Priority", type: "select", options: ["low", "normal", "high"], defaultValue: "normal" },

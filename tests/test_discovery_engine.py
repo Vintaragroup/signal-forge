@@ -1,5 +1,11 @@
 """
 Phase 6D — Backend tests for discovery_engine module and new endpoints.
+
+Note: generate_discovery_insights() now sources trends from real Tavily
+search via get_real_social_trends() (services/api/discovery_engine.py).
+Tests that exercise generate_discovery_insights()/the /discovery-insights
+endpoints monkeypatch get_real_social_trends() with deterministic fixture
+data so they stay pure-unit — no real network calls.
 """
 from datetime import datetime, timezone
 
@@ -84,6 +90,7 @@ class FakeDatabase:
         self.workflow_assets = FakeCollection(seed_assets or [])
         self.agent_tasks = FakeCollection([])
         self.agent_runs = FakeCollection([])
+        self.client_profiles = FakeCollection([])
 
 
 class FakeClient:
@@ -94,51 +101,47 @@ class FakeClient:
         pass
 
 
-# ── Discovery engine unit tests ───────────────────────────────────────────────
+# ── Fixture trend data (stand-in for real Tavily-derived trends) ───────────────
+
+
+def _fake_trend(idx=0, **overrides):
+    trend = {
+        "id": f"fake_trend_{idx}",
+        "keyword": "media growth — trending audience content this week",
+        "title": f"Fake discovered article {idx}",
+        "summary": "A short content snippet from a real search result.",
+        "insight_type": "content_opportunity",
+        "platforms": ["TikTok"],
+        "asset_types": ["content_brief"],
+        "next_stage": "generate_content",
+        "rationale": "Discovered via Tavily search for 'media growth'.",
+        "base_score": 0.6,
+        "signal_type": "search_trend",
+        "source_url": f"https://example.com/article-{idx}",
+    }
+    trend.update(overrides)
+    return trend
+
+
+def _fake_trends(count=3):
+    return [_fake_trend(i) for i in range(count)]
+
+
+# ── Discovery engine unit tests ─────────────────────────────────────────────────
 
 
 def _make_db():
     return FakeDatabase()
 
 
-def test_get_mock_social_trends_media_growth():
-    trends = engine.get_mock_social_trends("media_growth")
-    assert isinstance(trends, list)
-    assert len(trends) > 0
-    for t in trends:
-        assert "keyword" in t
-        assert "platforms" in t
-        assert "title" in t
-
-
-def test_get_mock_social_trends_artist_growth():
-    trends = engine.get_mock_social_trends("artist_growth")
-    assert isinstance(trends, list)
-    assert len(trends) > 0
-
-
-def test_get_mock_social_trends_contractor_growth():
-    trends = engine.get_mock_social_trends("contractor_growth")
-    assert isinstance(trends, list)
-    assert len(trends) > 0
-
-
-def test_get_mock_social_trends_unknown_module():
-    # Unknown module falls back to _default (non-empty)
-    trends = engine.get_mock_social_trends("unknown_xyz_module")
-    assert isinstance(trends, list)
-    assert len(trends) > 0
-
-
 def test_score_opportunity_bounds():
-    for module in ("media_growth", "artist_growth", "contractor_growth"):
-        for trend in engine.get_mock_social_trends(module):
-            score = engine.score_opportunity(trend, [], set())
-            assert 0.0 <= score <= 1.0, f"score {score} out of bounds for {trend['id']}"
+    for trend in [_fake_trend(0, base_score=0.9), _fake_trend(1, base_score=0.1), _fake_trend(2, platforms=["A", "B", "C"])]:
+        score = engine.score_opportunity(trend, [], set())
+        assert 0.0 <= score <= 1.0, f"score {score} out of bounds for {trend['id']}"
 
 
 def test_score_opportunity_high_with_prior_match():
-    trend = engine.get_mock_social_trends("media_growth")[0]
+    trend = _fake_trend(0)
     keyword = trend["keyword"]
     approved = [{"title": f"Test asset with {keyword}", "summary": "Prior content", "approval_state": "approved"}]
     base_score = engine.score_opportunity(trend, [], set())
@@ -168,7 +171,7 @@ def test_score_opportunity_multi_platform_bonus():
 
 
 def test_build_recommendation_structure():
-    trend = engine.get_mock_social_trends("media_growth")[0]
+    trend = _fake_trend(0)
     rec = engine.build_recommendation(trend, "media_growth")
     assert "recommended_asset_types" in rec
     assert "recommended_platforms" in rec
@@ -179,13 +182,19 @@ def test_build_recommendation_structure():
 
 
 def test_build_evidence_structure():
-    trend = engine.get_mock_social_trends("media_growth")[0]
+    trend = _fake_trend(0)
     evidence = engine.build_evidence(trend)
     assert isinstance(evidence, list)
     assert len(evidence) >= 1
     for ev in evidence:
         assert "signal_type" in ev
         assert "keyword" in ev
+
+
+def test_build_evidence_includes_source_url():
+    trend = _fake_trend(0, source_url="https://example.com/real-article")
+    evidence = engine.build_evidence(trend)
+    assert evidence[0]["source_url"] == "https://example.com/real-article"
 
 
 def test_derive_quality_tags_high_confidence():
@@ -221,7 +230,71 @@ def test_derive_quality_tags_based_on_prior_success():
     assert "Based on Prior Success" in tags
 
 
-def test_generate_discovery_insights_creates_records():
+# ── get_real_social_trends() ────────────────────────────────────────────────────
+
+
+def test_get_real_social_trends_no_results_returns_empty(monkeypatch):
+    import tavily_client
+
+    monkeypatch.setattr(tavily_client, "search", lambda *a, **kw: {"simulated": True, "results": []})
+    db = _make_db()
+    trends = engine.get_real_social_trends("media_growth", "ws-test", None, db)
+    assert trends == []
+
+
+def test_get_real_social_trends_maps_real_results(monkeypatch):
+    import tavily_client
+
+    def fake_search(query, **kwargs):
+        assert kwargs.get("topic") == "news"
+        assert kwargs.get("days") == 30
+        assert kwargs.get("min_score") == 0.3
+        return {
+            "simulated": False,
+            "results": [
+                {"title": "Real Article", "url": "https://tiktok.com/@user/video/1", "content": "snippet", "score": 0.55, "published_date": "2026-08-01"},
+            ],
+        }
+
+    monkeypatch.setattr(tavily_client, "search", fake_search)
+    db = _make_db()
+    db.client_profiles = FakeCollection([{"workspace_slug": "ws-test", "audience": "artists", "content_goals": "grow"}])
+    trends = engine.get_real_social_trends("media_growth", "ws-test", None, db)
+    assert len(trends) == 1
+    assert trends[0]["title"] == "Real Article"
+    assert trends[0]["source_url"] == "https://tiktok.com/@user/video/1"
+    assert trends[0]["platforms"] == ["TikTok"]
+    assert trends[0]["base_score"] == 0.55
+    assert "Warning:" not in trends[0]["rationale"]
+
+
+def test_get_real_social_trends_flags_generic_fallback(monkeypatch):
+    import tavily_client
+
+    monkeypatch.setattr(
+        tavily_client,
+        "search",
+        lambda *a, **kw: {
+            "simulated": False,
+            "results": [{"title": "T", "url": "https://example.com/1", "content": "", "score": 0.5, "published_date": None}],
+        },
+    )
+    db = _make_db()  # no client_profiles seeded -> generic fallback
+    trends = engine.get_real_social_trends("media_growth", "ws-test", None, db)
+    assert len(trends) == 1
+    assert "Warning:" in trends[0]["rationale"]
+    assert "generic fallback query" in trends[0]["rationale"]
+
+
+# ── generate_discovery_insights() (get_real_social_trends monkeypatched) ───────
+
+
+def _patch_real_trends(monkeypatch, trends=None):
+    monkeypatch.setattr(engine, "get_real_social_trends", lambda *a, **kw: trends if trends is not None else _fake_trends())
+
+
+def test_generate_discovery_insights_creates_records(monkeypatch):
+    _patch_real_trends(monkeypatch)
     db = _make_db()
     results = engine.generate_discovery_insights(db, "ws-test", None, "media_growth", source_run_id="run-abc")
     assert len(results) > 0
@@ -229,13 +302,22 @@ def test_generate_discovery_insights_creates_records():
     assert len(db.discovery_insights.documents) == len(results)
 
 
-def test_generate_discovery_insights_returns_list():
+def test_generate_discovery_insights_returns_list(monkeypatch):
+    _patch_real_trends(monkeypatch)
     db = _make_db()
     results = engine.generate_discovery_insights(db, "ws-test", None, "media_growth")
     assert isinstance(results, list)
 
 
-def test_generate_discovery_insights_has_evidence():
+def test_generate_discovery_insights_empty_when_no_trends(monkeypatch):
+    _patch_real_trends(monkeypatch, trends=[])
+    db = _make_db()
+    results = engine.generate_discovery_insights(db, "ws-test", None, "media_growth")
+    assert results == []
+
+
+def test_generate_discovery_insights_has_evidence(monkeypatch):
+    _patch_real_trends(monkeypatch)
     db = _make_db()
     results = engine.generate_discovery_insights(db, "ws-test", None, "media_growth")
     for insight in results:
@@ -243,7 +325,8 @@ def test_generate_discovery_insights_has_evidence():
         assert len(insight["evidence"]) > 0
 
 
-def test_generate_discovery_insights_has_recommendation():
+def test_generate_discovery_insights_has_recommendation(monkeypatch):
+    _patch_real_trends(monkeypatch)
     db = _make_db()
     results = engine.generate_discovery_insights(db, "ws-test", None, "media_growth")
     for insight in results:
@@ -253,7 +336,8 @@ def test_generate_discovery_insights_has_recommendation():
         assert "recommended_platforms" in rec
 
 
-def test_generate_discovery_insights_confidence_in_range():
+def test_generate_discovery_insights_confidence_in_range(monkeypatch):
+    _patch_real_trends(monkeypatch)
     db = _make_db()
     results = engine.generate_discovery_insights(db, "ws-test", None, "media_growth")
     for insight in results:
@@ -261,14 +345,16 @@ def test_generate_discovery_insights_confidence_in_range():
         assert 0.0 <= score <= 1.0, f"confidence_score {score} out of bounds"
 
 
-def test_generate_discovery_insights_links_source_run():
+def test_generate_discovery_insights_links_source_run(monkeypatch):
+    _patch_real_trends(monkeypatch)
     db = _make_db()
     results = engine.generate_discovery_insights(db, "ws-test", None, "media_growth", source_run_id="run-xyz-123")
     for insight in results:
         assert insight.get("source_run_id") == "run-xyz-123"
 
 
-def test_generate_discovery_insights_has_quality_tags():
+def test_generate_discovery_insights_has_quality_tags(monkeypatch):
+    _patch_real_trends(monkeypatch)
     db = _make_db()
     results = engine.generate_discovery_insights(db, "ws-test", None, "media_growth")
     for insight in results:
@@ -277,7 +363,8 @@ def test_generate_discovery_insights_has_quality_tags():
         assert len(tags) > 0
 
 
-def test_generate_discovery_insights_max_insights():
+def test_generate_discovery_insights_max_insights(monkeypatch):
+    _patch_real_trends(monkeypatch, trends=_fake_trends(5))
     db = _make_db()
     results = engine.generate_discovery_insights(db, "ws-test", None, "media_growth", max_insights=2)
     assert len(results) <= 2
@@ -335,6 +422,7 @@ def _seed_insight():
 
 
 def test_trigger_discovery_insight_generation(monkeypatch):
+    _patch_real_trends(monkeypatch)
     db = FakeDatabase()
     fake_client = FakeClient(db)
     monkeypatch.setattr(main, "get_client", lambda: fake_client)
