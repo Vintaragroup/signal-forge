@@ -1855,7 +1855,15 @@ export default function WorkflowPage({ activeProfile = "custom", demoMode = fals
                 {pendingInsights.length} pending review
               </span>
             )}
+            <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-semibold text-slate-500">
+              Simulated benchmark signals
+            </span>
           </div>
+          <p className="text-xs text-slate-500">
+            Illustrative trend patterns, not live search results — separate from the real content the
+            Content Discovery Run above finds. Real discovered candidates land in Campaign Studio →
+            Source Content for review, not here.
+          </p>
 
           {/* Phase 6D: Discovery summary header */}
           {discoveryInsights.length > 0 && (
