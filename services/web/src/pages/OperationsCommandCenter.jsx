@@ -21,7 +21,7 @@ export default function OperationsCommandCenter() {
     setHealthLoading(true);
     setHealthError(null);
     try {
-      const data = await getHealthSummary();
+      const data = await getHealthSummary(workspaceSlug);
       setHealth(data);
     } catch (e) {
       setHealthError(e.message || "Failed to load health summary");
@@ -34,21 +34,25 @@ export default function OperationsCommandCenter() {
     loadHealth();
     const id = setInterval(loadHealth, 30_000);
     return () => clearInterval(id);
-  }, []);
+  }, [workspaceSlug]);
 
   function openExplain(entityType, entityId) {
     setExplainTarget({ type: entityType, id: entityId });
     setExplainOpen(true);
   }
 
-  // Health dimension display config
+  // Health dimension display config. Most of these are system-wide
+  // proxies, not per-workspace scores — the Readiness tab's checklist is
+  // the only one of these panels actually scoped to a single workspace.
+  // "sub" makes that scope explicit so it doesn't read as directly
+  // comparable to the Readiness tab's percentage.
   const HEALTH_DIMS = [
-    { key: "system_health",          label: "System"          },
-    { key: "autonomy_confidence",    label: "Autonomy"        },
-    { key: "memory_health",          label: "Memory"          },
-    { key: "orchestration_health",   label: "Orchestrations"  },
-    { key: "worker_health",          label: "Workers"         },
-    { key: "recommendation_quality", label: "Recommendations" },
+    { key: "system_health",          label: "System",       sub: "system-wide" },
+    { key: "autonomy_confidence",    label: "API Activity", sub: "requests served since restart, system-wide" },
+    { key: "memory_health",          label: "Memory",       sub: `workspace: ${workspaceSlug || "system-wide"}` },
+    { key: "orchestration_health",   label: "Orchestrations", sub: "system-wide" },
+    { key: "worker_health",          label: "Workers",      sub: "system-wide" },
+    { key: "recommendation_quality", label: "Recommendations", sub: "system-wide" },
   ];
 
   const INDICATOR_ORDER = ["mongodb", "workers", "recommendations", "autonomy", "memory", "orchestrations"];
@@ -138,14 +142,15 @@ export default function OperationsCommandCenter() {
 
             {/* Health dimensions grid */}
             <div className="grid grid-cols-2 md:grid-cols-3 gap-3 mb-6">
-              {HEALTH_DIMS.map(({ key, label }) => {
+              {HEALTH_DIMS.map(({ key, label, sub }) => {
                 const val = healthLoading ? null : (health?.[key] ?? 0);
                 return (
                   <div
                     key={key}
                     className="bg-gray-900 border border-gray-800 rounded-lg p-4"
                   >
-                    <p className="text-gray-400 text-xs uppercase tracking-wide mb-2">{label}</p>
+                    <p className="text-gray-400 text-xs uppercase tracking-wide">{label}</p>
+                    {sub && <p className="text-gray-600 text-[10px] mb-2">{sub}</p>}
                     {healthLoading ? (
                       <div className="h-4 bg-gray-800 rounded animate-pulse" />
                     ) : (

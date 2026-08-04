@@ -278,6 +278,18 @@ class TestHealthSummaryHelper6W:
         assert result["indicators"]["mongodb"] == "error"
         assert result["system_health"] < 100
 
+    def test_22_memory_scope_defaults_to_system(self):
+        db = _mock_db_6w()
+        result = main._health_summary_6w(db)
+        assert result["memory_scope"] == "system"
+        db.client_memories.count_documents.assert_called_with({})
+
+    def test_23_memory_scope_reflects_workspace_slug(self):
+        db = _mock_db_6w()
+        result = main._health_summary_6w(db, workspace_slug="ws-scoped")
+        assert result["memory_scope"] == "ws-scoped"
+        db.client_memories.count_documents.assert_called_with({"workspace_slug": "ws-scoped"})
+
     def test_21_healthy_system_has_ok_indicators(self):
         db = _mock_db_6w(ping_ok=True)
         result = main._health_summary_6w(db)
@@ -456,6 +468,14 @@ class TestHealthSummaryEndpoint6W:
         with _patch_6w(db):
             r = client.get("/health-summary")
         assert "pilot_readiness" in r.json()
+
+    def test_44b_health_summary_workspace_slug_scopes_memory(self):
+        db = _mock_db_6w()
+        with _patch_6w(db):
+            r = client.get("/health-summary?workspace_slug=ws-endpoint-test")
+        assert r.status_code == 200
+        assert r.json()["memory_scope"] == "ws-endpoint-test"
+        db.client_memories.count_documents.assert_called_with({"workspace_slug": "ws-endpoint-test"})
 
 
 # =============================================================================

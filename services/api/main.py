@@ -15942,8 +15942,16 @@ def _explain_entity_6w(db, entity_type: str, entity_id: str) -> dict:
     return base
 
 
-def _health_summary_6w(db) -> dict:
-    """Unified health indicators across all system dimensions."""
+def _health_summary_6w(db, workspace_slug: str = "") -> dict:
+    """Unified health indicators across all system dimensions.
+
+    memory_health is scoped to workspace_slug when provided (does *this*
+    workspace have client memory initialized), otherwise system-wide (does
+    *any* workspace). autonomy_confidence cannot be meaningfully scoped per
+    workspace — it's a raw API request counter, not tracked per workspace
+    anywhere — so it always stays system-wide; callers should not read it
+    as a per-workspace signal.
+    """
     # MongoDB connectivity
     try:
         db.command("ping")
@@ -15967,9 +15975,11 @@ def _health_summary_6w(db) -> dict:
         orch_score = 100
         stuck = 0
 
-    # Memory health (presence of client memory docs)
+    # Memory health (presence of client memory docs) — scoped to
+    # workspace_slug when provided, system-wide otherwise
     try:
-        mem_count = int(db.client_memories.count_documents({}))
+        mem_query = {"workspace_slug": workspace_slug} if workspace_slug else {}
+        mem_count = int(db.client_memories.count_documents(mem_query))
         mem_score = min(100, mem_count * 20) if mem_count > 0 else 0
     except Exception:
         mem_score = 0
@@ -15997,6 +16007,7 @@ def _health_summary_6w(db) -> dict:
         "system_health": system_health,
         "autonomy_confidence": autonomy_confidence,
         "memory_health": mem_score,
+        "memory_scope": workspace_slug or "system",
         "orchestration_health": orch_score,
         "worker_health": worker_score,
         "recommendation_quality": rec_quality,
@@ -16163,12 +16174,16 @@ def explainability_6w(entity_type: str, entity_id: str) -> dict:
 
 
 @app.get("/health-summary", tags=["operator-ux"])
-def health_summary_6w() -> dict:
-    """Unified health summary across all system dimensions."""
+def health_summary_6w(workspace_slug: str = Query("")) -> dict:
+    """Unified health summary across all system dimensions.
+
+    memory_health is scoped to workspace_slug when provided; see
+    _health_summary_6w()'s docstring for why autonomy_confidence never is.
+    """
     c = get_client()
     db = get_database(c)
     try:
-        return _health_summary_6w(db)
+        return _health_summary_6w(db, workspace_slug=clean_text(workspace_slug))
     finally:
         c.close()
 

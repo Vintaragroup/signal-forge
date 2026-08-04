@@ -1026,8 +1026,9 @@ export function getWorkspaceReadiness(workspaceSlug) {
 export function getExplainability(entityType, entityId) {
   return request(`/explainability/${encodeURIComponent(entityType)}/${encodeURIComponent(entityId)}`);
 }
-export function getHealthSummary() {
-  return request("/health-summary");
+export function getHealthSummary(workspaceSlug = "") {
+  const qs = workspaceSlug ? `?${new URLSearchParams({ workspace_slug: workspaceSlug })}` : "";
+  return request(`/health-summary${qs}`);
 }
 export function postDemoWorkspaceSeed(body = {}) {
   return request("/demo-workspace/seed", {
