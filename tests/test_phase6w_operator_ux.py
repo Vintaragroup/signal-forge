@@ -58,16 +58,22 @@ def _mock_db_6w(ping_ok=True, mem_count=2, orch_stuck=0, wf_count=3,
     else:
         db.command.side_effect = Exception("connection refused")
 
-    db.client_memory.count_documents.return_value = mem_count
+    # Real collections the readiness/health-summary checks now read from
+    # (client_memories, plural — matches the actual POST /client-memory
+    # feature; autonomy_policies — matches PATCH /autonomy/policies/{ws}).
+    # "client_memory"/"autonomy_actions" (singular/legacy names) are still
+    # stubbed below since the demo seeder writes to those, unrelated to
+    # this fix.
+    db.client_memories.count_documents.return_value = mem_count
     db.orchestrations.count_documents.return_value = orch_stuck
-    db.autonomy_actions.count_documents.return_value = auto_count
+    db.autonomy_policies.find_one.return_value = {"workspace_slug": "test-ws"} if auto_count > 0 else None
     db.workflow_runs.count_documents.return_value = wf_count
     db.recommendation_statuses.count_documents.return_value = rec_pending
     db.approval_requests.count_documents.return_value = approval_count
 
     # find() iterators
     db.orchestrations.find.return_value = iter([])
-    db.client_memory.find.return_value = iter([])
+    db.client_memories.find.return_value = iter([])
 
     # Collection bracket access
     _default = MagicMock()

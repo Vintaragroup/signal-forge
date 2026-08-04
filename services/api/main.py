@@ -15719,7 +15719,7 @@ _REMEDIATION_6W: dict = {
     "client_memory_initialized": {
         "severity": "high",
         "message": "Client memory not initialized for this workspace.",
-        "action": "POST /client-memory/{slug}",
+        "action": "POST /client-memory",
     },
     "orchestration_healthy": {
         "severity": "high",
@@ -15728,8 +15728,8 @@ _REMEDIATION_6W: dict = {
     },
     "autonomy_configured": {
         "severity": "medium",
-        "message": "No autonomy actions configured for this workspace.",
-        "action": "POST /autonomy/actions",
+        "message": "No workspace-specific autonomy policy configured — inheriting global defaults.",
+        "action": "PATCH /autonomy/policies/{workspace}",
     },
     "workflows_active": {
         "severity": "medium",
@@ -15762,7 +15762,7 @@ def _workspace_readiness_6w(db, workspace_slug: str) -> dict:
 
     # client_memory_initialized
     try:
-        n = db.client_memory.count_documents({"workspace_slug": workspace_slug})
+        n = db.client_memories.count_documents({"workspace_slug": workspace_slug})
         checks["client_memory_initialized"] = int(n) > 0
     except Exception:
         checks["client_memory_initialized"] = False
@@ -15779,10 +15779,12 @@ def _workspace_readiness_6w(db, workspace_slug: str) -> dict:
     except Exception:
         checks["orchestration_healthy"] = True
 
-    # autonomy_configured
+    # autonomy_configured — a workspace-specific policy override exists
+    # (autonomy_policies), distinct from just inheriting the __global__
+    # default policy
     try:
-        n = db.autonomy_actions.count_documents({"workspace_slug": workspace_slug})
-        checks["autonomy_configured"] = int(n) > 0
+        ws_policy = db.autonomy_policies.find_one({"workspace_slug": workspace_slug})
+        checks["autonomy_configured"] = ws_policy is not None
     except Exception:
         checks["autonomy_configured"] = False
 
@@ -15967,7 +15969,7 @@ def _health_summary_6w(db) -> dict:
 
     # Memory health (presence of client memory docs)
     try:
-        mem_count = int(db.client_memory.count_documents({}))
+        mem_count = int(db.client_memories.count_documents({}))
         mem_score = min(100, mem_count * 20) if mem_count > 0 else 0
     except Exception:
         mem_score = 0
