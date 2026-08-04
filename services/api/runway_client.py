@@ -263,12 +263,16 @@ class RunwayClient:
         pg: dict[str, Any],
         render_id: str,
         output_dir: str = "",
+        ratio: str | None = None,
     ) -> dict[str, Any]:
         """
         Generate one image per scene beat (or one image from the main prompt
         when scene_beats is absent/empty — same fallback rule as ComfyUI's
         version). Returns the same dict shape as
         ComfyUIClient.run_scene_beats().
+
+        ratio: optional per-call override (e.g. "720:1280" for the cheaper
+        720p tier); falls back to RUNWAY_IMAGE_RATIO when None.
         """
         out_dir = output_dir or os.getenv("FFMPEG_OUTPUT_DIR", "/tmp/signalforge_renders")
         os.makedirs(out_dir, exist_ok=True)
@@ -317,7 +321,7 @@ class RunwayClient:
                 errors.append(f"beat {idx}: empty prompt text")
                 continue
             try:
-                task_id = submit_text_to_image(prompt_text, api_key=self.api_key)
+                task_id = submit_text_to_image(prompt_text, api_key=self.api_key, ratio=ratio)
                 task_ids.append(task_id)
                 task = poll_task(task_id, api_key=self.api_key)
                 if task.get("status") != "SUCCEEDED":

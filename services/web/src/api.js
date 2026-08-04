@@ -60,6 +60,8 @@ export const api = {
   health: () => request("/health"),
   gptRuntimeSettings: () => request("/settings/gpt-runtime"),
   renderCostSettings: () => request("/settings/render-cost"),
+  updatePromptGeneration: (id, payload) =>
+    request(`/prompt-generations/${id}`, { method: "PATCH", body: JSON.stringify(payload) }),
   gptDiagnostics: () => request("/diagnostics/gpt"),
   demoState: async () => getDemoState(),
   demoEnabled: isDemoModeEnabled,

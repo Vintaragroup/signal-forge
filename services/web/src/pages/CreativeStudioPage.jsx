@@ -2956,6 +2956,29 @@ function estimateGenerationCost(pg, renderCost) {
   return { imageCount, usd, active, suggestions };
 }
 
+// Estimate derived from successful image counts at today's rate — not a
+// billed figure from Runway (Runway's task API doesn't report per-task
+// credit consumption to us).
+function estimateActualSpend(assetRenders, renderCost) {
+  const usdPerImage = renderCost?.usd_per_image || 0;
+  const now = new Date();
+  let allTimeImages = 0;
+  let monthImages = 0;
+  for (const r of assetRenders || []) {
+    if (r?.comfyui_result?.renderer_type !== "runway_real") continue;
+    const n = (r.comfyui_result.output_image_paths || []).length;
+    allTimeImages += n;
+    const created = new Date(r.created_at);
+    if (created.getFullYear() === now.getFullYear() && created.getMonth() === now.getMonth()) {
+      monthImages += n;
+    }
+  }
+  return {
+    allTime: { images: allTimeImages, usd: allTimeImages * usdPerImage },
+    thisMonth: { images: monthImages, usd: monthImages * usdPerImage },
+  };
+}
+
 const PROMPT_STATUS_COLORS = {
   draft: "bg-slate-100 text-slate-700",
   approved: "bg-green-100 text-green-800",
@@ -2993,6 +3016,10 @@ function AssetRenderSection({
   const [busy, setBusy] = useState(false);
   // track which video players reported a load error (file missing on disk)
   const [videoErrors, setVideoErrors] = useState({});
+  // Pre-flight confirm step for paid (Runway) renders — which prompt
+  // generation's confirm row is open, and which resolution tier is chosen.
+  const [confirmingRenderId, setConfirmingRenderId] = useState(null);
+  const [selectedTier, setSelectedTier] = useState("1080p");
 
   const approvedPrompts = (promptGenerations || []).filter((pg) => pg.status === "approved");
 
@@ -3004,7 +3031,7 @@ function AssetRenderSection({
   // derive current workspace label from wsParam helper
   const wsSlug = (wsParam() || {}).workspace_slug || "";
 
-  async function handleRender(promptGen) {
+  async function handleRender(promptGen, imageRatio = "") {
     if (renderingId) return;
     const snippet = (contentSnippets || []).find((s) => s._id === promptGen.snippet_id);
     if (!snippet) {
@@ -3021,6 +3048,7 @@ function AssetRenderSection({
         client_id: promptGen.client_id || "",
         generation_engine: promptGen.generation_engine_target || "comfyui",
         add_captions: false,
+        image_ratio: imageRatio,
       });
       showNotice("Asset render queued. Awaiting operator review. No content published.");
       onRefresh();
@@ -3029,6 +3057,16 @@ function AssetRenderSection({
     } finally {
       setBusy(false);
       setRenderingId(null);
+      setConfirmingRenderId(null);
+    }
+  }
+
+  function handleRenderClick(pg, est) {
+    if (est.active === "runway") {
+      setSelectedTier(renderCost?.credits_per_image === 5 ? "720p" : "1080p");
+      setConfirmingRenderId(pg._id);
+    } else {
+      handleRender(pg);
     }
   }
 
@@ -3081,6 +3119,16 @@ function AssetRenderSection({
         </div>
       </div>
 
+      {renderCost?.engine_active === "runway" && (() => {
+        const spend = estimateActualSpend(assetRenders, renderCost);
+        return (
+          <p className="text-xs text-slate-500">
+            Est. Runway spend: ${spend.thisMonth.usd.toFixed(2)} this month ({spend.thisMonth.images} images)
+            {" · "}${spend.allTime.usd.toFixed(2)} all time ({spend.allTime.images} images)
+          </p>
+        );
+      })()}
+
       {/* Quick render from approved prompt */}
       {approvedPrompts.length > 0 && (
         <div className="rounded-lg border border-indigo-200 bg-indigo-50 p-4">
@@ -3095,7 +3143,7 @@ function AssetRenderSection({
                   key={pg._id}
                   type="button"
                   disabled={busy}
-                  onClick={() => handleRender(pg)}
+                  onClick={() => handleRenderClick(pg, est)}
                   className="rounded border border-indigo-300 bg-white px-3 py-1 text-xs text-indigo-700 hover:bg-indigo-100 disabled:opacity-50"
                 >
                   {renderingId === pg._id ? "Queuing…" : (
@@ -3107,6 +3155,52 @@ function AssetRenderSection({
               );
             })}
           </div>
+          {confirmingRenderId && (() => {
+            const pg = approvedPrompts.find((p) => p._id === confirmingRenderId);
+            if (!pg) return null;
+            const est = estimateGenerationCost(pg, renderCost);
+            const tier = renderCost?.tiers?.[selectedTier];
+            const tierUsd = tier ? est.imageCount * tier.usd_per_image : est.usd;
+            return (
+              <div className="mt-2 rounded border border-amber-300 bg-amber-50 p-3 space-y-2">
+                <p className="text-xs font-medium text-amber-900">
+                  Confirm render: {est.imageCount} image{est.imageCount !== 1 ? "s" : ""}, est. ${tierUsd.toFixed(2)} will be charged to your Runway account.
+                </p>
+                {renderCost?.tiers && (
+                  <div className="flex gap-3 text-xs text-amber-800">
+                    {Object.entries(renderCost.tiers).map(([tierName, t]) => (
+                      <label key={tierName} className="flex items-center gap-1">
+                        <input
+                          type="radio"
+                          name="render-tier"
+                          checked={selectedTier === tierName}
+                          onChange={() => setSelectedTier(tierName)}
+                        />
+                        {tierName} (${t.usd_per_image.toFixed(2)}/image)
+                      </label>
+                    ))}
+                  </div>
+                )}
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    disabled={busy}
+                    onClick={() => handleRender(pg, tier ? tier.ratio : "")}
+                    className="rounded bg-amber-600 px-3 py-1 text-xs text-white hover:bg-amber-700 disabled:opacity-50"
+                  >
+                    Confirm & Render
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setConfirmingRenderId(null)}
+                    className="rounded border border-amber-300 px-3 py-1 text-xs text-amber-800"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            );
+          })()}
           <p className="mt-1 text-xs text-indigo-600">
             ComfyUI and FFmpeg each individually gated by env vars. No external calls in disabled mode.
           </p>
@@ -3415,6 +3509,10 @@ function PromptLibrarySection({
   const [reviewNote, setReviewNote] = useState("");
   const [filterStatus, setFilterStatus] = useState("");
   const [filterType, setFilterType] = useState("");
+  // Scene-beat editing (pre-approval only) — which card is being edited,
+  // and its working copy of the beats list.
+  const [editingBeatsId, setEditingBeatsId] = useState(null);
+  const [editedBeats, setEditedBeats] = useState([]);
 
   const filtered = (promptGenerations || []).filter((pg) => {
     if (filterStatus && pg.status !== filterStatus) return false;
@@ -3431,6 +3529,22 @@ function PromptLibrarySection({
       onRefresh();
     } catch {
       showNotice("Review failed. Please try again.");
+    }
+  }
+
+  function startEditingBeats(pg) {
+    setEditingBeatsId(pg._id);
+    setEditedBeats(pg.scene_beats && pg.scene_beats.length > 0 ? [...pg.scene_beats] : [""]);
+  }
+
+  async function handleSaveBeats(id) {
+    try {
+      await api.updatePromptGeneration(id, { scene_beats: editedBeats });
+      showNotice("Scene beats updated.");
+      setEditingBeatsId(null);
+      onRefresh();
+    } catch (err) {
+      showNotice(err.message || "Update failed. Please try again.");
     }
   }
 
@@ -3557,15 +3671,88 @@ function PromptLibrarySection({
                 <p className="text-xs text-slate-600">{pg.positive_prompt}</p>
               </div>
 
-              {pg.scene_beats && pg.scene_beats.length > 0 && (
-                <div>
-                  <p className="mb-1 text-xs font-medium text-slate-700">Scene Beats</p>
-                  <ol className="list-decimal pl-4 space-y-0.5">
-                    {pg.scene_beats.map((beat, i) => (
-                      <li key={i} className="text-xs text-slate-600">{beat}</li>
-                    ))}
-                  </ol>
+              {editingBeatsId === pg._id ? (
+                <div className="rounded border border-indigo-200 bg-indigo-50 p-3 space-y-2">
+                  <p className="text-xs font-medium text-slate-700">Edit Scene Beats</p>
+                  {editedBeats.map((beat, i) => (
+                    <div key={i} className="flex gap-2">
+                      <textarea
+                        className="w-full rounded border border-slate-200 p-1.5 text-xs"
+                        rows={1}
+                        value={beat}
+                        onChange={(e) => {
+                          const next = [...editedBeats];
+                          next[i] = e.target.value;
+                          setEditedBeats(next);
+                        }}
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setEditedBeats(editedBeats.filter((_, j) => j !== i))}
+                        className="rounded border border-slate-200 px-2 text-xs text-slate-500 hover:bg-slate-100"
+                      >
+                        ×
+                      </button>
+                    </div>
+                  ))}
+                  <div className="flex gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setEditedBeats([...editedBeats, ""])}
+                      className="rounded border border-indigo-300 bg-white px-2 py-1 text-xs text-indigo-700 hover:bg-indigo-100"
+                    >
+                      Add beat
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleSaveBeats(pg._id)}
+                      className="rounded bg-indigo-600 px-2 py-1 text-xs text-white hover:bg-indigo-700"
+                    >
+                      Save
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setEditingBeatsId(null)}
+                      className="rounded border border-slate-200 px-2 py-1 text-xs text-slate-600"
+                    >
+                      Cancel
+                    </button>
+                  </div>
                 </div>
+              ) : (
+                pg.scene_beats && pg.scene_beats.length > 0 && (
+                  <div>
+                    <div className="mb-1 flex items-center gap-2">
+                      <p className="text-xs font-medium text-slate-700">Scene Beats</p>
+                      {(pg.status === "draft" || pg.status === "needs_revision") && (
+                        <button
+                          type="button"
+                          onClick={() => startEditingBeats(pg)}
+                          className="text-xs text-indigo-600 hover:underline"
+                        >
+                          Edit
+                        </button>
+                      )}
+                    </div>
+                    <ol className="list-decimal pl-4 space-y-0.5">
+                      {pg.scene_beats.map((beat, i) => (
+                        <li key={i} className="text-xs text-slate-600">{beat}</li>
+                      ))}
+                    </ol>
+                  </div>
+                )
+              )}
+
+              {editingBeatsId !== pg._id
+                && (!pg.scene_beats || pg.scene_beats.length === 0)
+                && (pg.status === "draft" || pg.status === "needs_revision") && (
+                <button
+                  type="button"
+                  onClick={() => startEditingBeats(pg)}
+                  className="text-xs text-indigo-600 hover:underline"
+                >
+                  + Add scene beats
+                </button>
               )}
 
               {(() => {
@@ -3586,6 +3773,12 @@ function PromptLibrarySection({
                     {est.suggestions.map((s, i) => (
                       <p key={i} className="text-xs text-amber-700">Tip: {s}</p>
                     ))}
+                    {est.active === "runway" && (
+                      <p className="text-xs text-red-700">
+                        Risk: if a beat's generation fails partway through, its Runway credits may
+                        still be consumed even though no image is produced.
+                      </p>
+                    )}
                   </div>
                 );
               })()}

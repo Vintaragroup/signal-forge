@@ -434,6 +434,12 @@ def render_cost_status() -> dict:
         "credits_per_image": credits_per_image,
         "usd_per_credit": usd_per_credit,
         "usd_per_image": round(credits_per_image * usd_per_credit, 2),
+        # Explicit tiers so the frontend never has to hardcode credit-tier
+        # math (e.g. for a per-render resolution picker).
+        "tiers": {
+            "1080p": {"ratio": "1080:1920", "credits_per_image": 8, "usd_per_image": round(8 * usd_per_credit, 2)},
+            "720p": {"ratio": "720:1280", "credits_per_image": 5, "usd_per_image": round(5 * usd_per_credit, 2)},
+        },
     }
 
 
@@ -5667,6 +5673,10 @@ class PromptGenerationReviewRequest(BaseModel):
     note: str = ""
 
 
+class PromptGenerationUpdateRequest(BaseModel):
+    scene_beats: list[str] | None = None
+
+
 def find_prompt_generation(db: Any, gen_id: str) -> dict | None:
     """Return a single prompt_generations record by str or ObjectId."""
     record = db.prompt_generations.find_one({"_id": gen_id})
@@ -5961,6 +5971,44 @@ def review_prompt_generation(gen_id: str, payload: PromptGenerationReviewRequest
         client.close()
 
 
+@app.patch("/prompt-generations/{gen_id}")
+def update_prompt_generation(gen_id: str, payload: PromptGenerationUpdateRequest) -> dict:
+    """
+    Edit content fields (currently: scene_beats) on a prompt generation.
+
+    Locked to draft/needs_revision — once approved, scene beats are final,
+    matching the approval panel's semantics (edit before approving, not
+    after).
+    """
+    client = get_client()
+    try:
+        db = get_database(client)
+
+        record = find_prompt_generation(db, gen_id)
+        if not record:
+            raise HTTPException(status_code=404, detail="Prompt generation not found.")
+        if record.get("status") not in ("draft", "needs_revision"):
+            raise HTTPException(
+                status_code=409,
+                detail=f"Cannot edit a prompt generation with status {record.get('status')!r}.",
+            )
+
+        updates: dict[str, Any] = {"updated_at": utc_now()}
+        if payload.scene_beats is not None:
+            updates["scene_beats"] = [clean_text(b) for b in payload.scene_beats if clean_text(b)]
+
+        db.prompt_generations.update_one({"_id": record["_id"]}, {"$set": updates})
+        updated = find_prompt_generation(db, str(record["_id"]))
+
+        return {
+            "item": serialize(updated),
+            "simulation_only": True,
+            "outbound_actions_taken": 0,
+        }
+    finally:
+        client.close()
+
+
 # ===========================================================================
 # Social Creative Engine v5 — Asset Rendering
 # ===========================================================================
@@ -5996,6 +6044,10 @@ class AssetRenderRequest(BaseModel):
     preserve_original_audio: bool = True
     add_captions: bool = False
     notes: str = ""
+    # Optional per-render Runway image ratio override (e.g. "720:1280" for
+    # the cheaper 720p tier). Empty string = use the server's configured
+    # RUNWAY_IMAGE_RATIO default.
+    image_ratio: str = ""
 
 
 class AssetRenderReviewRequest(BaseModel):
@@ -6082,6 +6134,7 @@ def render_asset(payload: AssetRenderRequest) -> dict:
             "preserve_original_audio": payload.preserve_original_audio,
             "add_captions": payload.add_captions,
             "notes": clean_text(payload.notes),
+            "image_ratio": clean_text(payload.image_ratio),
             "status": "queued",
             "comfyui_enabled": comfyui_enabled,
             "ffmpeg_enabled": ffmpeg_enabled,

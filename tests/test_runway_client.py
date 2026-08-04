@@ -231,6 +231,30 @@ class TestRunSceneBeats:
         assert result["simulation_only"] is True
         assert result["outbound_actions_taken"] == 0
 
+    def test_ratio_override_passed_to_submit(self, tmp_path):
+        submit_resp = _mock_response(200, {"id": "task_1"})
+        poll_resp = _mock_response(200, {"id": "task_1", "status": "SUCCEEDED", "output": ["https://x/img.png"]})
+        dl_resp = MagicMock(ok=True)
+        dl_resp.iter_content.return_value = [b"bytes"]
+        client = RunwayClient(api_key="test-key")
+        with patch("runway_client.requests.post", return_value=submit_resp) as mock_post, \
+             patch("runway_client.requests.get", side_effect=[poll_resp, dl_resp]):
+            client.run_scene_beats({"scene_beats": ["a beat"]}, "render-ratio", str(tmp_path), ratio="720:1280")
+        sent_body = mock_post.call_args.kwargs["json"]
+        assert sent_body["ratio"] == "720:1280"
+
+    def test_no_ratio_override_falls_back_to_default(self, tmp_path):
+        submit_resp = _mock_response(200, {"id": "task_1"})
+        poll_resp = _mock_response(200, {"id": "task_1", "status": "SUCCEEDED", "output": ["https://x/img.png"]})
+        dl_resp = MagicMock(ok=True)
+        dl_resp.iter_content.return_value = [b"bytes"]
+        client = RunwayClient(api_key="test-key")
+        with patch("runway_client.requests.post", return_value=submit_resp) as mock_post, \
+             patch("runway_client.requests.get", side_effect=[poll_resp, dl_resp]):
+            client.run_scene_beats({"scene_beats": ["a beat"]}, "render-default", str(tmp_path))
+        sent_body = mock_post.call_args.kwargs["json"]
+        assert sent_body["ratio"] == runway_client.RUNWAY_IMAGE_RATIO
+
     def test_scene_beats_produce_one_image_each(self, tmp_path):
         submit_resp = _mock_response(200, {"id": "task_1"})
         poll_resp = _mock_response(200, {"id": "task_1", "status": "SUCCEEDED", "output": ["https://x/img.png"]})

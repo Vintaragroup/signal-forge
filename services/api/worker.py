@@ -160,11 +160,16 @@ def process_render_job(job: dict, db: Any) -> dict:
 
                     image_client = RunwayClient()
                     engine_label = "Runway"
+                    # Optional per-render resolution override (e.g. cheaper
+                    # 720p tier); ComfyUIClient.run_scene_beats() has no
+                    # such parameter, so this is Runway-only.
+                    image_ratio_kwargs = {"ratio": record.get("image_ratio") or None}
                 else:
                     from comfyui_client import ComfyUIClient  # type: ignore
 
                     image_client = ComfyUIClient()
                     engine_label = "ComfyUI"
+                    image_ratio_kwargs = {}
 
                 out_dir = os.getenv("FFMPEG_OUTPUT_DIR", "/tmp/signalforge_renders")
 
@@ -181,6 +186,7 @@ def process_render_job(job: dict, db: Any) -> dict:
                         _serialize_doc(pg),
                         render_id=render_id_str,
                         output_dir=out_dir,
+                        **image_ratio_kwargs,
                     )
                     img_paths = comfyui_result.get("output_image_paths", [])
                     img_path = comfyui_result.get("output_image_path", "")
