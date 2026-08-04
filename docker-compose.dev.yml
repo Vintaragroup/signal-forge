@@ -1,0 +1,31 @@
+# Local developer convenience ONLY — must be included explicitly:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.dev.yml up --build web
+#   make dev
+#
+# This file is intentionally NOT named docker-compose.override.yml. Compose
+# auto-loads any file with that name on top of docker-compose.yml with no
+# flag required, which would make hot-reload the silent default for plain
+# `docker compose up` / `make up` — exactly the dev-vs-prod drift this setup
+# exists to prevent. Requiring an explicit -f keeps docker-compose.yml alone
+# equal to what deployed environments and CI actually run.
+#
+# It swaps the web service to the Vite dev server (hot reload) and bind-mounts
+# the source. The frontend still calls /api; Vite proxies it to the api service
+# exactly as nginx does in production, so the code path is identical.
+#
+# Hot-reload dev UI:  http://localhost:5173
+# Production-shape UI (`docker compose up` / `make up`, no extra flags): http://localhost:5174
+
+services:
+  web:
+    build:
+      target: dev
+    ports:
+      - "5173:5173"
+    volumes:
+      - ./services/web/src:/app/src
+      - ./services/web/index.html:/app/index.html
+      - ./services/web/vite.config.js:/app/vite.config.js
+      - ./services/web/tailwind.config.js:/app/tailwind.config.js
+      - ./services/web/postcss.config.js:/app/postcss.config.js

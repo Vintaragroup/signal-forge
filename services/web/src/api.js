@@ -18,7 +18,10 @@ import {
   stopDemoMode,
 } from "./demoMode.js";
 
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "http://localhost:8000";
+// Same-origin: the app calls /api, which nginx (prod) or the Vite dev-server
+// proxy (local HMR) forwards to the api service. No API URL is baked into the
+// bundle, so the identical image runs in every environment.
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "/api";
 
 // Module-level active workspace. "all" means no workspace filter is applied.
 let _appWorkspace = "all";
