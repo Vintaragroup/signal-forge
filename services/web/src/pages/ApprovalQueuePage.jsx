@@ -214,6 +214,11 @@ export default function ApprovalQueuePage() {
               </div>
             ) : (
               <div className="mt-4 grid gap-3 lg:grid-cols-[1fr_auto]">
+                {item.request_type === "gpt_message_generation_review" ? (
+                  <div className="lg:col-span-2 rounded-lg border border-blue-200 bg-blue-50 p-3 text-xs leading-5 text-blue-900">
+                    <strong>Approve</strong> only marks this request reviewed — it does not create a message draft. Choose <strong>Convert</strong> to turn this into a draft on the Messages tab.
+                  </div>
+                ) : null}
                 <textarea
                   value={notes[item._id] || ""}
                   onChange={(event) => setNotes((current) => ({ ...current, [item._id]: event.target.value }))}

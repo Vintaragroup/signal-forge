@@ -35,7 +35,7 @@ export default function DealsPage() {
           <div>
             <h2 className="text-sm font-semibold text-slate-950">Deal Pipeline</h2>
             <div className="mt-1 text-sm text-slate-500">
-              {visibleDeals.length} visible deals. Track proposals, negotiation, wins, losses, nurture, no-shows, and not-fit outcomes.
+              {visibleDeals.length} visible deals. Track proposals, negotiation, wins, losses, nurture, no-shows, and not-fit outcomes. This board is read-only — deal outcomes are logged by running <code className="rounded bg-slate-100 px-1 py-0.5 font-mono text-xs">scripts/log_deal_outcome.py</code> outside the app, not from a button here.
             </div>
           </div>
           <div className="flex items-center gap-3">
@@ -68,7 +68,7 @@ export default function DealsPage() {
         <div className="rounded-lg border border-dashed border-slate-300 bg-white p-8 text-center">
           <div className="text-sm font-semibold text-slate-950">No deals match this view.</div>
           <p className="mt-2 text-sm text-slate-500">
-            Log a deal outcome after a meeting, or clear the outcome filter to review all tracked opportunities.
+            Clear the outcome filter to review all tracked opportunities. New outcomes are logged outside SignalForge — see the note above.
           </p>
         </div>
       )}

@@ -300,7 +300,11 @@ export default function MessagesPage() {
           <div className="mt-1 flex flex-wrap gap-1.5">
             {row.is_demo ? <StatusBadge value="Demo Mode" /> : null}
             {row.source === "gpt" ? <StatusBadge value="source=gpt" /> : null}
-            {row.agent_run_id ? <span className="text-xs text-slate-500">run {shortId(row.agent_run_id)}</span> : null}
+            {row.agent_run_id ? (
+              <a href={`#agents?run=${encodeURIComponent(row.agent_run_id)}`} className="text-xs text-blue-600 hover:underline">
+                run {shortId(row.agent_run_id)}
+              </a>
+            ) : null}
           </div>
         </div>
       ),
@@ -311,7 +315,18 @@ export default function MessagesPage() {
     { key: "review_status", label: "Review", render: (row) => <StatusBadge value={row.review_status} /> },
     { key: "send_status", label: "Send", render: (row) => <StatusBadge value={row.send_status} /> },
     { key: "generated_by_agent", label: "Agent", render: (row) => <span className="text-xs text-slate-600">{row.generated_by_agent || "-"}</span> },
-    { key: "agent_run_id", label: "Run", render: (row) => <span className="font-mono text-xs text-slate-500">{shortId(row.agent_run_id)}</span> },
+    {
+      key: "agent_run_id",
+      label: "Run",
+      render: (row) =>
+        row.agent_run_id ? (
+          <a href={`#agents?run=${encodeURIComponent(row.agent_run_id)}`} className="font-mono text-xs text-blue-600 hover:underline">
+            {shortId(row.agent_run_id)}
+          </a>
+        ) : (
+          <span className="font-mono text-xs text-slate-500">-</span>
+        ),
+    },
     { key: "response_status", label: "Response", render: (row) => <StatusBadge value={row.response_status || "not_set"} /> },
     { key: "contact_status", label: "Contact", render: (row) => <StatusBadge value={row.contact_status || "not_linked"} /> },
     { key: "deal_outcome", label: "Deal", render: (row) => <StatusBadge value={row.deal_outcome || "none"} /> },

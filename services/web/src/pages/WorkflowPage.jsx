@@ -2406,6 +2406,9 @@ export default function WorkflowPage({ activeProfile = "custom", demoMode = fals
             View Commerce →
           </a>
         </div>
+        <div className="mb-4 rounded-lg border border-slate-200 bg-slate-50 px-4 py-2.5 text-xs text-slate-600">
+          This view is read-only. Deal outcomes are logged by running <code className="rounded bg-slate-200 px-1 py-0.5 font-mono text-xs">scripts/log_deal_outcome.py</code> outside the app, not from a button here — see the <a href="#deals" className="font-semibold text-slate-700 hover:underline">Deals</a> tab for the same data.
+        </div>
         <div className="grid gap-4 xl:grid-cols-2">
           {[{ label: "Open deals", rows: openDeals }, { label: "Closed won", rows: closedWon }].map((group) => (
             <div key={group.label} className="rounded-lg border border-slate-200 bg-slate-50 p-4">
