@@ -109,18 +109,21 @@ class TestBuildQuery:
 
     def test_query_includes_audience(self):
         agent = self._agent()
-        query = agent._build_query({"audience": "mid-level managers", "content_goals": ""})
+        query, is_generic_fallback = agent._build_query({"audience": "mid-level managers", "content_goals": ""})
         assert "mid-level managers" in query
+        assert is_generic_fallback is False
 
     def test_query_includes_content_goals(self):
         agent = self._agent()
-        query = agent._build_query({"audience": "", "content_goals": "grow LinkedIn following"})
+        query, is_generic_fallback = agent._build_query({"audience": "", "content_goals": "grow LinkedIn following"})
         assert "grow LinkedIn following" in query
+        assert is_generic_fallback is False
 
     def test_query_falls_back_when_profile_empty(self):
         agent = self._agent()
-        query = agent._build_query({})
+        query, is_generic_fallback = agent._build_query({})
         assert "Artist Growth" in query
+        assert is_generic_fallback is True
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -183,6 +186,19 @@ class TestCreateSourceContentCandidates:
         created = agent._create_source_content_candidates(results, "test query")
         assert "a.example.com" in created[0]["attribution_caption"]
 
+    def test_generic_fallback_warning_absent_by_default(self):
+        agent = self._agent_with_db()
+        results = [{"title": "A", "url": "https://a.example.com", "score": 0.8, "published_date": ""}]
+        created = agent._create_source_content_candidates(results, "test query")
+        assert "Warning:" not in created[0]["discovery_reason"]
+
+    def test_generic_fallback_warning_present_when_flagged(self):
+        agent = self._agent_with_db()
+        results = [{"title": "A", "url": "https://a.example.com", "score": 0.8, "published_date": ""}]
+        created = agent._create_source_content_candidates(results, "test query", is_generic_fallback=True)
+        assert "Warning:" in created[0]["discovery_reason"]
+        assert "generic fallback query" in created[0]["discovery_reason"]
+
     def test_skips_results_without_url(self):
         agent = self._agent_with_db()
         results = [{"title": "No URL", "url": "", "score": 0.5}]
@@ -222,7 +238,7 @@ class TestPlanActions:
     def test_no_results_returns_informational_action(self):
         agent = self._agent_with_db()
         with patch.object(TrendDiscoveryAgent, "_import_tavily_search") as mock_import:
-            mock_import.return_value = lambda query, max_results=5: {
+            mock_import.return_value = lambda query, **kwargs: {
                 "simulated": True, "results": [], "skip_reason": "TAVILY_ENABLED is not true or TAVILY_API_KEY is unset",
             }
             actions = agent.plan_actions([])
@@ -232,7 +248,7 @@ class TestPlanActions:
     def test_results_produce_review_actions(self):
         agent = self._agent_with_db()
         with patch.object(TrendDiscoveryAgent, "_import_tavily_search") as mock_import:
-            mock_import.return_value = lambda query, max_results=5: {
+            mock_import.return_value = lambda query, **kwargs: {
                 "simulated": False,
                 "results": [{"title": "Trend A", "url": "https://a.example.com", "score": 0.8, "published_date": ""}],
             }
@@ -240,3 +256,13 @@ class TestPlanActions:
         assert len(actions) == 1
         assert "Review curated content candidate" in actions[0]["title"]
         assert "PATCH /source-content" in actions[0]["planned_action"]
+
+    def test_search_called_with_news_topic_and_relevance_floor(self):
+        agent = self._agent_with_db()
+        mock_search = MagicMock(return_value={"simulated": False, "results": []})
+        with patch.object(TrendDiscoveryAgent, "_import_tavily_search", return_value=mock_search):
+            agent.plan_actions([])
+        _, kwargs = mock_search.call_args
+        assert kwargs["topic"] == "news"
+        assert kwargs["days"] == 30
+        assert kwargs["min_score"] == 0.3

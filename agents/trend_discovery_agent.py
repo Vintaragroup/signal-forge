@@ -10,7 +10,8 @@ def clean_text(value: Any) -> str:
     return str(value).strip()
 
 
-MIN_RELEVANCE_SCORE = 0.0
+MIN_RELEVANCE_SCORE = 0.3
+TREND_SEARCH_WINDOW_DAYS = 30
 
 
 class TrendDiscoveryAgent(BaseAgent):
@@ -34,9 +35,15 @@ class TrendDiscoveryAgent(BaseAgent):
         tavily_search = self._import_tavily_search()
 
         profile = self._fetch_client_profile()
-        query = self._build_query(profile)
+        query, is_generic_fallback = self._build_query(profile)
 
-        result = tavily_search(query, max_results=self.limit or 5)
+        result = tavily_search(
+            query,
+            max_results=self.limit or 5,
+            topic="news",
+            days=TREND_SEARCH_WINDOW_DAYS,
+            min_score=MIN_RELEVANCE_SCORE,
+        )
 
         if self.db is not None and self.run_id:
             self.record_step(
@@ -44,7 +51,14 @@ class TrendDiscoveryAgent(BaseAgent):
                 self.run_id,
                 10,
                 "tavily_trend_search",
-                {"query": query, "max_results": self.limit or 5},
+                {
+                    "query": query,
+                    "max_results": self.limit or 5,
+                    "topic": "news",
+                    "days": TREND_SEARCH_WINDOW_DAYS,
+                    "min_score": MIN_RELEVANCE_SCORE,
+                    "is_generic_fallback": is_generic_fallback,
+                },
                 "Read-only web search for audience-relevant trending content. No download, no posting.",
                 {
                     "simulated": result.get("simulated"),
@@ -68,7 +82,7 @@ class TrendDiscoveryAgent(BaseAgent):
                 }
             ]
 
-        created = self._create_source_content_candidates(result["results"], query)
+        created = self._create_source_content_candidates(result["results"], query, is_generic_fallback)
 
         actions: list[dict[str, str]] = []
         for item in created:
@@ -131,26 +145,33 @@ class TrendDiscoveryAgent(BaseAgent):
         except Exception:
             return {}
 
-    def _build_query(self, profile: dict[str, Any]) -> str:
+    def _build_query(self, profile: dict[str, Any]) -> tuple[str, bool]:
+        """Returns (query, is_generic_fallback). is_generic_fallback is True
+        when neither audience nor content_goals was set on the client
+        profile, meaning the query is a generic template rather than
+        audience-targeted — callers should flag this to the reviewing
+        operator, since it's the case most likely to produce off-target
+        results."""
         audience = clean_text(profile.get("audience"))
         content_goals = clean_text(profile.get("content_goals"))
         module_label = self.module_config["label"]
 
         parts = [module_label]
+        is_generic_fallback = not audience and not content_goals
         if audience:
             parts.append(f"content relevant to: {audience}")
         if content_goals:
             parts.append(f"aligned with goal: {content_goals}")
-        if not audience and not content_goals:
+        if is_generic_fallback:
             parts.append("trending audience content this week")
-        return " — ".join(parts)
+        return " — ".join(parts), is_generic_fallback
 
     # ------------------------------------------------------------------
     # source_content bridge
     # ------------------------------------------------------------------
 
     def _create_source_content_candidates(
-        self, results: list[dict[str, Any]], query: str
+        self, results: list[dict[str, Any]], query: str, is_generic_fallback: bool = False
     ) -> list[dict[str, Any]]:
         if self.db is None:
             return []
@@ -173,6 +194,11 @@ class TrendDiscoveryAgent(BaseAgent):
                 "Creator attribution is best-effort from the source URL — "
                 "verify and correct before use."
             )
+            if is_generic_fallback:
+                discovery_reason = (
+                    "Warning: client profile has no audience/content_goals set, so this used a "
+                    "generic fallback query and may be less targeted than usual. " + discovery_reason
+                )
             score = result.get("score")
             discovery_score = float(score) if isinstance(score, (int, float)) else 0.0
 

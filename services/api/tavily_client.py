@@ -74,13 +74,29 @@ class TavilyRateLimitError(TavilyError):
 
 # ── Search ────────────────────────────────────────────────────────────────────
 
-def search(query: str, max_results: int = 5, search_depth: str = "basic") -> dict[str, Any]:
+def search(
+    query: str,
+    max_results: int = 5,
+    search_depth: str = "basic",
+    topic: str = "general",
+    days: int | None = None,
+    min_score: float = 0.0,
+) -> dict[str, Any]:
     """
     Run a Tavily web search for trend/content discovery.
 
     Read-only. Returns ranked web results (title, url, content snippet, score,
     published_date) for a human/agent to review — never posts, publishes, or
     takes any outbound action.
+
+    topic: "general" (default) or "news". Tavily only returns published_date
+        reliably and only honors `days` under topic="news" — "general" search
+        skews toward evergreen content with no date at all.
+    days: recency window in days, only applied when topic="news" (defaults
+        to 30 in that case).
+    min_score: results with a numeric score below this are dropped. Results
+        with no score field are kept as-is (not penalized for a field Tavily
+        didn't return).
 
     Returns:
         {
@@ -124,17 +140,23 @@ def search(query: str, max_results: int = 5, search_depth: str = "basic") -> dic
         "max_results": capped_results,
         "include_answer": False,
     }
+    if topic == "news":
+        body["topic"] = "news"
+        body["days"] = days if days is not None else 30
 
     raw = _post_json_retry(f"{TAVILY_API_BASE}/search", body, api_key)
 
     results: list[dict[str, Any]] = []
     for item in (raw.get("results") or [])[:capped_results]:
+        score = item.get("score")
+        if isinstance(score, (int, float)) and score < min_score:
+            continue
         results.append(
             {
                 "title": item.get("title", ""),
                 "url": item.get("url", ""),
                 "content": item.get("content", ""),
-                "score": item.get("score"),
+                "score": score,
                 "published_date": item.get("published_date"),
             }
         )

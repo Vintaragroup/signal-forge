@@ -944,6 +944,9 @@ function SourceContentRow({ content, onRefresh }) {
             {content.creator && <span>{content.creator} · </span>}
             {content.duration_seconds && <span>{Math.round(content.duration_seconds / 60)}m · </span>}
             <span>{formatDate(content.published_at)}</span>
+            {!content.published_at && (
+              <span className="ml-2 rounded bg-amber-50 px-2 py-0.5 text-xs text-amber-700">no date reported</span>
+            )}
           </div>
         </div>
       </button>
