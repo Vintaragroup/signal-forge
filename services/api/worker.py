@@ -103,6 +103,7 @@ def process_render_job(job: dict, db: Any) -> dict:
     This function may be called directly in tests without Redis.
     """
     render_id_str = str(job.get("render_id", ""))
+    runway_enabled = _env_enabled("RUNWAY_ENABLED")
     comfyui_enabled = _env_enabled("COMFYUI_ENABLED")
     ffmpeg_enabled = _env_enabled("FFMPEG_ENABLED")
 
@@ -146,24 +147,37 @@ def process_render_job(job: dict, db: Any) -> dict:
         comfy_output_type = "image_sequence"
         comfy_video_path = ""
 
-        if comfyui_enabled:
+        if runway_enabled or comfyui_enabled:
             try:
                 sys.path.insert(0, "/app")
-                from comfyui_client import ComfyUIClient  # type: ignore
+                # Runway takes priority when both are enabled, since it's the
+                # one that does genuine image generation (see runway_client.py
+                # module docstring) — comfyui's docker profile is a placeholder
+                # generator, not real Stable Diffusion, unless the operator has
+                # pointed COMFYUI_BASE_URL at a real external instance.
+                if runway_enabled:
+                    from runway_client import RunwayClient  # type: ignore
 
-                comfyui = ComfyUIClient()
+                    image_client = RunwayClient()
+                    engine_label = "Runway"
+                else:
+                    from comfyui_client import ComfyUIClient  # type: ignore
+
+                    image_client = ComfyUIClient()
+                    engine_label = "ComfyUI"
+
                 out_dir = os.getenv("FFMPEG_OUTPUT_DIR", "/tmp/signalforge_renders")
 
-                # Fail fast if ComfyUI is not reachable
-                health = comfyui.health_check()
+                # Fail fast if the image backend is not reachable
+                health = image_client.health_check()
                 if not health.get("reachable"):
                     raise ConnectionError(
-                        f"ComfyUI unreachable: {health.get('error', 'no response')}"
+                        f"{engine_label} unreachable: {health.get('error', 'no response')}"
                     )
 
                 pg = _find_by_id(db.prompt_generations, record.get("prompt_generation_id", ""))
                 if pg:
-                    comfyui_result = comfyui.run_scene_beats(
+                    comfyui_result = image_client.run_scene_beats(
                         _serialize_doc(pg),
                         render_id=render_id_str,
                         output_dir=out_dir,
@@ -183,7 +197,11 @@ def process_render_job(job: dict, db: Any) -> dict:
                         generated_image_paths = [p for p in img_paths if os.path.isfile(p)]
                         generated_image_path = generated_image_paths[0] if generated_image_paths else ""
                         if generated_image_paths:
-                            image_source = "real_comfyui" if renderer_type == "comfyui_real" else "comfyui"
+                            image_source = (
+                                "real_runway" if renderer_type == "runway_real"
+                                else "real_comfyui" if renderer_type == "comfyui_real"
+                                else "comfyui"
+                            )
                         else:
                             comfyui_result["partial_failure"] = True
                             comfyui_result["fallback_reason"] = "no_valid_image_paths"
@@ -191,7 +209,11 @@ def process_render_job(job: dict, db: Any) -> dict:
                     elif img_path and os.path.isfile(img_path):
                         generated_image_path = img_path
                         generated_image_paths = [img_path]
-                        image_source = "real_comfyui" if renderer_type == "comfyui_real" else "comfyui"
+                        image_source = (
+                            "real_runway" if renderer_type == "runway_real"
+                            else "real_comfyui" if renderer_type == "comfyui_real"
+                            else "comfyui"
+                        )
                     else:
                         comfyui_result["partial_failure"] = True
                         comfyui_result["fallback_reason"] = (

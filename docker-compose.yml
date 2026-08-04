@@ -23,6 +23,13 @@ x-signalforge-env: &signalforge-env
   INSTAGRAM_BUSINESS_ACCOUNT_ID: ${INSTAGRAM_BUSINESS_ACCOUNT_ID:-}
   VAULT_PATH: /vault
   PYTHONPATH: /app
+  # Content ingestion pipeline — Runway image generation (disabled by
+  # default; takes priority over ComfyUI in the render worker when both
+  # are enabled, since it does genuine image generation)
+  RUNWAY_ENABLED: ${RUNWAY_ENABLED:-false}
+  RUNWAY_API_KEY: ${RUNWAY_API_KEY:-}
+  RUNWAY_IMAGE_MODEL: ${RUNWAY_IMAGE_MODEL:-gen4_image}
+  RUNWAY_IMAGE_RATIO: ${RUNWAY_IMAGE_RATIO:-1080:1920}
   # Social Creative Engine v2 — ComfyUI integration (disabled by default)
   COMFYUI_ENABLED: ${COMFYUI_ENABLED:-false}
   COMFYUI_BASE_URL: ${COMFYUI_BASE_URL:-http://comfyui:8188}
