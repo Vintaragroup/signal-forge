@@ -2,17 +2,10 @@ import { useState, useEffect } from "react";
 import LinkedInConnectionPanel from "../components/LinkedInConnectionPanel";
 import LinkedInPublishPanel    from "../components/LinkedInPublishPanel";
 import ExternalExecutionsList  from "../components/ExternalExecutionsList";
+import TelemetryCard           from "../components/TelemetryCard";
+import ChannelHealthCard       from "../components/ChannelHealthCard";
 import { getDistributionTelemetry } from "../api";
-
-function TelemetryCard({ label, value, sub, color = "text-white" }) {
-  return (
-    <div className="bg-gray-900 border border-gray-800 rounded-lg p-4 flex flex-col gap-1">
-      <p className="text-gray-500 text-xs">{label}</p>
-      <p className={`font-bold text-xl ${color}`}>{value}</p>
-      {sub && <p className="text-gray-600 text-xs">{sub}</p>}
-    </div>
-  );
-}
+import { formatRate } from "../utils/telemetry";
 
 /**
  * LinkedInPilotPage.jsx
@@ -46,9 +39,7 @@ export default function LinkedInPilotPage({ workspaceSlug = "default" }) {
     setRefreshKey(k => k + 1);
   }
 
-  const successRate = telemetry
-    ? `${(telemetry.publish_success_rate * 100).toFixed(1)}%`
-    : "—";
+  const successRate = telemetry ? formatRate(telemetry.publish_success_rate) : "—";
 
   const totals = telemetry?.totals ?? {};
 
@@ -77,7 +68,7 @@ export default function LinkedInPilotPage({ workspaceSlug = "default" }) {
           value={successRate}
           sub="verified / total"
           color={
-            !telemetry
+            !Number.isFinite(telemetry?.publish_success_rate)
               ? "text-gray-500"
               : telemetry.publish_success_rate >= 0.9
                 ? "text-green-400"
@@ -121,38 +112,11 @@ export default function LinkedInPilotPage({ workspaceSlug = "default" }) {
 
         {/* Right: telemetry detail + channels */}
         <div className="space-y-6">
-          {telemetry && (
-            <div className="bg-gray-900 border border-gray-800 rounded-lg p-5">
-              <h3 className="text-white font-semibold text-sm mb-4">Channel Health</h3>
-              {Object.entries(telemetry.channels ?? {}).length === 0 ? (
-                <p className="text-gray-500 text-xs">No channel data yet.</p>
-              ) : (
-                <div className="space-y-2">
-                  {Object.entries(telemetry.channels).map(([ch, stats]) => (
-                    <div key={ch} className="flex items-center justify-between text-xs">
-                      <span className="text-gray-400 capitalize">{ch}</span>
-                      <span className={`font-semibold ${
-                        stats.success_rate >= 0.9 ? "text-green-400" : "text-yellow-400"
-                      }`}>
-                        {(stats.success_rate * 100).toFixed(0)}%
-                      </span>
-                    </div>
-                  ))}
-                </div>
-              )}
-
-              <div className="mt-4 pt-4 border-t border-gray-800 text-xs text-gray-500">
-                <p>Retry frequency: <span className="text-gray-300">{
-                  typeof telemetry.retry_frequency === "number"
-                    ? `${(telemetry.retry_frequency * 100).toFixed(0)}%`
-                    : "—"
-                }</span></p>
-                <p>Verification failures: <span className="text-gray-300">
-                  {totals.failed ?? 0}
-                </span></p>
-              </div>
-            </div>
-          )}
+          <ChannelHealthCard
+            telemetry={telemetry}
+            footerLabel="Verification failures"
+            footerValue={totals.failed ?? 0}
+          />
         </div>
       </div>
 

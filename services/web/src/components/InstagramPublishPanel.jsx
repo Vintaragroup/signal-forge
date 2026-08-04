@@ -1,8 +1,9 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import {
   postInstagramPublish,
   postInstagramRetry,
   getInstagramAttemptStatus,
+  api,
 } from "../api";
 
 const STATUS_BADGE = {
@@ -38,6 +39,18 @@ export default function InstagramPublishPanel({
   const [retrying, setRetrying]     = useState(false);
   const [polling, setPolling]       = useState(false);
   const [error, setError]           = useState(null);
+  const [approvedRenders, setApprovedRenders]   = useState([]);
+  const [rendersLoading, setRendersLoading]     = useState(true);
+
+  useEffect(() => {
+    let cancelled = false;
+    setRendersLoading(true);
+    api.assetRenders({ workspace_slug: workspaceSlug, status: "approved", limit: 50 })
+      .then((data) => { if (!cancelled) setApprovedRenders(data.items || []); })
+      .catch(() => { if (!cancelled) setApprovedRenders([]); })
+      .finally(() => { if (!cancelled) setRendersLoading(false); });
+    return () => { cancelled = true; };
+  }, [workspaceSlug]);
 
   async function handlePublish(e) {
     e.preventDefault();
@@ -114,6 +127,28 @@ export default function InstagramPublishPanel({
 
       {/* Form */}
       <form onSubmit={handlePublish} className="space-y-3 mb-5">
+        <div>
+          <label className="block text-gray-400 text-xs mb-1">Approved renders</label>
+          {rendersLoading ? (
+            <div className="h-9 bg-gray-800 rounded animate-pulse" />
+          ) : approvedRenders.length === 0 ? (
+            <p className="text-gray-600 text-xs">No approved renders ready for distribution yet.</p>
+          ) : (
+            <select
+              value=""
+              onChange={(e) => { if (e.target.value) setRenderId(e.target.value); }}
+              disabled={publishing}
+              className="w-full bg-gray-800 border border-gray-700 rounded px-3 py-2 text-sm text-white focus:outline-none focus:border-pink-600"
+            >
+              <option value="">Select an approved render…</option>
+              {approvedRenders.map((r) => (
+                <option key={r._id} value={r._id}>
+                  {(r.asset_type || r.generation_engine || "render")} · {r.created_at ? new Date(r.created_at).toLocaleDateString() : ""} · …{String(r._id).slice(-6)}
+                </option>
+              ))}
+            </select>
+          )}
+        </div>
         <div>
           <label className="block text-gray-400 text-xs mb-1">Rendered Asset ID (must be approved)</label>
           <input

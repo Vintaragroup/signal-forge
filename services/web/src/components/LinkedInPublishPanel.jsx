@@ -1,8 +1,9 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import {
   postLinkedInPublish,
   postLinkedInRetry,
   getLinkedInAttemptStatus,
+  api,
 } from "../api";
 
 const STATUS_BADGE = {
@@ -35,6 +36,23 @@ export default function LinkedInPublishPanel({
   const [retrying, setRetrying]     = useState(false);
   const [polling, setPolling]       = useState(false);
   const [error, setError]           = useState(null);
+  const [approvedAssets, setApprovedAssets]     = useState([]);
+  const [assetsLoading, setAssetsLoading]       = useState(true);
+
+  useEffect(() => {
+    let cancelled = false;
+    setAssetsLoading(true);
+    api.workflowAssets({
+      workspace_slug: workspaceSlug,
+      approval_state: "approved",
+      distribution_state: "not_queued",
+      limit: 50,
+    })
+      .then((data) => { if (!cancelled) setApprovedAssets(data.items || []); })
+      .catch(() => { if (!cancelled) setApprovedAssets([]); })
+      .finally(() => { if (!cancelled) setAssetsLoading(false); });
+    return () => { cancelled = true; };
+  }, [workspaceSlug]);
 
   async function handlePublish(e) {
     e.preventDefault();
@@ -105,6 +123,28 @@ export default function LinkedInPublishPanel({
 
       {/* Form */}
       <form onSubmit={handlePublish} className="space-y-3 mb-5">
+        <div>
+          <label className="block text-gray-400 text-xs mb-1">Approved assets ready for distribution</label>
+          {assetsLoading ? (
+            <div className="h-9 bg-gray-800 rounded animate-pulse" />
+          ) : approvedAssets.length === 0 ? (
+            <p className="text-gray-600 text-xs">No approved assets ready for distribution yet.</p>
+          ) : (
+            <select
+              value=""
+              onChange={(e) => { if (e.target.value) setAssetId(e.target.value); }}
+              disabled={publishing}
+              className="w-full bg-gray-800 border border-gray-700 rounded px-3 py-2 text-sm text-white focus:outline-none focus:border-blue-600"
+            >
+              <option value="">Select an approved asset…</option>
+              {approvedAssets.map((a) => (
+                <option key={a._id} value={a._id}>
+                  {(a.title || a.asset_type || "asset")} · …{String(a._id).slice(-6)}
+                </option>
+              ))}
+            </select>
+          )}
+        </div>
         <div>
           <label className="block text-gray-400 text-xs mb-1">Workflow Asset ID</label>
           <input

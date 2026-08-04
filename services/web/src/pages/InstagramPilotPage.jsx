@@ -2,24 +2,10 @@ import { useState, useEffect } from "react";
 import InstagramConnectionPanel from "../components/InstagramConnectionPanel";
 import InstagramPublishPanel    from "../components/InstagramPublishPanel";
 import ExternalExecutionsList   from "../components/ExternalExecutionsList";
+import TelemetryCard            from "../components/TelemetryCard";
+import ChannelHealthCard        from "../components/ChannelHealthCard";
 import { getDistributionTelemetry } from "../api";
-
-function TelemetryCard({ label, value, sub, color = "text-white" }) {
-  return (
-    <div className="bg-gray-900 border border-gray-800 rounded-lg p-4 flex flex-col gap-1">
-      <p className="text-gray-500 text-xs">{label}</p>
-      <p className={`font-bold text-xl ${color}`}>{value}</p>
-      {sub && <p className="text-gray-600 text-xs">{sub}</p>}
-    </div>
-  );
-}
-
-// Channel stats only carry total/verified/failed/retrying — success rate is
-// derived here rather than read from a (nonexistent) stats.success_rate field.
-function channelSuccessRate(stats) {
-  if (!stats || !stats.total) return null;
-  return stats.verified / stats.total;
-}
+import { safeRate, formatRate } from "../utils/telemetry";
 
 /**
  * InstagramPilotPage.jsx
@@ -55,8 +41,8 @@ export default function InstagramPilotPage({ workspaceSlug = "default" }) {
   }
 
   const igStats = telemetry?.channels?.instagram;
-  const igSuccessRate = channelSuccessRate(igStats);
-  const successRateLabel = igSuccessRate == null ? "—" : `${(igSuccessRate * 100).toFixed(1)}%`;
+  const igSuccessRate = safeRate(igStats?.verified, igStats?.total);
+  const successRateLabel = formatRate(igSuccessRate);
 
   return (
     <div className="min-h-screen bg-gray-950 text-white p-6 space-y-8">
@@ -127,41 +113,11 @@ export default function InstagramPilotPage({ workspaceSlug = "default" }) {
 
         {/* Right: telemetry detail + channels (all distribution channels, same as LinkedIn Pilot) */}
         <div className="space-y-6">
-          {telemetry && (
-            <div className="bg-gray-900 border border-gray-800 rounded-lg p-5">
-              <h3 className="text-white font-semibold text-sm mb-4">Channel Health</h3>
-              {Object.entries(telemetry.channels ?? {}).length === 0 ? (
-                <p className="text-gray-500 text-xs">No channel data yet.</p>
-              ) : (
-                <div className="space-y-2">
-                  {Object.entries(telemetry.channels).map(([ch, stats]) => {
-                    const rate = channelSuccessRate(stats);
-                    return (
-                      <div key={ch} className="flex items-center justify-between text-xs">
-                        <span className="text-gray-400 capitalize">{ch}</span>
-                        <span className={`font-semibold ${
-                          rate == null ? "text-gray-500" : rate >= 0.9 ? "text-green-400" : "text-yellow-400"
-                        }`}>
-                          {rate == null ? "—" : `${(rate * 100).toFixed(0)}%`}
-                        </span>
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
-
-              <div className="mt-4 pt-4 border-t border-gray-800 text-xs text-gray-500">
-                <p>Retry frequency: <span className="text-gray-300">{
-                  typeof telemetry.retry_frequency === "number"
-                    ? `${(telemetry.retry_frequency * 100).toFixed(0)}%`
-                    : "—"
-                }</span></p>
-                <p>Instagram verification failures: <span className="text-gray-300">
-                  {igStats?.failed ?? 0}
-                </span></p>
-              </div>
-            </div>
-          )}
+          <ChannelHealthCard
+            telemetry={telemetry}
+            footerLabel="Instagram verification failures"
+            footerValue={igStats?.failed ?? 0}
+          />
         </div>
       </div>
 

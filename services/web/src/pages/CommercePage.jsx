@@ -116,7 +116,10 @@ function CreateOfferForm({ workspaceSlug, onCreated }) {
       {approvedExports.length === 0 ? (
         <p className="text-xs text-gray-500">
           No approved campaign exports yet. Generate and approve a campaign export first — an offer sells an
-          existing export.
+          existing export.{" "}
+          <a href="#creative-studio" className="text-indigo-400 hover:underline">
+            Go to Creative Studio →
+          </a>
         </p>
       ) : (
         <form onSubmit={handleSubmit} className="space-y-3">
