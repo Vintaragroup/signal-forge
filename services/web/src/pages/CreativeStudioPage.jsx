@@ -49,6 +49,25 @@ const REVIEW_DECISIONS = [
   { value: "reject", label: "Reject", icon: X },
 ];
 
+// Groups the 22 Creative Studio sections into pipeline stages so the tab bar
+// doesn't render as one flat, unordered row. Every existing section `id`
+// below must exactly match an `id` used in the flat tab-definition array and
+// in the corresponding `activeSection === "..."` render blocks — this is a
+// display-only grouping layer, it does not rename or remove any section.
+const SECTION_GROUPS = [
+  { id: "plan", label: "Plan", sectionIds: ["briefs", "review", "approved", "agent", "all-drafts"] },
+  { id: "setup", label: "Setup", sectionIds: ["clients", "source-channels"] },
+  { id: "discover", label: "Discover", sectionIds: ["source-content", "ingest", "media-ingestion"] },
+  { id: "produce", label: "Produce", sectionIds: ["snippets", "prompts", "assets", "renders"] },
+  { id: "review-group", label: "Review", sectionIds: ["approval-queue", "renderer-validation"] },
+  { id: "measure", label: "Measure & Package", sectionIds: ["performance-loop", "campaign-packs", "campaign-exports", "client-intelligence"] },
+  { id: "demo", label: "Demo", sectionIds: ["executive-demo", "poc-demo"] },
+];
+
+function groupForSection(sectionId) {
+  return SECTION_GROUPS.find((g) => g.sectionIds.includes(sectionId))?.id || SECTION_GROUPS[0].id;
+}
+
 const emptyBriefFilters = { module: "", platform: "", status: "" };
 const emptyDraftFilters = { module: "", platform: "", content_type: "", status: "" };
 
@@ -4564,47 +4583,73 @@ export default function CreativeStudioPage({ activeWorkspace, refreshTrigger = 0
         ))}
       </div>
 
-      {/* Section tabs */}
-      <div className="flex flex-wrap gap-2 border-b border-slate-200 pb-1">
-        {[
-          { id: "briefs", label: `Briefs (${filteredBriefs.length})` },
-          { id: "review", label: `Needs Review (${needsReviewDrafts.length})` },
-          { id: "approved", label: `Approved (${approvedDrafts.length})` },
-          { id: "agent", label: `Agent Generated (${agentDrafts.length})` },
-          { id: "all-drafts", label: `All Drafts (${filteredDrafts.length})` },
-          { id: "clients", label: `Clients (${clientProfiles.length})` },
-          { id: "source-channels", label: `Source Channels (${sourceChannels.length})` },
-          { id: "source-content", label: `Source Content (${sourceContent.length})` },
-          { id: "snippets", label: `Snippets (${contentSnippets.length})` },
-          { id: "assets", label: `Assets (${creativeAssets.length})` },
-          { id: "approval-queue", label: `Approval Queue (${[...contentSnippets, ...creativeAssets].filter((i) => i.status === "needs_review").length})` },
-          { id: "ingest", label: `Ingest Pipeline (${transcriptRuns.length})` },
-          { id: "prompts", label: `Prompt Library (${promptGenerations.length})` },
-          { id: "renders", label: `Rendered Assets (${assetRenders.length})` },
-          { id: "performance-loop", label: `Performance Loop (${manualPublishLogs.length})` },
-          { id: "campaign-packs", label: `Campaign Packs (${campaignPacks.length})` },
-          { id: "campaign-exports", label: `Exports (${campaignExports.length})` },
-          { id: "client-intelligence", label: `Intelligence (${clientIntelligenceRecords.length})` },
-          { id: "media-ingestion", label: `Media Ingestion (${mediaFolderScans.length + approvedUrlDownloads.length})` },
-          { id: "renderer-validation", label: `Renderer Validation (${rendererValidationRuns.length})` },
-          { id: "executive-demo", label: demoMode ? "Executive Demo ✦" : "Executive Demo" },
-          { id: "poc-demo", label: demoMode ? "POC Demo ✦" : "POC Demo" },
-        ].map(({ id, label }) => (
-          <button
-            key={id}
-            type="button"
-            onClick={() => setActiveSection(id)}
-            className={[
-              "rounded-t-lg px-4 py-2 text-sm font-medium transition",
-              activeSection === id
-                ? "border-b-2 border-blue-600 text-blue-700"
-                : "text-slate-500 hover:text-slate-800",
-            ].join(" ")}
-          >
-            {label}
-          </button>
-        ))}
-      </div>
+      {/* Section tabs — grouped by pipeline stage so 22 sections don't render as one flat row */}
+      {(() => {
+        const ALL_SECTIONS = {
+          "briefs": `Briefs (${filteredBriefs.length})`,
+          "review": `Needs Review (${needsReviewDrafts.length})`,
+          "approved": `Approved (${approvedDrafts.length})`,
+          "agent": `Agent Generated (${agentDrafts.length})`,
+          "all-drafts": `All Drafts (${filteredDrafts.length})`,
+          "clients": `Clients (${clientProfiles.length})`,
+          "source-channels": `Source Channels (${sourceChannels.length})`,
+          "source-content": `Source Content (${sourceContent.length})`,
+          "snippets": `Snippets (${contentSnippets.length})`,
+          "assets": `Assets (${creativeAssets.length})`,
+          "approval-queue": `Approval Queue (${[...contentSnippets, ...creativeAssets].filter((i) => i.status === "needs_review").length})`,
+          "ingest": `Ingest Pipeline (${transcriptRuns.length})`,
+          "prompts": `Prompt Library (${promptGenerations.length})`,
+          "renders": `Rendered Assets (${assetRenders.length})`,
+          "performance-loop": `Performance Loop (${manualPublishLogs.length})`,
+          "campaign-packs": `Campaign Packs (${campaignPacks.length})`,
+          "campaign-exports": `Exports (${campaignExports.length})`,
+          "client-intelligence": `Intelligence (${clientIntelligenceRecords.length})`,
+          "media-ingestion": `Media Ingestion (${mediaFolderScans.length + approvedUrlDownloads.length})`,
+          "renderer-validation": `Renderer Validation (${rendererValidationRuns.length})`,
+          "executive-demo": demoMode ? "Executive Demo ✦" : "Executive Demo",
+          "poc-demo": demoMode ? "POC Demo ✦" : "POC Demo",
+        };
+        const activeGroupId = groupForSection(activeSection);
+        const currentGroup = SECTION_GROUPS.find((g) => g.id === activeGroupId) || SECTION_GROUPS[0];
+        return (
+          <div className="space-y-2">
+            <div className="flex flex-wrap gap-1 rounded-lg bg-slate-100 p-1">
+              {SECTION_GROUPS.map((group) => (
+                <button
+                  key={group.id}
+                  type="button"
+                  onClick={() => setActiveSection(group.sectionIds[0])}
+                  className={[
+                    "rounded-md px-3 py-1.5 text-xs font-semibold transition",
+                    activeGroupId === group.id
+                      ? "bg-white text-blue-700 shadow-sm"
+                      : "text-slate-500 hover:text-slate-800",
+                  ].join(" ")}
+                >
+                  {group.label}
+                </button>
+              ))}
+            </div>
+            <div className="flex flex-wrap gap-2 border-b border-slate-200 pb-1">
+              {currentGroup.sectionIds.map((id) => (
+                <button
+                  key={id}
+                  type="button"
+                  onClick={() => setActiveSection(id)}
+                  className={[
+                    "rounded-t-lg px-4 py-2 text-sm font-medium transition",
+                    activeSection === id
+                      ? "border-b-2 border-blue-600 text-blue-700"
+                      : "text-slate-500 hover:text-slate-800",
+                  ].join(" ")}
+                >
+                  {ALL_SECTIONS[id]}
+                </button>
+              ))}
+            </div>
+          </div>
+        );
+      })()}
 
       {/* BRIEFS section */}
       {activeSection === "briefs" && (
