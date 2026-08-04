@@ -2933,6 +2933,29 @@ const ENGINE_LABELS = {
   manual: "Manual",
 };
 
+// One paid image per scene beat (falling back to 1 when scene_beats is
+// empty) — cost scales with image count, not video count or length.
+function estimateGenerationCost(pg, renderCost) {
+  const imageCount = pg.scene_beats && pg.scene_beats.length > 0 ? pg.scene_beats.length : 1;
+  const active = renderCost?.engine_active;
+  const usd = active === "runway" ? imageCount * (renderCost.usd_per_image || 0) : 0;
+  const suggestions = [];
+  if (active === "runway") {
+    if (imageCount > 3) {
+      suggestions.push(
+        `${imageCount} scene beats means ${imageCount} paid images. Combining similar beats cuts cost roughly proportionally.`
+      );
+    }
+    if (renderCost.credits_per_image === 8) {
+      const savings = (renderCost.usd_per_image - 5 * renderCost.usd_per_credit).toFixed(2);
+      suggestions.push(
+        `RUNWAY_IMAGE_RATIO is set to a 1080p-class ratio (${renderCost.ratio}). A 720p-class ratio would save ~$${savings}/image (~37%) at lower resolution.`
+      );
+    }
+  }
+  return { imageCount, usd, active, suggestions };
+}
+
 const PROMPT_STATUS_COLORS = {
   draft: "bg-slate-100 text-slate-700",
   approved: "bg-green-100 text-green-800",
@@ -2961,6 +2984,7 @@ function AssetRenderSection({
   onRefresh,
   showNotice,
   demoMode,
+  renderCost,
 }) {
   const [filterStatus, setFilterStatus] = useState("");
   const [reviewingId, setReviewingId] = useState(null);
@@ -3064,20 +3088,24 @@ function AssetRenderSection({
             Render asset from approved prompt
           </p>
           <div className="flex flex-wrap gap-2">
-            {approvedPrompts.slice(0, 5).map((pg) => (
-              <button
-                key={pg._id}
-                type="button"
-                disabled={busy}
-                onClick={() => handleRender(pg)}
-                className="rounded border border-indigo-300 bg-white px-3 py-1 text-xs text-indigo-700 hover:bg-indigo-100 disabled:opacity-50"
-              >
-                {renderingId === pg._id ? "Queuing…" : (
-                  (pg.prompt_type || "prompt").replace(/_/g, " ")
-                  + (pg.snippet_id ? ` — snippet …${pg.snippet_id.slice(-4)}` : "")
-                )}
-              </button>
-            ))}
+            {approvedPrompts.slice(0, 5).map((pg) => {
+              const est = estimateGenerationCost(pg, renderCost);
+              return (
+                <button
+                  key={pg._id}
+                  type="button"
+                  disabled={busy}
+                  onClick={() => handleRender(pg)}
+                  className="rounded border border-indigo-300 bg-white px-3 py-1 text-xs text-indigo-700 hover:bg-indigo-100 disabled:opacity-50"
+                >
+                  {renderingId === pg._id ? "Queuing…" : (
+                    (pg.prompt_type || "prompt").replace(/_/g, " ")
+                    + (pg.snippet_id ? ` — snippet …${pg.snippet_id.slice(-4)}` : "")
+                    + (est.active === "runway" ? ` · est. $${est.usd.toFixed(2)}` : "")
+                  )}
+                </button>
+              );
+            })}
           </div>
           <p className="mt-1 text-xs text-indigo-600">
             ComfyUI and FFmpeg each individually gated by env vars. No external calls in disabled mode.
@@ -3381,6 +3409,7 @@ function PromptLibrarySection({
   onRefresh,
   showNotice,
   demoMode,
+  renderCost,
 }) {
   const [reviewingId, setReviewingId] = useState(null);
   const [reviewNote, setReviewNote] = useState("");
@@ -3538,6 +3567,28 @@ function PromptLibrarySection({
                   </ol>
                 </div>
               )}
+
+              {(() => {
+                const est = estimateGenerationCost(pg, renderCost);
+                return (
+                  <div className="rounded border border-slate-200 bg-slate-50 p-3 space-y-1">
+                    <p className="text-xs font-medium text-slate-700">Generation Estimate</p>
+                    <p className="text-xs text-slate-600">
+                      1 video · {est.imageCount} image{est.imageCount !== 1 ? "s" : ""}
+                      {pg.preferred_duration_seconds ? ` · ~${pg.preferred_duration_seconds}s` : ""}
+                      {" · "}
+                      {est.active === "runway"
+                        ? `est. $${est.usd.toFixed(2)} (Runway, ${renderCost.model})`
+                        : est.active
+                          ? `$0.00 (${est.active} — no paid generation)`
+                          : "cost unavailable"}
+                    </p>
+                    {est.suggestions.map((s, i) => (
+                      <p key={i} className="text-xs text-amber-700">Tip: {s}</p>
+                    ))}
+                  </div>
+                );
+              })()}
 
               {pg.caption_overlay_suggestion && (
                 <p className="text-xs text-slate-500">
@@ -4403,6 +4454,10 @@ export default function CreativeStudioPage({ activeWorkspace, refreshTrigger = 0
   });
   const [validationRunNotice, setValidationRunNotice] = useState("");
 
+  // Runway credit-cost settings — static env-derived config, not workspace
+  // data, so it's fetched once on mount rather than in the wsParam() reload.
+  const [renderCost, setRenderCost] = useState(null);
+
   async function load() {
     setLoading(true);
     try {
@@ -4471,6 +4526,10 @@ export default function CreativeStudioPage({ activeWorkspace, refreshTrigger = 0
   useEffect(() => {
     load();
   }, [activeWorkspace, refreshTrigger]);
+
+  useEffect(() => {
+    api.renderCostSettings().then(setRenderCost).catch(() => {});
+  }, []);
 
   function showNotice(msg) {
     setNotice(msg);
@@ -5094,6 +5153,7 @@ export default function CreativeStudioPage({ activeWorkspace, refreshTrigger = 0
           onRefresh={load}
           showNotice={showNotice}
           demoMode={demoMode}
+          renderCost={renderCost}
         />
       )}
 
@@ -5107,6 +5167,7 @@ export default function CreativeStudioPage({ activeWorkspace, refreshTrigger = 0
           onRefresh={load}
           showNotice={showNotice}
           demoMode={demoMode}
+          renderCost={renderCost}
         />
       )}
 

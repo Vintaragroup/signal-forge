@@ -413,6 +413,30 @@ def gpt_runtime_status() -> dict:
     }
 
 
+def render_cost_status() -> dict:
+    """
+    Runway image-generation credit cost, derived from live env config. Only
+    the "runway" engine incurs real cost; comfyui/placeholder are $0.
+    """
+    runway_enabled = env_enabled(os.getenv("RUNWAY_ENABLED", "false"))
+    comfyui_enabled = env_enabled(os.getenv("COMFYUI_ENABLED", "false"))
+    ratio = os.getenv("RUNWAY_IMAGE_RATIO", "1080:1920")
+    try:
+        w, h = (int(x) for x in ratio.split(":"))
+        credits_per_image = 8 if max(w, h) >= 1080 else 5
+    except Exception:
+        credits_per_image = 8
+    usd_per_credit = 0.01
+    return {
+        "engine_active": "runway" if runway_enabled else ("comfyui" if comfyui_enabled else "placeholder"),
+        "model": os.getenv("RUNWAY_IMAGE_MODEL", "gen4_image"),
+        "ratio": ratio,
+        "credits_per_image": credits_per_image,
+        "usd_per_credit": usd_per_credit,
+        "usd_per_image": round(credits_per_image * usd_per_credit, 2),
+    }
+
+
 def gpt_client_available() -> bool:
     try:
         from agents import gpt_client  # noqa: F401
@@ -1336,6 +1360,11 @@ def health_ffmpeg() -> dict:
 @app.get("/settings/gpt-runtime")
 def gpt_runtime_settings() -> dict:
     return gpt_runtime_status()
+
+
+@app.get("/settings/render-cost")
+def render_cost_settings() -> dict:
+    return render_cost_status()
 
 
 @app.get("/diagnostics/gpt")

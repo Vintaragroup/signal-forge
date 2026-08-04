@@ -59,6 +59,7 @@ async function request(path, options = {}) {
 export const api = {
   health: () => request("/health"),
   gptRuntimeSettings: () => request("/settings/gpt-runtime"),
+  renderCostSettings: () => request("/settings/render-cost"),
   gptDiagnostics: () => request("/diagnostics/gpt"),
   demoState: async () => getDemoState(),
   demoEnabled: isDemoModeEnabled,
