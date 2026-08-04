@@ -365,15 +365,20 @@ services:
       retries: 5
       start_period: 30s
 
+  # Production-shape web image: nginx serves the built SPA and reverse-proxies
+  # /api to the api service. This is the identical image every deployed
+  # environment runs, and what plain `docker compose up` / `make up` builds —
+  # no extra flags needed. For a local hot-reload inner loop, explicitly add
+  # docker-compose.dev.yml (see that file, or `make dev`) to swap this to the
+  # Vite dev server. It is not auto-loaded, so the default here never drifts.
   web:
     build:
       context: ./services/web
+      target: prod
     container_name: signalforge-web
     restart: unless-stopped
     ports:
-      - "5174:5173"
-    environment:
-      VITE_API_BASE_URL: http://localhost:8000
+      - "5174:80"
     depends_on:
       api:
         condition: service_started

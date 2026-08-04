@@ -6,6 +6,7 @@ __pycache__/
 .mypy_cache/
 .ruff_cache/
 .DS_Store
+vault/
 services/web/node_modules/
 services/web/dist/
 services/web/.npm-cache/
