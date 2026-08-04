@@ -8,6 +8,9 @@ x-signalforge-env: &signalforge-env
   APIFY_TOKEN: ${APIFY_TOKEN:-}
   SERPAPI_KEY: ${SERPAPI_KEY:-}
   SIGNALFORGE_ENV: ${SIGNALFORGE_ENV:-local}
+  # Phase 6Z — Tavily trend/content discovery search (read-only, disabled by default)
+  TAVILY_ENABLED: ${TAVILY_ENABLED:-false}
+  TAVILY_API_KEY: ${TAVILY_API_KEY:-}
   VAULT_PATH: /vault
   PYTHONPATH: /app
   # Social Creative Engine v2 — ComfyUI integration (disabled by default)

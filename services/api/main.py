@@ -42,12 +42,14 @@ try:
     from agents.fan_engagement_agent import FanEngagementAgent
     from agents.followup_agent import FollowupAgent
     from agents.outreach_agent import OutreachAgent
+    from agents.trend_discovery_agent import TrendDiscoveryAgent
 except Exception:
     SUPPORTED_MODULES = {}
     OutreachAgent = None
     ContentAgent = None
     FanEngagementAgent = None
     FollowupAgent = None
+    TrendDiscoveryAgent = None
 
 try:
     from media_folder_scanner import scan_media_folder as _scan_media_folder, SUPPORTED_EXTENSIONS as _SCANNER_EXTENSIONS
@@ -73,6 +75,7 @@ AGENT_CLASSES = {
     "content": ContentAgent,
     "fan_engagement": FanEngagementAgent,
     "followup": FollowupAgent,
+    "trend_discovery": TrendDiscoveryAgent,
 }
 
 AGENT_TASK_TYPES = {
@@ -80,6 +83,7 @@ AGENT_TASK_TYPES = {
     "followup": "run_followup",
     "content": "generate_content",
     "fan_engagement": "engage_fans",
+    "trend_discovery": "discover_trends",
 }
 
 AGENT_TASK_PRIORITY_ORDER = {"high": 3, "normal": 2, "low": 1}
@@ -91,7 +95,7 @@ class MessageReviewRequest(BaseModel):
 
 
 class AgentRunRequest(BaseModel):
-    agent: Literal["outreach", "content", "fan_engagement", "followup"]
+    agent: Literal["outreach", "content", "fan_engagement", "followup", "trend_discovery"]
     module: str
     dry_run: bool = True
     limit: int = 10
@@ -100,9 +104,9 @@ class AgentRunRequest(BaseModel):
 
 
 class AgentTaskCreateRequest(BaseModel):
-    agent_name: Literal["outreach", "followup", "content", "fan_engagement"]
+    agent_name: Literal["outreach", "followup", "content", "fan_engagement", "trend_discovery"]
     module: str
-    task_type: Literal["run_outreach", "run_followup", "generate_content", "engage_fans", "content_build"] | None = None
+    task_type: Literal["run_outreach", "run_followup", "generate_content", "engage_fans", "content_build", "discover_trends"] | None = None
     priority: Literal["low", "normal", "high"] = "normal"
     input_config: dict[str, Any] = Field(default_factory=dict)
     workspace_slug: str = ""
@@ -3727,6 +3731,11 @@ class SourceContentCreateRequest(BaseModel):
     discovery_score: float = 0.0
     discovery_reason: str = ""
     status: Literal["needs_review", "approved", "rejected"] = "needs_review"
+    # Phase 6Z — content-rights & attribution model
+    content_rights: Literal["owned_licensed", "third_party_curated"] = "owned_licensed"
+    creator_handle: str = ""
+    creator_platform_url: str = ""
+    attribution_caption: str = ""
 
 
 class ContentTranscriptCreateRequest(BaseModel):
@@ -4021,6 +4030,10 @@ def create_source_content(payload: SourceContentCreateRequest) -> dict:
         "discovery_score": payload.discovery_score,
         "discovery_reason": clean_text(payload.discovery_reason),
         "status": payload.status,
+        "content_rights": payload.content_rights,
+        "creator_handle": clean_text(payload.creator_handle),
+        "creator_platform_url": clean_text(payload.creator_platform_url),
+        "attribution_caption": clean_text(payload.attribution_caption),
         "review_events": [],
         "simulation_only": True,
         "outbound_actions_taken": 0,

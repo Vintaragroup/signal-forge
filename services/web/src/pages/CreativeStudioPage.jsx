@@ -873,8 +873,33 @@ function SourceChannelRow({ channel }) {
 // v2: SourceContentRow
 // ---------------------------------------------------------------------------
 
-function SourceContentRow({ content }) {
+const SOURCE_CONTENT_DECISIONS = [
+  { value: "approved", label: "Approve", icon: Check },
+  { value: "rejected", label: "Reject", icon: X },
+];
+
+function SourceContentRow({ content, onRefresh }) {
   const [expanded, setExpanded] = useState(false);
+  const [reviewing, setReviewing] = useState(false);
+  const [decision, setDecision] = useState("approved");
+  const [note, setNote] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+
+  async function submitReview(e) {
+    e.preventDefault();
+    setBusy(true);
+    setError("");
+    try {
+      await api.updateSourceContentStatus(content._id, { status: decision, note });
+      onRefresh?.();
+      setReviewing(false);
+    } catch (err) {
+      setError(err.message || "Review failed.");
+    } finally {
+      setBusy(false);
+    }
+  }
 
   return (
     <div className="rounded-lg border border-slate-200 bg-white">
@@ -889,8 +914,11 @@ function SourceContentRow({ content }) {
             <span className="truncate text-sm font-medium text-slate-900">{content.title || "Untitled"}</span>
             <StatusBadge value={content.status} />
             <span className="rounded bg-slate-100 px-2 py-0.5 text-xs text-slate-600">{content.platform}</span>
+            {content.content_rights === "third_party_curated" && (
+              <span className="rounded bg-amber-50 px-2 py-0.5 text-xs text-amber-700">third-party — verify attribution</span>
+            )}
             {content.discovery_score != null && (
-              <span className="rounded bg-blue-50 px-2 py-0.5 text-xs text-blue-700">score: {content.discovery_score}</span>
+              <span className="rounded bg-blue-50 px-2 py-0.5 text-xs text-blue-700">score: {Number(content.discovery_score).toFixed(2)}</span>
             )}
           </div>
           <div className="mt-1 text-xs text-slate-500">
@@ -902,9 +930,12 @@ function SourceContentRow({ content }) {
       </button>
 
       {expanded && (
-        <div className="border-t border-slate-100 px-4 pb-4 pt-3 space-y-2 text-sm text-slate-700">
+        <div className="border-t border-slate-100 px-4 pb-4 pt-3 space-y-3 text-sm text-slate-700">
           {content.discovery_reason && (
             <div className="text-xs"><span className="font-medium">Discovery reason:</span> {content.discovery_reason}</div>
+          )}
+          {content.attribution_caption && (
+            <div className="text-xs"><span className="font-medium">Attribution:</span> {content.attribution_caption}</div>
           )}
           {content.performance_metadata && (
             <div className="flex flex-wrap gap-3 text-xs text-slate-500">
@@ -915,6 +946,57 @@ function SourceContentRow({ content }) {
           )}
           {content.source_url && (
             <div className="text-xs text-slate-500 truncate">{content.source_url}</div>
+          )}
+
+          {content.status === "needs_review" && !reviewing && (
+            <button
+              type="button"
+              onClick={() => setReviewing(true)}
+              className="inline-flex items-center gap-1.5 rounded-lg bg-blue-600 px-3 py-1.5 text-sm font-medium text-white transition hover:bg-blue-700"
+            >
+              <PenLine className="h-3.5 w-3.5" /> Approve / Reject
+            </button>
+          )}
+          {reviewing && (
+            <div className="mt-1 rounded-lg border border-blue-200 bg-blue-50 p-4">
+              <div className="mb-3 flex items-center justify-between">
+                <span className="text-sm font-semibold text-blue-800">Approve or Reject Source Content</span>
+                <button type="button" onClick={() => setReviewing(false)} className="text-blue-500 hover:text-blue-700">
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+              <form onSubmit={submitReview} className="space-y-3">
+                <div className="flex flex-wrap gap-2">
+                  {SOURCE_CONTENT_DECISIONS.map(({ value, label, icon: Icon }) => (
+                    <button
+                      key={value}
+                      type="button"
+                      onClick={() => setDecision(value)}
+                      className={[
+                        "inline-flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs font-medium transition",
+                        decision === value
+                          ? value === "approved"
+                            ? "border-green-300 bg-green-50 text-green-700"
+                            : "border-red-300 bg-red-50 text-red-700"
+                          : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50",
+                      ].join(" ")}
+                    >
+                      <Icon className="h-3.5 w-3.5" /> {label}
+                    </button>
+                  ))}
+                </div>
+                <textarea value={note} onChange={(e) => setNote(e.target.value)} rows={2} placeholder="Optional note…" className={inputCls()} />
+                {error && <p className="text-xs text-red-600">{error}</p>}
+                <button
+                  type="submit"
+                  disabled={busy}
+                  className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-3 py-1.5 text-sm font-medium text-white transition hover:bg-blue-700 disabled:opacity-60"
+                >
+                  {busy ? "Saving…" : "Save Review"}
+                </button>
+                <p className="mt-1 text-xs text-slate-500">No content is downloaded, clipped, or reused automatically — approval only unlocks the next manual step.</p>
+              </form>
+            </div>
           )}
         </div>
       )}
@@ -4793,7 +4875,7 @@ export default function CreativeStudioPage({ activeWorkspace, refreshTrigger = 0
           ) : (
             <div className="space-y-2">
               {sourceContent.map((c) => (
-                <SourceContentRow key={c._id} content={c} />
+                <SourceContentRow key={c._id} content={c} onRefresh={load} />
               ))}
             </div>
           )}
@@ -4878,9 +4960,28 @@ export default function CreativeStudioPage({ activeWorkspace, refreshTrigger = 0
           <div>
             <h2 className="text-base font-semibold text-slate-950">Approval Queue</h2>
             <p className="mt-1 text-xs text-slate-500">
-              All snippets and assets awaiting operator review. No item is published without explicit approval.
+              Source content, snippets, and assets awaiting operator review. No item is published without explicit approval.
             </p>
           </div>
+
+          {/* Source content needing review */}
+          {(() => {
+            const pending = sourceContent.filter((c) => c.status === "needs_review");
+            return (
+              <div className="space-y-3">
+                <h3 className="text-sm font-semibold text-slate-700">Source Content ({pending.length})</h3>
+                {pending.length === 0 ? (
+                  <p className="text-xs text-slate-500">No source content awaiting review.</p>
+                ) : (
+                  <div className="space-y-2">
+                    {pending.map((c) => (
+                      <SourceContentRow key={c._id} content={c} onRefresh={load} />
+                    ))}
+                  </div>
+                )}
+              </div>
+            );
+          })()}
 
           {/* Snippets needing review */}
           {(() => {

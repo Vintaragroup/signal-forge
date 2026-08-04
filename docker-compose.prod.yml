@@ -17,6 +17,9 @@ x-signalforge-env: &signalforge-env
   X_API_KEY: ${X_API_KEY:-}
   APIFY_TOKEN: ${APIFY_TOKEN:-}
   SERPAPI_KEY: ${SERPAPI_KEY:-}
+  # Phase 6Z — Tavily trend/content discovery search (read-only, disabled by default)
+  TAVILY_ENABLED: ${TAVILY_ENABLED:-false}
+  TAVILY_API_KEY: ${TAVILY_API_KEY:-}
   SIGNALFORGE_ENV: production
   VAULT_PATH: /vault
   PYTHONPATH: /app
