@@ -230,6 +230,60 @@ def test_derive_quality_tags_based_on_prior_success():
     assert "Based on Prior Success" in tags
 
 
+# ── _clean_search_snippet() ─────────────────────────────────────────────────────
+
+
+def test_clean_search_snippet_empty_input():
+    assert engine._clean_search_snippet("") == ""
+
+
+def test_clean_search_snippet_drops_nav_chrome():
+    # Realistic case: nav chrome mixed with real content (never 100% chrome).
+    messy = (
+        "TikTok\n\nLog in\n\nSearch\n\nFor You\n\nExplore\n\nFollowing\n\nLIVE\n\nUpload\n\nProfile\n\nMore\n\n"
+        "This creator's growth tips video is getting strong engagement this week."
+    )
+    cleaned = engine._clean_search_snippet(messy)
+    assert "Log in" not in cleaned
+    assert "For You" not in cleaned
+    assert "This creator's growth tips video is getting strong engagement this week." in cleaned
+
+
+def test_clean_search_snippet_drops_pure_digit_lines():
+    messy = "A real sentence about growth trends worth keeping.\n\n207\n\n11\n\n69"
+    cleaned = engine._clean_search_snippet(messy)
+    assert "207" not in cleaned
+    assert "A real sentence about growth trends worth keeping." in cleaned
+
+
+def test_clean_search_snippet_dedupes_exact_repeated_lines():
+    messy = "This is a repeated content line worth keeping.\n\nThis is a repeated content line worth keeping."
+    cleaned = engine._clean_search_snippet(messy)
+    assert cleaned.count("This is a repeated content line worth keeping.") == 1
+
+
+def test_clean_search_snippet_keeps_real_sentences():
+    messy = "Log in\n\nThis longer sentence describes a real content trend and should be kept intact."
+    cleaned = engine._clean_search_snippet(messy)
+    assert "This longer sentence describes a real content trend and should be kept intact." in cleaned
+
+
+def test_clean_search_snippet_truncates_at_word_boundary():
+    long_text = "This is a real sentence. " * 40
+    cleaned = engine._clean_search_snippet(long_text, max_len=100)
+    assert len(cleaned) <= 101  # allow for the trailing ellipsis character
+    assert cleaned.endswith("…")
+    assert not cleaned[:-1].endswith(" ")
+
+
+def test_clean_search_snippet_falls_back_to_raw_when_everything_filtered():
+    # All-short/all-digit input has nothing left after filtering -- fall back
+    # to the (whitespace-collapsed) original rather than returning "".
+    messy = "1\n\n2\n\n3"
+    cleaned = engine._clean_search_snippet(messy)
+    assert cleaned == "1 2 3"
+
+
 # ── get_real_social_trends() ────────────────────────────────────────────────────
 
 
@@ -266,6 +320,25 @@ def test_get_real_social_trends_maps_real_results(monkeypatch):
     assert trends[0]["platforms"] == ["TikTok"]
     assert trends[0]["base_score"] == 0.55
     assert "Warning:" not in trends[0]["rationale"]
+
+
+def test_get_real_social_trends_cleans_summary(monkeypatch):
+    import tavily_client
+
+    messy_content = "TikTok\n\nLog in\n\nSearch\n\nFor You\n\nA real sentence describing the actual content trend worth keeping."
+
+    monkeypatch.setattr(
+        tavily_client,
+        "search",
+        lambda *a, **kw: {
+            "simulated": False,
+            "results": [{"title": "T", "url": "https://tiktok.com/@user/video/1", "content": messy_content, "score": 0.5, "published_date": None}],
+        },
+    )
+    db = _make_db()
+    trends = engine.get_real_social_trends("media_growth", "ws-test", None, db)
+    assert "Log in" not in trends[0]["summary"]
+    assert "A real sentence describing the actual content trend worth keeping." in trends[0]["summary"]
 
 
 def test_get_real_social_trends_flags_generic_fallback(monkeypatch):

@@ -69,6 +69,42 @@ def _infer_platform_from_url(url: str) -> str:
     return "Web"
 
 
+def _clean_search_snippet(text: str, max_len: int = 400) -> str:
+    """Best-effort cleanup of Tavily's raw scraped page content.
+
+    Real-world pages (especially JS-heavy social platforms like TikTok/
+    Instagram) often come back as raw nav chrome and UI labels mixed with
+    the actual content — "TikTok Log in Search For You Explore Following
+    LIVE Upload Profile More ...". This is heuristic cleanup, not real NLP
+    extraction: drop short non-sentence lines (nav labels, like/comment
+    counts), drop exact-duplicate lines, collapse whitespace, and truncate
+    to a readable length at a word boundary. It will not catch everything —
+    some redundancy/cruft can still slip through — but it removes most of
+    the unreadable chrome without fabricating or rewriting real content.
+    """
+    if not text:
+        return ""
+
+    seen: set[str] = set()
+    kept: list[str] = []
+    for raw_line in text.split("\n"):
+        line = raw_line.strip()
+        if not line or line in seen:
+            continue
+        if line.replace(",", "").replace(".", "").isdigit():
+            continue  # like/comment/view counters
+        word_count = len(line.split())
+        if word_count < 4 and not line.endswith((".", "!", "?")):
+            continue  # likely a nav label, not a sentence
+        seen.add(line)
+        kept.append(line)
+
+    cleaned = " ".join(" ".join(kept).split()) if kept else " ".join(text.split())
+    if len(cleaned) > max_len:
+        cleaned = cleaned[:max_len].rsplit(" ", 1)[0].rstrip(",.;:") + "…"
+    return cleaned
+
+
 def get_real_social_trends(
     module: str,
     workspace_slug: str,
@@ -136,7 +172,7 @@ def get_real_social_trends(
             "id": hashlib.sha1(url.encode()).hexdigest()[:12],
             "keyword": query,
             "title": item.get("title") or url,
-            "summary": item.get("content") or "",
+            "summary": _clean_search_snippet(item.get("content") or ""),
             "insight_type": "content_opportunity",
             "platforms": [_infer_platform_from_url(url)],
             "asset_types": ["content_brief"],
