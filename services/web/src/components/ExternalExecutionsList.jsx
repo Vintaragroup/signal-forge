@@ -3,7 +3,15 @@ import {
   getExternalExecutions,
   getExternalExecutionDetail,
   postLinkedInRetry,
+  postInstagramRetry,
 } from "../api";
+
+// This list is shared across every distribution provider (LinkedIn, Instagram,
+// ...). Retry must be dispatched to the matching provider's endpoint — each
+// provider's retry only knows how to re-execute its own attempt shape.
+function retryForProvider(provider) {
+  return provider === "instagram" ? postInstagramRetry : postLinkedInRetry;
+}
 
 const STATUS_BADGE = {
   pending:   "bg-yellow-900 text-yellow-300 border-yellow-700",
@@ -61,10 +69,11 @@ export default function ExternalExecutionsList({
 
   useEffect(() => { load(); }, [workspaceSlug, limit]);
 
-  async function handleRetry(attemptId) {
+  async function handleRetry(attemptId, provider) {
     setRetrying(prev => ({ ...prev, [attemptId]: true }));
     try {
-      await postLinkedInRetry(attemptId, { workspace_slug: workspaceSlug });
+      const retry = retryForProvider(provider);
+      await retry(attemptId, { workspace_slug: workspaceSlug });
       await load();
       onRetried?.();
     } catch (e) {
@@ -131,6 +140,7 @@ export default function ExternalExecutionsList({
             <thead>
               <tr className="text-gray-500 border-b border-gray-800">
                 <th className="text-left pb-2 pr-4 font-medium">Attempt ID</th>
+                <th className="text-left pb-2 pr-4 font-medium">Channel</th>
                 <th className="text-left pb-2 pr-4 font-medium">Asset</th>
                 <th className="text-left pb-2 pr-4 font-medium">Status</th>
                 <th className="text-left pb-2 pr-4 font-medium">Retries</th>
@@ -149,8 +159,11 @@ export default function ExternalExecutionsList({
                     <td className="py-2 pr-4 font-mono text-gray-300">
                       {ex.distribution_attempt_id}
                     </td>
+                    <td className="py-2 pr-4 text-gray-400 capitalize">
+                      {ex.provider ?? "—"}
+                    </td>
                     <td className="py-2 pr-4 text-gray-400 truncate max-w-[140px]">
-                      {ex.workflow_asset_id}
+                      {ex.workflow_asset_id ?? ex.source_asset_render_id ?? "—"}
                     </td>
                     <td className="py-2 pr-4">
                       <StatusBadge status={ex.status} />
@@ -178,7 +191,7 @@ export default function ExternalExecutionsList({
                         <button
                           onClick={e => {
                             e.stopPropagation();
-                            handleRetry(ex.distribution_attempt_id);
+                            handleRetry(ex.distribution_attempt_id, ex.provider);
                           }}
                           disabled={retrying[ex.distribution_attempt_id]}
                           className={`px-2 py-0.5 rounded text-xs ${
@@ -196,7 +209,7 @@ export default function ExternalExecutionsList({
                   {/* Expanded detail row */}
                   {expanded === ex.distribution_attempt_id && (
                     <tr key={`${ex.distribution_attempt_id}-detail`}>
-                      <td colSpan={6} className="px-0 pb-2">
+                      <td colSpan={7} className="px-0 pb-2">
                         <div className="bg-gray-950 border border-gray-800 rounded p-3 mx-0 text-xs text-gray-400">
                           {detailLoading ? (
                             <p>Loading detail…</p>

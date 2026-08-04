@@ -1049,6 +1049,44 @@ export function getDistributionTelemetry(workspaceSlug = "default") {
   return request(`/distribution/telemetry?workspace_slug=${encodeURIComponent(workspaceSlug)}`);
 }
 
+// ── Pillar 2 — Instagram Pilot ─────────────────────────────────────────────
+export function getInstagramConnectionStatus(workspaceSlug = "default") {
+  return request(`/connect/instagram/status?workspace_slug=${encodeURIComponent(workspaceSlug)}`);
+}
+export function postInstagramConnectStart(workspaceSlug = "default") {
+  return request(`/connect/instagram/start?workspace_slug=${encodeURIComponent(workspaceSlug)}`, {
+    method: "POST",
+  });
+}
+export function getInstagramConnectionCallback(code, state, workspaceSlug = "default") {
+  return request(
+    `/connect/instagram/callback?code=${encodeURIComponent(code)}&state=${encodeURIComponent(state)}&workspace_slug=${encodeURIComponent(workspaceSlug)}`
+  );
+}
+export function postInstagramPublish(body) {
+  return request("/distribution/instagram/publish", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+}
+export function postInstagramRetry(attemptId, body) {
+  return request(`/distribution/instagram/retry?attempt_id=${encodeURIComponent(attemptId)}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+}
+export function getInstagramAttemptStatus(attemptId) {
+  return request(`/distribution/instagram/${encodeURIComponent(attemptId)}/status`);
+}
+export function getInstagramPublishingLimit(workspaceSlug = "default") {
+  return request(`/distribution/instagram/limit?workspace_slug=${encodeURIComponent(workspaceSlug)}`);
+}
+export function getInstagramDistributionTelemetry(workspaceSlug = "default") {
+  return request(`/distribution/instagram/telemetry?workspace_slug=${encodeURIComponent(workspaceSlug)}`);
+}
+
 // ── Phase 6Y — Output Quality ─────────────────────────────────────────────
 export function postPilotWorkspaceSeed(body) {
   return request("/quality/pilot-workspace/seed", {
