@@ -178,7 +178,7 @@ export default function App() {
             activeWorkspace={activeWorkspace}
             onWorkspaceChange={handleWorkspaceChange}
             activeProfile={activeProfile}
-            onProfileChange={handleProfileChange}
+            onProfileChange={activePage === "workflow" ? handleProfileChange : undefined}
             action={
               <button
                 type="button"

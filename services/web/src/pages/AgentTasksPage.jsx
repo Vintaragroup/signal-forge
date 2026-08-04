@@ -177,7 +177,7 @@ export default function AgentTasksPage() {
           <div>
             <div className="text-xs font-semibold uppercase text-slate-400">Run Agent</div>
             <h2 className="mt-1 text-xl font-semibold text-slate-950">Agent Tasks</h2>
-            <p className="mt-2 text-sm leading-6 text-slate-600">Agents are now run from the dashboard via Agent Tasks. Every task uses the existing simulation-first agent runner.</p>
+            <p className="mt-2 text-sm leading-6 text-slate-600">Agents are now run from the dashboard via Agent Tasks. Every task uses the existing simulation-first agent runner. For a full diagnostic drill-down on any run — tool calls, GPT reasoning, related CRM records — open Agent Console from any row.</p>
           </div>
           <div className="flex flex-wrap gap-2">
             <StatusBadge value={`${stats.queued} queued`} />

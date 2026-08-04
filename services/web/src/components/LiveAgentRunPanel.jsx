@@ -1,26 +1,12 @@
 import { AlertTriangle, CheckCircle2, ClipboardCheck, Clock3, FileText, RefreshCw, Sparkles } from "lucide-react";
 import StatusBadge from "./StatusBadge.jsx";
-
-function formatDate(value) {
-  return value ? new Date(value).toLocaleString() : "-";
-}
-
-function formatConfidence(value) {
-  if (value === null || value === undefined || value === "") return "-";
-  const numeric = Number(value);
-  if (Number.isNaN(numeric)) return String(value);
-  return `${Math.round(numeric * 100)}%`;
-}
+import { formatDate, formatConfidence, isGptStep } from "../utils/agentRun.js";
 
 function stepIcon(step, isLast, runStatus) {
   if (step?.status === "failed") return <AlertTriangle className="h-4 w-4 text-red-600" />;
   if (runStatus === "waiting_for_approval" && isLast) return <AlertTriangle className="h-4 w-4 text-amber-600" />;
   if (step?.status === "running") return <Clock3 className="h-4 w-4 animate-pulse text-blue-600" />;
   return <CheckCircle2 className="h-4 w-4 text-green-600" />;
-}
-
-function isGptStep(step) {
-  return step?.step_name?.startsWith("gpt_") || step?.output?.used_gpt;
 }
 
 function outputTitle(item) {

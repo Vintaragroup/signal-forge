@@ -3,21 +3,7 @@ import { Bot, Play, RefreshCw } from "lucide-react";
 import { api } from "../api.js";
 import AgentActivityCard from "../components/AgentActivityCard.jsx";
 import StatusBadge from "../components/StatusBadge.jsx";
-
-function formatDate(value) {
-  return value ? new Date(value).toLocaleString() : "-";
-}
-
-function formatConfidence(value) {
-  if (value === null || value === undefined || value === "") return "-";
-  const numeric = Number(value);
-  if (Number.isNaN(numeric)) return String(value);
-  return `${Math.round(numeric * 100)}%`;
-}
-
-function isGptStep(step) {
-  return step?.step_name?.startsWith("gpt_");
-}
+import { formatDate, formatConfidence, isGptStep } from "../utils/agentRun.js";
 
 function recordLabel(record) {
   if (!record) return "not linked";
@@ -179,6 +165,12 @@ export default function AgentsPage() {
 
   return (
     <div className="space-y-5">
+      <div>
+        <div className="text-xs font-semibold uppercase text-slate-400">Diagnostics</div>
+        <h2 className="mt-1 text-xl font-semibold text-slate-950">Agent Console</h2>
+        <p className="mt-2 text-sm leading-6 text-slate-600">Deep diagnostic view for any agent run — tool calls, GPT reasoning, related CRM records, errors. To launch new agent runs day to day, use Agent Tasks.</p>
+      </div>
+
       <div className="grid gap-4 lg:grid-cols-2 xl:grid-cols-4">
         {agents.map((agent) => (
           <AgentActivityCard key={agent.name} agent={agent} modules={modules} onRun={runAgent} running={running} />
