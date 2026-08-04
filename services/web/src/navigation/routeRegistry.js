@@ -33,7 +33,6 @@ import {
   Workflow,
   GitBranch,
   Share2,
-  Instagram,
   DollarSign,
 } from "lucide-react";
 
@@ -43,8 +42,7 @@ export const ROUTES = [
   { id: "approvals",       label: "Approvals",        icon: ClipboardCheck, group: "command-center", primary: false },
   { id: "agent-tasks",     label: "Agent Tasks",      icon: ListChecks,    group: "command-center",  primary: false },
   { id: "operations-command-center", label: "Operations Command Center", icon: MonitorDot, group: "command-center", primary: false },
-  { id: "linkedin-pilot",             label: "LinkedIn Pilot",             icon: Share2,      group: "command-center", primary: false },
-  { id: "instagram-pilot",            label: "Instagram Pilot",            icon: Instagram,   group: "command-center", primary: false },
+  { id: "publishing",                 label: "Publishing",                 icon: Share2,      group: "command-center", primary: false },
   { id: "commerce",                   label: "Commerce",                   icon: DollarSign,  group: "command-center", primary: false },
 
   // ── CRM ──────────────────────────────────────────────────────────────────

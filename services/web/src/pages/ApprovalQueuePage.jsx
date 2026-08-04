@@ -108,7 +108,7 @@ export default function ApprovalQueuePage() {
           <div>
             <div className="text-xs font-semibold uppercase tracking-wide text-slate-400">Approval Queue</div>
             <h2 className="mt-1 text-xl font-semibold text-slate-950">Human Review Requests</h2>
-            <p className="mt-2 text-sm leading-6 text-slate-600">Internal workflow decisions only. No message, post, schedule, CRM sync, or external action is triggered here.</p>
+            <p className="mt-2 text-sm leading-6 text-slate-600">Internal workflow decisions only. No message, post, schedule, CRM sync, or external action is triggered here. This is the full queue across every workflow run — Workflow's own Step 4 shows just the current run's items.</p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
             <StatusBadge value={`${openCount} open`} />

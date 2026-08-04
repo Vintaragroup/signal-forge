@@ -1119,6 +1119,7 @@ export default function WorkflowPage({ activeProfile = "custom", demoMode = fals
   const [approvalRequests, setApprovalRequests] = useState([]);
   const [workflowAssets, setWorkflowAssets] = useState([]);
   const [deals, setDeals] = useState([]);
+  const [commerceRevenueCents, setCommerceRevenueCents] = useState(0);
   const [agentRuns, setAgentRuns] = useState([]);
   const [activeTask, setActiveTask] = useState(null);
   const [activeRunDetail, setActiveRunDetail] = useState(null);
@@ -1170,13 +1171,14 @@ export default function WorkflowPage({ activeProfile = "custom", demoMode = fals
   }
 
   async function loadWorkflow() {
-    const [taskData, messageData, approvalData, dealData, runData, assetData] = await Promise.all([
+    const [taskData, messageData, approvalData, dealData, runData, assetData, commerceData] = await Promise.all([
       api.agentTasks({ limit: "200" }),
       api.messages({ limit: "250" }),
       api.approvalRequests({ limit: "200" }),
       api.deals({ limit: "250" }),
       api.agentRuns({ limit: "25" }),
       api.workflowAssets({ limit: "200" }).catch(() => ({ items: [] })),
+      api.commerceTransactions({}).catch(() => ({ items: [] })),
     ]);
     const nextTasks = taskData.items || [];
     const nextRuns = runData.items || [];
@@ -1185,6 +1187,11 @@ export default function WorkflowPage({ activeProfile = "custom", demoMode = fals
     setApprovalRequests(approvalData.items || []);
     setWorkflowAssets(assetData.items || []);
     setDeals(dealData.items || []);
+    setCommerceRevenueCents(
+      (commerceData.items || [])
+        .filter((t) => t.status === "completed")
+        .reduce((sum, t) => sum + (t.amount_cents || 0), 0)
+    );
     setAgentRuns(nextRuns);
 
     if (!activeTask && !activeRunDetail) {
@@ -2391,6 +2398,14 @@ export default function WorkflowPage({ activeProfile = "custom", demoMode = fals
       </StepSection>
 
       <StepSection step="7" title={resolvedWorkflow.stages[7].label} subtitle={resolvedWorkflow.stages[7].subtitle} stageNote={resolvedWorkflow.stages[7].notes || undefined} required={resolvedWorkflow.stages[7].required} agentKey={resolvedWorkflow.stages[7].agent_key || undefined} runCardType={resolvedWorkflow.stages[7].run_card_type || undefined} active={nextStep === 7} count={openDeals.length + closedWon.length} expanded={expandedStep === 7} onExpand={() => selectStep(7)} stageStatus={stageStatuses[7]}>
+        <div className="mb-4 flex items-center justify-between gap-3 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-2.5 text-xs text-emerald-800">
+          <span>
+            <strong>{formatMoney(commerceRevenueCents / 100)}</strong> in Commerce product revenue this workspace — tracked separately from the CRM deals below.
+          </span>
+          <a href="#commerce" className="whitespace-nowrap font-semibold text-emerald-700 hover:underline">
+            View Commerce →
+          </a>
+        </div>
         <div className="grid gap-4 xl:grid-cols-2">
           {[{ label: "Open deals", rows: openDeals }, { label: "Closed won", rows: closedWon }].map((group) => (
             <div key={group.label} className="rounded-lg border border-slate-200 bg-slate-50 p-4">

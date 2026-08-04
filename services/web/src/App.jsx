@@ -26,8 +26,7 @@ import AutonomyControlCenter from "./pages/AutonomyControlCenter.jsx";
 import OrchestrationDashboard from "./pages/OrchestrationDashboardPage.jsx";
 import ProductionTelemetryPage from "./pages/ProductionTelemetryPage.jsx";
 import OperationsCommandCenter from "./pages/OperationsCommandCenter.jsx";
-import LinkedInPilotPage from "./pages/LinkedInPilotPage.jsx";
-import InstagramPilotPage from "./pages/InstagramPilotPage.jsx";
+import PublishingPage from "./pages/PublishingPage.jsx";
 import CommercePage from "./pages/CommercePage.jsx";
 import OutputQualityPage from "./pages/OutputQualityPage.jsx";
 import { api, setAppWorkspace } from "./api.js";
@@ -58,8 +57,7 @@ const PAGE_COMPONENTS = {
     "orchestration-dashboard": OrchestrationDashboard,
     "production-telemetry": ProductionTelemetryPage,
     "operations-command-center": OperationsCommandCenter,
-    "linkedin-pilot":             LinkedInPilotPage,
-    "instagram-pilot":            InstagramPilotPage,
+    "publishing":                 PublishingPage,
     "commerce":                   CommercePage,
     "output-quality":             OutputQualityPage,
 };

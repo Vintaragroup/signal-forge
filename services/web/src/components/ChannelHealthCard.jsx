@@ -3,8 +3,8 @@ import { safeRate, formatRate } from "../utils/telemetry";
 /**
  * ChannelHealthCard.jsx
  *
- * Shared per-channel success-rate breakdown used by LinkedInPilotPage.jsx
- * and InstagramPilotPage.jsx — previously two separately-implemented copies
+ * Shared per-channel success-rate breakdown used by PublishingPage.jsx's
+ * LinkedIn/Instagram tabs — previously two separately-implemented copies
  * that had already drifted (LinkedIn read a raw stats.success_rate field
  * with no zero-total guard and printed "NaN%"; Instagram computed its own
  * safe ratio). Both now go through the same safeRate()/formatRate() so this

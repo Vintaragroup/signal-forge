@@ -1,6 +1,6 @@
-// Shared null-safe rate math for the distribution telemetry pages
-// (LinkedInPilotPage.jsx, InstagramPilotPage.jsx). A zero-total channel has
-// no rate to report — never divide-by-zero into NaN and print "NaN%".
+// Shared null-safe rate math for the Publishing page's distribution telemetry.
+// A zero-total channel has no rate to report — never divide-by-zero into NaN
+// and print "NaN%".
 
 export function safeRate(numerator, denominator) {
   return denominator ? numerator / denominator : null;
