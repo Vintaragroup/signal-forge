@@ -57,6 +57,8 @@ export default function PipelinePage({ activeWorkspace }) {
   const [filters, setFilters] = useState(hashFilters);
   const [selected, setSelected] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [busyId, setBusyId] = useState("");
+  const [notice, setNotice] = useState("");
 
   async function load() {
     setLoading(true);
@@ -85,6 +87,21 @@ export default function PipelinePage({ activeWorkspace }) {
 
   function updateFilter(key, value) {
     setFilters((current) => ({ ...current, [key]: value }));
+  }
+
+  async function logDeal(item, payload) {
+    setBusyId(item._id);
+    setNotice("");
+    try {
+      await api.logDealOutcome({ target_type: item.type, target_id: item._id, ...payload });
+      await load();
+      setNotice(`Deal outcome logged: ${payload.outcome}.`);
+      setSelected((current) => (current?._id === item._id ? { ...current, deal_outcome: payload.outcome } : current));
+    } catch (error) {
+      setNotice(error.message);
+    } finally {
+      setBusyId("");
+    }
   }
 
   const rows = useMemo(() => {
@@ -192,8 +209,10 @@ export default function PipelinePage({ activeWorkspace }) {
           <h2 className="text-sm font-semibold text-slate-950">Campaign CRM</h2>
           <p className="mt-1 text-sm text-slate-500">
             Review imported contacts, scored segments, lead status, linked message state, and deal outcomes from one local-first view.
+            Leads are unvetted prospects surfaced by discovery; contacts are people you've directly verified or engaged with.
           </p>
         </div>
+        {notice ? <div className="mb-4 rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-800">{notice}</div> : null}
         <div className="relative flex-1">
           <Search className="pointer-events-none absolute left-3 top-2.5 h-4 w-4 text-slate-400" />
           <input
@@ -239,7 +258,7 @@ export default function PipelinePage({ activeWorkspace }) {
             : "No CRM records match these filters. Clear filters, import contacts, or run the lead pipeline to add records."
         }
       />
-      <DetailDrawer item={selected} messages={messages} deals={deals} onClose={() => setSelected(null)} />
+      <DetailDrawer item={selected} messages={messages} deals={deals} onClose={() => setSelected(null)} onLogDeal={logDeal} busyId={busyId} />
     </div>
   );
 }

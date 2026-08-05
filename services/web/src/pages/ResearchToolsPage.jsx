@@ -43,8 +43,6 @@ export default function ResearchToolsPage() {
   const [filterConverted, setFilterConverted] = useState("");
   const [notice, setNotice] = useState("");
   const [busyId, setBusyId] = useState("");
-  const [researchForm, setResearchForm] = useState({ query: "Austin roofing contractors", module: "contractor_growth", location: "Austin, TX", limit: 2 });
-  const [runningResearch, setRunningResearch] = useState(false);
   const [importForm, setImportForm] = useState({ module: "contractor_growth", source_label: "manual_upload", csv_path: "" });
   const [importFile, setImportFile] = useState(null);
   const [runningImport, setRunningImport] = useState(false);
@@ -177,22 +175,6 @@ export default function ResearchToolsPage() {
     }
   }
 
-  async function runResearch(event) {
-    event.preventDefault();
-    setRunningResearch(true);
-    setNotice("");
-    try {
-      const result = await api.runWebSearchTool({ ...researchForm, limit: Number(researchForm.limit) || 2 });
-      setNotice(`${result.message} Candidates created: ${(result.candidate_ids || []).length}.`);
-      setStatus("needs_review");
-      await loadData("needs_review", showDuplicates);
-    } catch (error) {
-      setNotice(error.message);
-    } finally {
-      setRunningResearch(false);
-    }
-  }
-
   async function importCandidates(event) {
     event.preventDefault();
     setRunningImport(true);
@@ -271,28 +253,6 @@ export default function ResearchToolsPage() {
       </section>
 
       {notice ? <div className="rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-800">{notice}</div> : null}
-
-      {/* Run Mock Research */}
-      <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
-        <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-          <div>
-            <h3 className="text-sm font-semibold text-slate-950">Run Mock Research</h3>
-            <p className="mt-1 text-xs text-slate-500">Creates read-only tool runs, candidates, artifacts, and approvals for operator review.</p>
-          </div>
-          <StatusBadge value="mock read only" />
-        </div>
-        <form onSubmit={runResearch} className="grid gap-3 lg:grid-cols-[1.5fr_1fr_1fr_0.4fr_auto]">
-          <input value={researchForm.query} onChange={(e) => setResearchForm((c) => ({ ...c, query: e.target.value }))} className="h-10 rounded-lg border border-slate-200 px-3 text-sm text-slate-800" placeholder="Search query" />
-          <select value={researchForm.module} onChange={(e) => setResearchForm((c) => ({ ...c, module: e.target.value }))} className="h-10 rounded-lg border border-slate-200 bg-white px-3 text-sm text-slate-800">
-            {MODULE_OPTIONS.filter(Boolean).map((m) => <option key={m} value={m}>{m}</option>)}
-          </select>
-          <input value={researchForm.location} onChange={(e) => setResearchForm((c) => ({ ...c, location: e.target.value }))} className="h-10 rounded-lg border border-slate-200 px-3 text-sm text-slate-800" placeholder="Location" />
-          <input type="number" min="1" max="25" value={researchForm.limit} onChange={(e) => setResearchForm((c) => ({ ...c, limit: e.target.value }))} className="h-10 rounded-lg border border-slate-200 px-3 text-sm text-slate-800" />
-          <button type="submit" disabled={runningResearch} className="inline-flex h-10 items-center justify-center gap-2 rounded-lg bg-slate-950 px-4 text-sm font-medium text-white transition hover:bg-blue-700 disabled:bg-slate-300">
-            <SearchCheck className="h-4 w-4" /> Run
-          </button>
-        </form>
-      </section>
 
       {/* Import CSV */}
       <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">

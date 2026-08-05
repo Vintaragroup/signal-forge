@@ -8,7 +8,6 @@ from tools.browser_scroll_tool import BrowserScrollTool
 from tools.contact_extraction_tool import extract_contact_fields
 from tools.manual_import_tool import ManualCandidateImportTool
 from tools.source_validator_tool import classify_source, score_source
-from tools.web_search_tool import WebSearchTool
 from tools.website_scraper_tool import WebsiteScraperTool
 
 
@@ -98,20 +97,6 @@ class FakeClient:
 def patch_database(monkeypatch, db):
     monkeypatch.setattr(main, "get_client", lambda: FakeClient())
     monkeypatch.setattr(main, "get_database", lambda _client: db)
-
-
-def test_mock_search_creates_review_candidates():
-    db = FakeDatabase()
-    result = WebSearchTool().run("roofing contractor", "contractor_growth", "Austin, TX", 2, db=db)
-
-    assert result["simulation_only"] is True
-    assert len(result["candidate_ids"]) == 2
-    assert len(db.tool_runs.documents) == 1
-    assert len(db.approval_requests.documents) == 2
-    assert len(db.agent_artifacts.documents) == 1
-    assert db.tool_runs.documents[0]["mode"] == "mock_read_only"
-    assert all(candidate["status"] == "needs_review" for candidate in db.scraped_candidates.documents)
-    assert all(candidate["outbound_actions_taken"] == 0 for candidate in db.scraped_candidates.documents)
 
 
 def test_website_scraper_parses_public_html_sample():

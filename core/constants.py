@@ -48,6 +48,19 @@ LEAD_STATUS_BY_OUTCOME = {
     "not_interested": "closed_lost",
 }
 
+# Shared between scripts/log_deal_outcome.py and the API's /deals/log-outcome
+# endpoint so a deal outcome maps to the same lead outreach_status regardless
+# of which one logged it.
+LEAD_OUTREACH_STATUS = {
+    "proposal_sent": "replied",
+    "negotiation": "replied",
+    "closed_won": "closed_won",
+    "closed_lost": "closed_lost",
+    "nurture": "follow_up_needed",
+    "no_show": "follow_up_needed",
+    "not_fit": "closed_lost",
+}
+
 DEAL_OUTCOMES = (
     "proposal_sent",
     "negotiation",

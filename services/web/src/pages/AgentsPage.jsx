@@ -116,11 +116,11 @@ export default function AgentsPage() {
     api.agentRunDetail(selectedRunId).then(setSelectedRun).catch(() => setSelectedRun(null));
   }, [selectedRunId]);
 
-  async function runAgent(agent, module, useTools = false) {
+  async function runAgent(agent, module) {
     setRunning(true);
     setNotice("");
     try {
-      const result = await api.runAgent({ agent, module, dry_run: true, limit: 10, use_tools: useTools });
+      const result = await api.runAgent({ agent, module, dry_run: true, limit: 10 });
       setNotice(`${result.message} Run ID: ${result.run?.run_id || result.result?.run_id}`);
       await loadRuns(result.run?.run_id || result.result?.run_id);
     } catch (error) {

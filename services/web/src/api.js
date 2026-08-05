@@ -3,6 +3,7 @@ import {
   approveDemoMessage,
   markDemoMessageSent,
   logDemoMessageResponse,
+  logDemoDealOutcome,
   demoItems,
   demoOverview,
   generateDemoSnippets,
@@ -98,6 +99,16 @@ export const api = {
           method: "POST",
           body: JSON.stringify(payload),
         }),
+  logDealOutcome: (payload) =>
+    isDemoModeEnabled()
+      ? Promise.resolve({
+          item: logDemoDealOutcome(payload.target_type, payload.target_id, payload.outcome, payload.deal_value, payload.note),
+          message: "Demo deal outcome logged. No invoice created. No CRM API called.",
+        })
+      : request("/deals/log-outcome", {
+          method: "POST",
+          body: JSON.stringify(payload),
+        }),
   approvalRequests: (params = {}) => request(`/approval-requests?${new URLSearchParams({ ...wsParam(), ...params })}`),
   decideApprovalRequest: (id, payload) =>
     request(`/approval-requests/${encodeURIComponent(id)}/decision`, {
@@ -116,11 +127,6 @@ export const api = {
       body: JSON.stringify(payload),
     }),
   toolRuns: (params = {}) => request(`/tool-runs?${new URLSearchParams({ ...wsParam(), ...params })}`),
-  runWebSearchTool: (payload) =>
-    request("/tools/web-search", {
-      method: "POST",
-      body: JSON.stringify(payload),
-    }),
   importCandidates: (formData) =>
     request("/tools/import-candidates", {
       method: "POST",

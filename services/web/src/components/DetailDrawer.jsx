@@ -1,5 +1,8 @@
+import { useEffect, useState } from "react";
 import { X } from "lucide-react";
 import StatusBadge from "./StatusBadge.jsx";
+
+const DEAL_OUTCOMES = ["proposal_sent", "negotiation", "closed_won", "closed_lost", "nurture", "no_show", "not_fit"];
 
 function Field({ label, value }) {
   return (
@@ -54,7 +57,17 @@ function sortedTimeline(item, linkedMessages, linkedDeals) {
     .sort((a, b) => String(b.timestamp || "").localeCompare(String(a.timestamp || "")));
 }
 
-export default function DetailDrawer({ item, messages = [], deals = [], onClose }) {
+export default function DetailDrawer({ item, messages = [], deals = [], onClose, onLogDeal, busyId }) {
+  const [dealOutcome, setDealOutcome] = useState("proposal_sent");
+  const [dealValue, setDealValue] = useState("");
+  const [dealNote, setDealNote] = useState("");
+
+  useEffect(() => {
+    setDealOutcome("proposal_sent");
+    setDealValue("");
+    setDealNote("");
+  }, [item?._id]);
+
   if (!item) return null;
 
   const linkedMessages = messages.filter(
@@ -147,6 +160,52 @@ export default function DetailDrawer({ item, messages = [], deals = [], onClose 
               {!linkedMessages.length ? <div className="text-sm text-slate-500">No linked messages.</div> : null}
             </div>
           </section>
+
+          {(item.type === "contact" || item.type === "lead") && onLogDeal ? (
+            <section className="mt-7">
+              <h3 className="text-sm font-semibold text-slate-950">Log Deal Outcome</h3>
+              <p className="mt-1 text-xs text-slate-500">Record a proposal, negotiation, or close. No invoice created, no CRM API called.</p>
+              <div className="mt-3 grid gap-3 lg:grid-cols-[auto_auto_1fr_auto]">
+                <select
+                  value={dealOutcome}
+                  onChange={(event) => setDealOutcome(event.target.value)}
+                  className="h-9 rounded-lg border border-slate-200 bg-white px-3 text-sm text-slate-700 outline-none transition focus:border-blue-300 focus:ring-2 focus:ring-blue-100"
+                >
+                  {DEAL_OUTCOMES.map((outcome) => (
+                    <option key={outcome} value={outcome}>{outcome.replaceAll("_", " ")}</option>
+                  ))}
+                </select>
+                <input
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  value={dealValue}
+                  onChange={(event) => setDealValue(event.target.value)}
+                  placeholder="Deal value"
+                  className="h-9 w-32 rounded-lg border border-slate-200 bg-white px-3 text-sm text-slate-700 outline-none transition focus:border-blue-300 focus:ring-2 focus:ring-blue-100"
+                />
+                <input
+                  type="text"
+                  value={dealNote}
+                  onChange={(event) => setDealNote(event.target.value)}
+                  placeholder="Optional note"
+                  className="h-9 rounded-lg border border-slate-200 bg-white px-3 text-sm text-slate-700 outline-none transition focus:border-blue-300 focus:ring-2 focus:ring-blue-100"
+                />
+                <button
+                  type="button"
+                  disabled={busyId === item._id}
+                  onClick={async () => {
+                    await onLogDeal(item, { outcome: dealOutcome, deal_value: dealValue === "" ? null : Number(dealValue), note: dealNote });
+                    setDealValue("");
+                    setDealNote("");
+                  }}
+                  className="inline-flex h-9 items-center gap-2 rounded-lg bg-blue-600 px-3 text-sm font-medium text-white transition hover:bg-blue-700 disabled:bg-slate-300"
+                >
+                  Log Outcome
+                </button>
+              </div>
+            </section>
+          ) : null}
 
           <section className="mt-7">
             <h3 className="text-sm font-semibold text-slate-950">Deals</h3>

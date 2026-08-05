@@ -2722,6 +2722,57 @@ export function logDemoMessageResponse(messageId, outcome, note = "") {
   return (state.messages || []).find((message) => message._id === messageId) || {};
 }
 
+const DEMO_LEAD_OUTREACH_STATUS = {
+  proposal_sent: "replied",
+  negotiation: "replied",
+  closed_won: "closed_won",
+  closed_lost: "closed_lost",
+  nurture: "follow_up_needed",
+  no_show: "follow_up_needed",
+  not_fit: "closed_lost",
+};
+
+export function logDemoDealOutcome(targetType, targetId, outcome, dealValue, note = "") {
+  const state = readState();
+  const loggedAt = nowIso();
+  const idField = targetType === "contact" ? "contact_id" : "lead_id";
+  const target = (targetType === "contact" ? state.contacts : state.leads).find((record) => record._id === targetId) || {};
+
+  state.deals = state.deals || [];
+  const existing = state.deals.find((deal) => deal[idField] === targetId);
+  const dealPatch = {
+    company: target.company || target.company_name || "",
+    person: target.name || target.company_name || "",
+    module: target.module || "contractor_growth",
+    source: target.source || "",
+    outcome,
+    deal_status: outcome,
+    deal_value: dealValue ?? null,
+    note,
+    updated_at: loggedAt,
+    [idField]: targetId,
+  };
+  if (existing) {
+    state.deals = state.deals.map((deal) => (deal[idField] === targetId ? { ...deal, ...dealPatch } : deal));
+  } else {
+    state.deals = [...state.deals, { _id: `demo-deal-${Date.now()}`, is_demo: true, created_at: loggedAt, ...dealPatch }];
+  }
+
+  if (targetType === "contact") {
+    state.contacts = state.contacts.map((contact) =>
+      contact._id === targetId ? { ...contact, contact_status: outcome, deal_outcome: outcome, updated_at: loggedAt } : contact,
+    );
+  } else {
+    const outreachStatus = DEMO_LEAD_OUTREACH_STATUS[outcome] || target.outreach_status;
+    state.leads = state.leads.map((lead) =>
+      lead._id === targetId ? { ...lead, outreach_status: outreachStatus, deal_outcome: outcome, updated_at: loggedAt } : lead,
+    );
+  }
+
+  writeState(state);
+  return state.deals.find((deal) => deal[idField] === targetId) || {};
+}
+
 export function reviewDemoSnippet(snippetId, decision, note = "") {
   const state = readState();
   const newStatus = decision === "approve" ? "approved" : decision === "reject" ? "rejected" : "needs_review";

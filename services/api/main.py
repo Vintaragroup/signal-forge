@@ -24,6 +24,8 @@ from core.constants import (
     RESPONSE_OUTCOMES,
     CONTACT_STATUS_BY_OUTCOME,
     LEAD_STATUS_BY_OUTCOME,
+    DEAL_OUTCOMES,
+    LEAD_OUTREACH_STATUS,
 )
 
 try:
@@ -112,12 +114,19 @@ class MessageResponseRequest(BaseModel):
     note: str = ""
 
 
+class DealLogRequest(BaseModel):
+    target_type: Literal["contact", "lead"]
+    target_id: str
+    outcome: Literal[DEAL_OUTCOMES]
+    deal_value: Optional[float] = None
+    note: str = ""
+
+
 class AgentRunRequest(BaseModel):
     agent: Literal["outreach", "content", "fan_engagement", "followup", "trend_discovery"]
     module: str
     dry_run: bool = True
     limit: int = 10
-    use_tools: bool = False
     workspace_slug: str = ""
 
 
@@ -146,13 +155,6 @@ class WorkflowAssetDistributionRequest(BaseModel):
 class ScrapedCandidateDecisionRequest(BaseModel):
     decision: Literal["approve", "reject", "convert_to_contact", "convert_to_lead"]
     note: str = ""
-
-
-class WebSearchToolRunRequest(BaseModel):
-    query: str
-    module: str = "contractor_growth"
-    location: str = ""
-    limit: int = Field(default=2, ge=1, le=25)
 
 
 class CandidateImportRequest(BaseModel):
@@ -1035,7 +1037,7 @@ def convert_approval_to_draft(db, request: dict, note: str, decided_at: datetime
     return "artifact_draft", create_artifact_draft_from_approval(db, request, note, decided_at)
 
 
-def instantiate_agent(agent_cls, *, module: str, dry_run: bool, mongo_uri: str, vault_path: Path, limit: int, use_tools: bool = False, workspace_slug: str = "", task_id: str | None = None):
+def instantiate_agent(agent_cls, *, module: str, dry_run: bool, mongo_uri: str, vault_path: Path, limit: int, workspace_slug: str = "", task_id: str | None = None):
     kwargs = {
         "module": module,
         "dry_run": dry_run,
@@ -1045,8 +1047,6 @@ def instantiate_agent(agent_cls, *, module: str, dry_run: bool, mongo_uri: str, 
     }
     try:
         parameters = inspect.signature(agent_cls).parameters
-        if "use_tools" in parameters:
-            kwargs["use_tools"] = use_tools
         if "workspace_slug" in parameters:
             kwargs["workspace_slug"] = workspace_slug
         if "task_id" in parameters:
@@ -1362,6 +1362,334 @@ def append_message_response_log(draft: dict, outcome: str, note: str, target_res
 
     with path.open("a", encoding="utf-8") as handle:
         handle.write(entry)
+
+
+def deal_display_name(context: dict) -> str:
+    contact = context.get("contact") or {}
+    lead = context.get("lead") or {}
+    draft = context.get("draft") or {}
+    meeting = context.get("meeting") or {}
+    return (
+        clean_text(contact.get("name"))
+        or clean_text(lead.get("company_name"))
+        or clean_text(draft.get("recipient_name"))
+        or clean_text(meeting.get("person"))
+        or clean_text(meeting.get("company"))
+        or "Deal"
+    )
+
+
+def deal_company_name(context: dict) -> str:
+    contact = context.get("contact") or {}
+    lead = context.get("lead") or {}
+    draft = context.get("draft") or {}
+    meeting = context.get("meeting") or {}
+    return (
+        clean_text(contact.get("company"))
+        or clean_text(lead.get("company_name"))
+        or clean_text(draft.get("company"))
+        or clean_text(meeting.get("company"))
+    )
+
+
+def deal_module_name(context: dict) -> str:
+    draft = context.get("draft") or {}
+    contact = context.get("contact") or {}
+    lead = context.get("lead") or {}
+    meeting = context.get("meeting") or {}
+    return (
+        clean_text(draft.get("module"))
+        or clean_text(contact.get("module"))
+        or clean_text(lead.get("module"))
+        or clean_text(meeting.get("module"))
+        or "contractor_growth"
+    )
+
+
+def deal_source_value(context: dict) -> str:
+    draft = context.get("draft") or {}
+    contact = context.get("contact") or {}
+    lead = context.get("lead") or {}
+    return clean_text(draft.get("source")) or clean_text(contact.get("source")) or clean_text(lead.get("source"))
+
+
+def deal_stable_target_key(context: dict) -> str:
+    contact = context.get("contact")
+    lead = context.get("lead")
+    draft = context.get("draft")
+    meeting = context.get("meeting") or {}
+    if contact:
+        return f"contact-{contact['_id']}"
+    if lead:
+        return f"lead-{lead['_id']}"
+    if draft:
+        return f"draft-{draft['_id']}"
+    return f"meeting-{slugify(meeting.get('meeting_note_path', deal_display_name(context)))}"
+
+
+def deal_key_for(context: dict) -> str:
+    return slugify(f"{deal_module_name(context)}-{deal_stable_target_key(context)}")
+
+
+def deal_note_path_for(context: dict) -> str:
+    return f"deals/{deal_key_for(context)}.md"
+
+
+def deal_target_ids(context: dict) -> dict:
+    contact = context.get("contact")
+    lead = context.get("lead")
+    draft = context.get("draft")
+    return {
+        "contact_id": contact["_id"] if contact else None,
+        "lead_id": lead["_id"] if lead else None,
+        "message_draft_id": draft["_id"] if draft else None,
+    }
+
+
+def deal_path_to_conversion(context: dict, outcome: str) -> list[str]:
+    draft = context.get("draft") or {}
+    contact = context.get("contact") or {}
+    lead = context.get("lead") or {}
+    meeting = context.get("meeting") or {}
+    path = []
+    source = deal_source_value(context)
+    if source:
+        path.append(f"Source captured: {source}")
+    if contact:
+        path.append(f"Contact status: {contact.get('contact_status', 'unknown')}")
+    if lead:
+        path.append(f"Lead review/outreach: {lead.get('review_status', '-')}/{lead.get('outreach_status', '-')}")
+    if draft:
+        path.append(
+            f"Message lifecycle: review={draft.get('review_status', '-')}, send={draft.get('send_status', '-')}, response={draft.get('response_status', '-')}"
+        )
+    if meeting.get("meeting_note_path"):
+        path.append(f"Meeting prep created: {meeting['meeting_note_path']}")
+    path.append(f"Deal outcome logged: {outcome}")
+    return path
+
+
+def deal_recommended_offer(context: dict) -> str:
+    draft = context.get("draft") or {}
+    contact = context.get("contact") or {}
+    lead = context.get("lead") or {}
+    return (
+        clean_text(draft.get("recommended_action"))
+        or clean_text(contact.get("recommended_action"))
+        or clean_text(lead.get("recommended_offer"))
+        or clean_text(lead.get("next_action"))
+        or "Define the next commercial step with the operator."
+    )
+
+
+def deal_next_onboarding_action(context: dict) -> str:
+    return (
+        "Create an onboarding checklist, confirm owner and timeline, collect required access/context, "
+        "and schedule the first delivery checkpoint manually."
+    )
+
+
+def deal_future_nurture_recommendation(note: str) -> str:
+    if note:
+        return f"Keep this account in a low-frequency nurture track and reference the loss reason: {note}"
+    return "Keep this account in a low-frequency nurture track and revisit when fit, timing, or need changes."
+
+
+def deal_event_for(outcome: str, deal_value: float | None, note: str, logged_at: datetime) -> dict:
+    return {
+        "outcome": outcome,
+        "deal_value": deal_value,
+        "note": note,
+        "logged_at": logged_at,
+    }
+
+
+def upsert_deal(db, context: dict, outcome: str, deal_value: float | None, note: str, logged_at: datetime, note_path: str):
+    key = deal_key_for(context)
+    ids = deal_target_ids(context)
+    update = {
+        "deal_key": key,
+        "module": deal_module_name(context),
+        "source": deal_source_value(context),
+        "person": deal_display_name(context),
+        "company": deal_company_name(context),
+        "outcome": outcome,
+        "deal_status": outcome,
+        "deal_value": deal_value,
+        "note": note,
+        "deal_note_path": note_path,
+        "path_to_conversion": deal_path_to_conversion(context, outcome),
+        "recommended_offer": deal_recommended_offer(context),
+        "updated_at": logged_at,
+        **ids,
+    }
+    if outcome == "closed_won":
+        update["next_onboarding_action"] = deal_next_onboarding_action(context)
+    if outcome == "closed_lost":
+        update["loss_reason_note"] = note
+        update["future_nurture_recommendation"] = deal_future_nurture_recommendation(note)
+
+    result = db.deals.update_one(
+        {"deal_key": key},
+        {
+            "$set": update,
+            "$setOnInsert": {"created_at": logged_at},
+            "$push": {"deal_events": deal_event_for(outcome, deal_value, note, logged_at)},
+        },
+        upsert=True,
+    )
+    if result.upserted_id:
+        return result.upserted_id
+    deal = db.deals.find_one({"deal_key": key}, {"_id": 1})
+    return deal["_id"]
+
+
+def deal_update_linked_records(db, context: dict, deal_id, outcome: str, deal_value: float | None, note: str, logged_at: datetime, note_path: str) -> None:
+    event = {
+        "deal_id": deal_id,
+        "outcome": outcome,
+        "deal_value": deal_value,
+        "note": note,
+        "logged_at": logged_at,
+        "deal_note_path": note_path,
+    }
+    common_set = {
+        "deal_outcome": outcome,
+        "deal_status": outcome,
+        "deal_value": deal_value,
+        "latest_deal_id": deal_id,
+        "latest_deal_note_path": note_path,
+        "updated_at": logged_at,
+    }
+
+    contact = context.get("contact")
+    if contact:
+        db.contacts.update_one(
+            {"_id": contact["_id"]},
+            {
+                "$set": {**common_set, "contact_status": outcome},
+                "$push": {"deal_lifecycle": event},
+            },
+        )
+
+    lead = context.get("lead")
+    if lead:
+        outreach_status = LEAD_OUTREACH_STATUS.get(outcome, lead.get("outreach_status"))
+        db.leads.update_one(
+            {"_id": lead["_id"]},
+            {
+                "$set": {**common_set, "outreach_status": outreach_status, "outreach_status_updated_at": logged_at},
+                "$push": {"deal_lifecycle": event, "outreach_lifecycle": {"status": outreach_status, **event}},
+            },
+        )
+
+    draft = context.get("draft")
+    if draft:
+        db.message_drafts.update_one(
+            {"_id": draft["_id"]},
+            {
+                "$set": common_set,
+                "$push": {"deal_events": event},
+            },
+        )
+
+
+def deal_money_text(value: float | None) -> str:
+    if value is None:
+        return "Not provided"
+    return f"${value:,.2f}"
+
+
+def deal_table_text(value) -> str:
+    text = clean_text(value) or "-"
+    return text.replace("|", "\\|").replace("\n", " ")
+
+
+def deal_note_content(context: dict, deal_id, outcome: str, deal_value: float | None, note: str, logged_at: datetime) -> str:
+    conversion = "\n".join(f"- {item}" for item in deal_path_to_conversion(context, outcome))
+    closed_won = ""
+    if outcome == "closed_won":
+        closed_won = f"""
+
+## Closed Won Details
+
+- Source: {deal_source_value(context) or "Not available"}
+- Module: `{deal_module_name(context)}`
+- Deal value: {deal_money_text(deal_value)}
+
+## Path To Conversion
+
+{conversion}
+
+## Next Onboarding Action
+
+{deal_next_onboarding_action(context)}
+"""
+
+    closed_lost = ""
+    if outcome == "closed_lost":
+        closed_lost = f"""
+
+## Closed Lost Details
+
+## Loss Reason Note
+
+{note or "No loss reason note provided."}
+
+## Future Nurture Recommendation
+
+{deal_future_nurture_recommendation(note)}
+"""
+
+    return f"""---
+type: deal
+deal_key: {deal_key_for(context)}
+module: {deal_module_name(context)}
+outcome: {outcome}
+updated: {logged_at.date().isoformat()}
+---
+
+# Deal: {deal_company_name(context) or deal_display_name(context)}
+
+## Summary
+
+| Field | Value |
+| --- | --- |
+| Deal ID | {deal_id} |
+| Outcome | `{outcome}` |
+| Deal value | {deal_money_text(deal_value)} |
+| Person | {deal_table_text(deal_display_name(context))} |
+| Company | {deal_table_text(deal_company_name(context))} |
+| Module | `{deal_module_name(context)}` |
+| Source | {deal_table_text(deal_source_value(context))} |
+| Message draft | {deal_table_text((context.get("draft") or {}).get("message_note_path"))} |
+
+## Recommended Offer
+
+{deal_recommended_offer(context)}
+
+## Latest Outcome Note
+
+{note or "No note provided."}
+
+## Path To Conversion
+
+{conversion}
+{closed_won}{closed_lost}
+## Safety
+
+- No message sent.
+- No invoice created.
+- No CRM API called.
+"""
+
+
+def write_deal_note(context: dict, deal_id, outcome: str, deal_value: float | None, note: str, logged_at: datetime) -> str:
+    relative_path = deal_note_path_for(context)
+    path = vault_path() / relative_path
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(deal_note_content(context, deal_id, outcome, deal_value, note, logged_at), encoding="utf-8")
+    return relative_path
 
 
 def dashboard_tasks(leads: list[dict], contacts: list[dict], messages: list[dict], deals: list[dict]) -> list[dict]:
@@ -1942,6 +2270,47 @@ def respond_to_message(message_id: str, payload: MessageResponseRequest) -> dict
         client.close()
 
 
+@app.post("/deals/log-outcome")
+def log_deal_outcome(payload: DealLogRequest) -> dict:
+    client = get_client()
+    logged_at = utc_now()
+    try:
+        db = get_database(client)
+        if not is_object_id(payload.target_id):
+            raise HTTPException(status_code=400, detail="Invalid target_id.")
+        object_id = ObjectId(payload.target_id)
+
+        contact = None
+        lead = None
+        if payload.target_type == "contact":
+            contact = db.contacts.find_one({"_id": object_id})
+            if not contact:
+                raise HTTPException(status_code=404, detail="Contact not found.")
+        else:
+            lead = db.leads.find_one({"_id": object_id})
+            if not lead:
+                raise HTTPException(status_code=404, detail="Lead not found.")
+
+        draft = db.message_drafts.find_one(
+            {"target_type": payload.target_type, "target_id": str(payload.target_id)},
+            sort=[("updated_at", -1), ("created_at", -1)],
+        )
+        context = {"contact": contact, "lead": lead, "draft": draft or {}, "meeting": {}}
+
+        note_path = deal_note_path_for(context)
+        deal_id = upsert_deal(db, context, payload.outcome, payload.deal_value, payload.note, logged_at, note_path)
+        deal_update_linked_records(db, context, deal_id, payload.outcome, payload.deal_value, payload.note, logged_at, note_path)
+        write_deal_note(context, deal_id, payload.outcome, payload.deal_value, payload.note, logged_at)
+
+        updated = db.deals.find_one({"_id": deal_id})
+        return {
+            "item": serialize(updated),
+            "message": f"Deal outcome logged: {payload.outcome}. No message sent. No invoice created. No CRM API called.",
+        }
+    finally:
+        client.close()
+
+
 @app.get("/approval-requests")
 def approval_requests(
     status: str = "open",
@@ -2220,21 +2589,6 @@ def tool_runs(limit: int = Query(100, ge=1, le=500), status: str = "", agent_run
         items = list(db.tool_runs.find(query).sort([("created_at", -1)]).limit(limit))
         items = apply_real_mode_filters(items, workspace_slug=workspace_slug, include_legacy=include_legacy, include_test=include_test)
         return {"items": serialize(items), "count": len(items), "simulation_only": True}
-    finally:
-        client.close()
-
-
-@app.post("/tools/web-search")
-def run_web_search_tool(payload: WebSearchToolRunRequest) -> dict:
-    if payload.module not in VALID_MODULES:
-        raise HTTPException(status_code=400, detail="Unsupported module.")
-    from tools.web_search_tool import WebSearchTool
-
-    client = get_client()
-    try:
-        db = get_database(client)
-        result = WebSearchTool().run(payload.query, payload.module, payload.location, payload.limit, db=db)
-        return serialize({**result, "message": "Mock research completed. No outbound action taken."})
     finally:
         client.close()
 
@@ -3177,7 +3531,6 @@ def run_agent_task(task_id: str) -> dict:
                 mongo_uri=mongo_uri(),
                 vault_path=vault_path(),
                 limit=max(1, min(limit, 50)),
-                use_tools=bool((task.get("input_config") or {}).get("use_tools")),
                 workspace_slug=clean_text(task.get("workspace_slug") or ""),
                 task_id=str(task["_id"]),
             )
@@ -3555,7 +3908,6 @@ def run_agent(payload: AgentRunRequest) -> dict:
             mongo_uri=mongo_uri(),
             vault_path=vault_path(),
             limit=max(1, min(payload.limit, 50)),
-            use_tools=payload.use_tools,
             workspace_slug=payload.workspace_slug,
         )
         result = agent.run()

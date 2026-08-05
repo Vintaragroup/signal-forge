@@ -11,19 +11,12 @@ if str(API_DIR) not in sys.path:
 
 from main import get_client, get_database
 from tools.browser_scroll_tool import BrowserScrollTool
-from tools.web_search_tool import WebSearchTool
 from tools.website_scraper_tool import WebsiteScraperTool
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Run safe SignalForge research tools in review-only mode.")
     subparsers = parser.add_subparsers(dest="tool", required=True)
-
-    search_parser = subparsers.add_parser("web_search", help="Run mock web search and create review candidates.")
-    search_parser.add_argument("--query", required=True)
-    search_parser.add_argument("--module", default="contractor_growth")
-    search_parser.add_argument("--location", default="")
-    search_parser.add_argument("--limit", type=int, default=5)
 
     scraper_parser = subparsers.add_parser("website_scraper", help="Fetch a public website and create a review candidate.")
     scraper_parser.add_argument("--url", required=True)
@@ -36,8 +29,6 @@ def main() -> None:
     client = get_client()
     try:
         db = get_database(client)
-        if args.tool == "web_search":
-            result = WebSearchTool().run(args.query, args.module, args.location, args.limit, db=db)
         if args.tool == "website_scraper":
             result = WebsiteScraperTool().run(args.url, db=db)
         if args.tool == "browser_scroll":
