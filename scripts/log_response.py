@@ -7,27 +7,13 @@ from pathlib import Path
 from bson import ObjectId
 from pymongo import MongoClient
 
-from core.constants import RESPONSE_OUTCOMES
+from core.constants import RESPONSE_OUTCOMES, CONTACT_STATUS_BY_OUTCOME, LEAD_STATUS_BY_OUTCOME
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_VAULT_PATH = PROJECT_ROOT / "vault"
 DEFAULT_MONGO_URI = "mongodb://localhost:27017/signalforge"
 VALID_OUTCOMES = RESPONSE_OUTCOMES
-
-CONTACT_STATUS_BY_OUTCOME = {
-    "interested": "interested",
-    "not_interested": "not_interested",
-    "call_booked": "call_booked",
-    "do_not_contact": "do_not_contact",
-    "bounced": "invalid",
-}
-
-LEAD_STATUS_BY_OUTCOME = {
-    "interested": "replied",
-    "call_booked": "booked_call",
-    "not_interested": "closed_lost",
-}
 
 
 def parse_args() -> argparse.Namespace:

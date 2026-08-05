@@ -31,6 +31,23 @@ RESPONSE_OUTCOMES = (
     "do_not_contact",
 )
 
+# Shared between scripts/log_response.py and the API's /messages/{id}/response
+# endpoint so a response outcome maps to the same contact/lead status
+# regardless of which one logged it.
+CONTACT_STATUS_BY_OUTCOME = {
+    "interested": "interested",
+    "not_interested": "not_interested",
+    "call_booked": "call_booked",
+    "do_not_contact": "do_not_contact",
+    "bounced": "invalid",
+}
+
+LEAD_STATUS_BY_OUTCOME = {
+    "interested": "replied",
+    "call_booked": "booked_call",
+    "not_interested": "closed_lost",
+}
+
 DEAL_OUTCOMES = (
     "proposal_sent",
     "negotiation",

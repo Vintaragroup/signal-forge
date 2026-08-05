@@ -54,7 +54,15 @@ function shortId(value) {
   return value ? String(value).slice(0, 8) : "-";
 }
 
-function MessageDetailDrawer({ message, onClose, onReview, busyId }) {
+const SEND_CHANNELS = ["email", "phone", "sms", "dm", "social_comment", "other"];
+const RESPONSE_OUTCOMES = ["no_response", "interested", "not_interested", "call_booked", "requested_info", "wrong_contact", "bounced", "do_not_contact"];
+
+function MessageDetailDrawer({ message, onClose, onReview, onMarkSent, onLogResponse, busyId }) {
+  const [sendChannel, setSendChannel] = useState("email");
+  const [sendNote, setSendNote] = useState("");
+  const [responseOutcome, setResponseOutcome] = useState("interested");
+  const [responseNote, setResponseNote] = useState("");
+
   if (!message) return null;
 
   const linkedContact = message.linked_contact;
@@ -62,6 +70,8 @@ function MessageDetailDrawer({ message, onClose, onReview, busyId }) {
   const linkedDeal = message.linked_deal;
   const timeline = message.timeline || [];
   const responseEvents = message.response_events || [];
+  const canMarkSent = message.review_status === "approved" && message.send_status !== "sent";
+  const canLogResponse = message.send_status === "sent";
 
   return (
     <div className="fixed inset-y-0 right-0 z-40 w-full max-w-2xl border-l border-slate-200 bg-white shadow-soft">
@@ -165,6 +175,39 @@ function MessageDetailDrawer({ message, onClose, onReview, busyId }) {
             </div>
           </section>
 
+          {canMarkSent ? (
+            <section className="mt-6">
+              <h3 className="text-sm font-semibold text-slate-950">Send Actions</h3>
+              <p className="mt-1 text-xs text-slate-500">Log that you sent this manually outside SignalForge. This does not send anything.</p>
+              <div className="mt-3 grid gap-3 lg:grid-cols-[auto_1fr_auto]">
+                <select
+                  value={sendChannel}
+                  onChange={(event) => setSendChannel(event.target.value)}
+                  className="h-9 rounded-lg border border-slate-200 bg-white px-3 text-sm text-slate-700 outline-none transition focus:border-blue-300 focus:ring-2 focus:ring-blue-100"
+                >
+                  {SEND_CHANNELS.map((channel) => (
+                    <option key={channel} value={channel}>{channel.replaceAll("_", " ")}</option>
+                  ))}
+                </select>
+                <input
+                  type="text"
+                  value={sendNote}
+                  onChange={(event) => setSendNote(event.target.value)}
+                  placeholder="Optional note"
+                  className="h-9 rounded-lg border border-slate-200 bg-white px-3 text-sm text-slate-700 outline-none transition focus:border-blue-300 focus:ring-2 focus:ring-blue-100"
+                />
+                <button
+                  type="button"
+                  disabled={busyId === message._id}
+                  onClick={() => onMarkSent(message, sendChannel, sendNote)}
+                  className="inline-flex h-9 items-center gap-2 rounded-lg bg-blue-600 px-3 text-sm font-medium text-white transition hover:bg-blue-700 disabled:bg-slate-300"
+                >
+                  Mark as Sent
+                </button>
+              </div>
+            </section>
+          ) : null}
+
           <section className="mt-6">
             <h3 className="text-sm font-semibold text-slate-950">Approval / Send / Response Timeline</h3>
             <div className="mt-3 space-y-3">
@@ -183,6 +226,39 @@ function MessageDetailDrawer({ message, onClose, onReview, busyId }) {
               {!timeline.length ? <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm text-slate-500">No timeline events yet.</div> : null}
             </div>
           </section>
+
+          {canLogResponse ? (
+            <section className="mt-6">
+              <h3 className="text-sm font-semibold text-slate-950">Log Response</h3>
+              <p className="mt-1 text-xs text-slate-500">Record what happened after the manual send. No message is sent from here.</p>
+              <div className="mt-3 grid gap-3 lg:grid-cols-[auto_1fr_auto]">
+                <select
+                  value={responseOutcome}
+                  onChange={(event) => setResponseOutcome(event.target.value)}
+                  className="h-9 rounded-lg border border-slate-200 bg-white px-3 text-sm text-slate-700 outline-none transition focus:border-blue-300 focus:ring-2 focus:ring-blue-100"
+                >
+                  {RESPONSE_OUTCOMES.map((outcome) => (
+                    <option key={outcome} value={outcome}>{outcome.replaceAll("_", " ")}</option>
+                  ))}
+                </select>
+                <input
+                  type="text"
+                  value={responseNote}
+                  onChange={(event) => setResponseNote(event.target.value)}
+                  placeholder="Optional note"
+                  className="h-9 rounded-lg border border-slate-200 bg-white px-3 text-sm text-slate-700 outline-none transition focus:border-blue-300 focus:ring-2 focus:ring-blue-100"
+                />
+                <button
+                  type="button"
+                  disabled={busyId === message._id}
+                  onClick={() => onLogResponse(message, responseOutcome, responseNote)}
+                  className="inline-flex h-9 items-center gap-2 rounded-lg bg-blue-600 px-3 text-sm font-medium text-white transition hover:bg-blue-700 disabled:bg-slate-300"
+                >
+                  Log Response
+                </button>
+              </div>
+            </section>
+          ) : null}
 
           <section className="mt-6">
             <h3 className="text-sm font-semibold text-slate-950">Response History</h3>
@@ -248,6 +324,36 @@ export default function MessagesPage() {
       await load();
       setNotice(`Saved ${decision}. No message sent.`);
       setSelected((current) => (current?._id === message._id ? { ...current, review_status: decision === "approve" ? "approved" : decision === "reject" ? "rejected" : "needs_revision" } : current));
+    } catch (error) {
+      setNotice(error.message);
+    } finally {
+      setBusyId("");
+    }
+  }
+
+  async function markSent(message, channel, note) {
+    setBusyId(message._id);
+    setNotice("");
+    try {
+      await api.markMessageSent(message._id, { channel, note });
+      await load();
+      setNotice("Send logged. SignalForge did not send this message.");
+      setSelected((current) => (current?._id === message._id ? { ...current, send_status: "sent" } : current));
+    } catch (error) {
+      setNotice(error.message);
+    } finally {
+      setBusyId("");
+    }
+  }
+
+  async function logResponse(message, outcome, note) {
+    setBusyId(message._id);
+    setNotice("");
+    try {
+      await api.logMessageResponse(message._id, { outcome, note });
+      await load();
+      setNotice(`Response logged: ${outcome}.`);
+      setSelected((current) => (current?._id === message._id ? { ...current, response_status: outcome } : current));
     } catch (error) {
       setNotice(error.message);
     } finally {
@@ -451,7 +557,7 @@ export default function MessagesPage() {
         onRowClick={setSelected}
         emptyLabel="No message drafts match these filters. Draft messages from scored contacts or approved leads to populate this queue."
       />
-      <MessageDetailDrawer message={selected} onClose={() => setSelected(null)} onReview={review} busyId={busyId} />
+      <MessageDetailDrawer message={selected} onClose={() => setSelected(null)} onReview={review} onMarkSent={markSent} onLogResponse={logResponse} busyId={busyId} />
     </div>
   );
 }

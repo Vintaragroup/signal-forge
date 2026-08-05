@@ -2685,6 +2685,43 @@ export function approveDemoMessage(messageId) {
   return writeState(state);
 }
 
+export function markDemoMessageSent(messageId, channel, note = "") {
+  const state = readState();
+  const sentAt = nowIso();
+  state.messages = state.messages.map((message) =>
+    message._id === messageId
+      ? {
+          ...message,
+          send_status: "sent",
+          sent_at: sentAt,
+          send_channel: channel,
+          send_note: note,
+          updated_at: sentAt,
+        }
+      : message,
+  );
+  writeState(state);
+  return (state.messages || []).find((message) => message._id === messageId) || {};
+}
+
+export function logDemoMessageResponse(messageId, outcome, note = "") {
+  const state = readState();
+  const respondedAt = nowIso();
+  state.messages = state.messages.map((message) =>
+    message._id === messageId
+      ? {
+          ...message,
+          response_status: outcome,
+          response_note: note,
+          responded_at: respondedAt,
+          updated_at: respondedAt,
+        }
+      : message,
+  );
+  writeState(state);
+  return (state.messages || []).find((message) => message._id === messageId) || {};
+}
+
 export function reviewDemoSnippet(snippetId, decision, note = "") {
   const state = readState();
   const newStatus = decision === "approve" ? "approved" : decision === "reject" ? "rejected" : "needs_review";

@@ -1,6 +1,8 @@
 import {
   approveDemoContentDraft,
   approveDemoMessage,
+  markDemoMessageSent,
+  logDemoMessageResponse,
   demoItems,
   demoOverview,
   generateDemoSnippets,
@@ -79,6 +81,20 @@ export const api = {
     isDemoModeEnabled()
       ? Promise.resolve({ item: approveDemoMessage(id), message: "Demo approval saved. No message sent." })
       : request(`/messages/${encodeURIComponent(id)}/review`, {
+          method: "POST",
+          body: JSON.stringify(payload),
+        }),
+  markMessageSent: (id, payload) =>
+    isDemoModeEnabled()
+      ? Promise.resolve({ item: markDemoMessageSent(id, payload.channel, payload.note), message: "Demo send logged. SignalForge did not send this message." })
+      : request(`/messages/${encodeURIComponent(id)}/send`, {
+          method: "POST",
+          body: JSON.stringify(payload),
+        }),
+  logMessageResponse: (id, payload) =>
+    isDemoModeEnabled()
+      ? Promise.resolve({ item: logDemoMessageResponse(id, payload.outcome, payload.note), message: "Demo response logged. No message sent." })
+      : request(`/messages/${encodeURIComponent(id)}/response`, {
           method: "POST",
           body: JSON.stringify(payload),
         }),

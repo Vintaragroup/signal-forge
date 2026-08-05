@@ -16,7 +16,15 @@ from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 from pydantic import BaseModel, Field
 from pymongo import MongoClient
 
-from core.constants import MESSAGE_REVIEW_DECISIONS, OPEN_DEAL_OUTCOMES, VALID_MODULES
+from core.constants import (
+    MESSAGE_REVIEW_DECISIONS,
+    OPEN_DEAL_OUTCOMES,
+    VALID_MODULES,
+    MANUAL_SEND_CHANNELS,
+    RESPONSE_OUTCOMES,
+    CONTACT_STATUS_BY_OUTCOME,
+    LEAD_STATUS_BY_OUTCOME,
+)
 
 try:
     from prompt_generator import (
@@ -91,6 +99,16 @@ AGENT_TASK_PRIORITY_ORDER = {"high": 3, "normal": 2, "low": 1}
 
 class MessageReviewRequest(BaseModel):
     decision: Literal["approve", "reject", "revise"]
+    note: str = ""
+
+
+class MessageSendRequest(BaseModel):
+    channel: Literal[MANUAL_SEND_CHANNELS] = "other"
+    note: str = ""
+
+
+class MessageResponseRequest(BaseModel):
+    outcome: Literal[RESPONSE_OUTCOMES]
     note: str = ""
 
 
@@ -1149,6 +1167,203 @@ def append_message_review_log(draft: dict, decision: str, note: str, reviewed_at
         handle.write(entry)
 
 
+def send_target_result(db, draft: dict, channel: str, note: str, sent_at: datetime) -> str:
+    target_type = draft.get("target_type")
+    target_id = draft.get("target_id")
+    if not target_id or not is_object_id(str(target_id)):
+        return "No linked target updated; draft target_id is missing or invalid."
+
+    object_id = ObjectId(str(target_id))
+    if target_type == "lead":
+        event = {"status": "sent", "note": note, "channel": channel, "created_at": sent_at, "message_draft_id": draft["_id"]}
+        result = db.leads.update_one(
+            {"_id": object_id},
+            {
+                "$set": {
+                    "outreach_status": "sent",
+                    "outreach_status_updated_at": sent_at,
+                    "outreach_status_note": note,
+                    "latest_message_draft_id": draft["_id"],
+                    "updated_at": sent_at,
+                },
+                "$push": {"outreach_lifecycle": event},
+            },
+        )
+        return "Linked lead outreach_status set to sent." if result.matched_count else "Linked lead not found."
+
+    if target_type == "contact":
+        event = {"status": "contacted", "note": note, "channel": channel, "created_at": sent_at, "message_draft_id": draft["_id"]}
+        result = db.contacts.update_one(
+            {"_id": object_id},
+            {
+                "$set": {
+                    "contact_status": "contacted",
+                    "contacted_at": sent_at,
+                    "contact_channel": channel,
+                    "contact_note": note,
+                    "latest_message_draft_id": draft["_id"],
+                    "updated_at": sent_at,
+                },
+                "$push": {"contact_lifecycle": event},
+            },
+        )
+        return "Linked contact contact_status set to contacted." if result.matched_count else "Linked contact not found."
+
+    return f"No linked target updated; unsupported target_type={target_type}."
+
+
+def append_message_send_log(draft: dict, channel: str, note: str, target_result: str, sent_at: datetime) -> None:
+    relative_path = draft.get("message_note_path")
+    if not relative_path:
+        return
+
+    path = vault_path() / relative_path
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if not path.exists():
+        path.write_text(f"# Message Draft: {draft.get('recipient_name', 'Unknown')}\n", encoding="utf-8")
+
+    note_line = f"- Note: {note}\n" if note else ""
+    entry = f"""
+
+## Send Log
+
+### {sent_at.isoformat()}
+
+- Send status: sent
+- Channel: {channel}
+- Draft ID: {draft["_id"]}
+- Recipient: {draft.get("recipient_name", "")}
+- Target type: {draft.get("target_type", "")}
+- Linked target update: {target_result}
+{note_line}- Logged from Web Dashboard v1.
+- SignalForge did not send this message.
+"""
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(entry)
+
+
+def response_target_result(db, draft: dict, outcome: str, note: str, responded_at: datetime) -> str:
+    target_type = draft.get("target_type")
+    target_id = draft.get("target_id")
+    if not target_id or not is_object_id(str(target_id)):
+        return "No linked target updated; draft target_id is missing or invalid."
+
+    object_id = ObjectId(str(target_id))
+    if target_type == "contact":
+        contact_status = CONTACT_STATUS_BY_OUTCOME.get(outcome)
+        if not contact_status:
+            return f"No contact status mapping for outcome={outcome}; contact left unchanged."
+
+        event = {"status": contact_status, "outcome": outcome, "note": note, "created_at": responded_at, "message_draft_id": draft["_id"]}
+        result = db.contacts.update_one(
+            {"_id": object_id},
+            {
+                "$set": {
+                    "contact_status": contact_status,
+                    "response_status": outcome,
+                    "response_note": note,
+                    "responded_at": responded_at,
+                    "latest_message_draft_id": draft["_id"],
+                    "updated_at": responded_at,
+                },
+                "$push": {"contact_lifecycle": event},
+            },
+        )
+        return f"Linked contact contact_status set to {contact_status}." if result.matched_count else "Linked contact not found."
+
+    if target_type == "lead":
+        outreach_status = LEAD_STATUS_BY_OUTCOME.get(outcome)
+        if not outreach_status:
+            return f"No lead outreach_status mapping for outcome={outcome}; lead left unchanged."
+
+        event = {"status": outreach_status, "outcome": outcome, "note": note, "created_at": responded_at, "message_draft_id": draft["_id"]}
+        result = db.leads.update_one(
+            {"_id": object_id},
+            {
+                "$set": {
+                    "outreach_status": outreach_status,
+                    "outreach_status_updated_at": responded_at,
+                    "outreach_status_note": note,
+                    "response_status": outcome,
+                    "latest_message_draft_id": draft["_id"],
+                    "updated_at": responded_at,
+                },
+                "$push": {"outreach_lifecycle": event},
+            },
+        )
+        return f"Linked lead outreach_status set to {outreach_status}." if result.matched_count else "Linked lead not found."
+
+    return f"No linked target updated; unsupported target_type={target_type}."
+
+
+def build_meeting_prep(draft: dict, note: str, responded_at: datetime) -> str:
+    return f"""
+
+## Meeting Prep
+
+### {responded_at.isoformat()}
+
+## Objective
+
+Prepare for a human-led follow-up conversation with {draft.get("recipient_name", "the recipient")}.
+
+## Context
+
+- Module: {draft.get("module", "")}
+- Target type: {draft.get("target_type", "")}
+- Company: {draft.get("company", "")}
+- Subject line: {draft.get("subject_line", "")}
+- Response note: {note or "Call booked from response logging."}
+
+## Questions To Prepare
+
+- What problem or opportunity did the recipient respond to?
+- What context should be verified before the conversation?
+- What offer or next step should be discussed?
+- What outcome should be logged after the call?
+
+## Checklist
+
+- [ ] Review the original message draft.
+- [ ] Review contact or lead context in Mongo/vault notes.
+- [ ] Prepare a short agenda.
+- [ ] Log the call outcome after the meeting.
+"""
+
+
+def append_message_response_log(draft: dict, outcome: str, note: str, target_result: str, responded_at: datetime) -> None:
+    relative_path = draft.get("message_note_path")
+    if not relative_path:
+        return
+
+    path = vault_path() / relative_path
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if not path.exists():
+        path.write_text(f"# Message Draft: {draft.get('recipient_name', 'Unknown')}\n", encoding="utf-8")
+
+    note_line = f"- Note: {note}\n" if note else ""
+    entry = f"""
+
+## Response Log
+
+### {responded_at.isoformat()}
+
+- Outcome: {outcome}
+- Response status: {outcome}
+- Draft ID: {draft["_id"]}
+- Recipient: {draft.get("recipient_name", "")}
+- Target type: {draft.get("target_type", "")}
+- Linked target update: {target_result}
+{note_line}- Logged from Web Dashboard v1.
+- No message sent. No calendar event created.
+"""
+    if outcome == "call_booked":
+        entry += build_meeting_prep(draft, note, responded_at)
+
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(entry)
+
+
 def dashboard_tasks(leads: list[dict], contacts: list[dict], messages: list[dict], deals: list[dict]) -> list[dict]:
     tasks = []
     needs_review = sum(1 for message in messages if message.get("review_status") == "needs_review")
@@ -1639,6 +1854,90 @@ def review_message(message_id: str, payload: MessageReviewRequest) -> dict:
         append_message_review_log(draft, payload.decision, payload.note, reviewed_at)
         updated = db.message_drafts.find_one({"_id": draft["_id"]})
         return {"item": serialize(updated), "message": "Review saved. No message sent."}
+    finally:
+        client.close()
+
+
+@app.post("/messages/{message_id}/send")
+def send_message(message_id: str, payload: MessageSendRequest) -> dict:
+    client = get_client()
+    sent_at = utc_now()
+    try:
+        db = get_database(client)
+        draft = find_message_draft(db, message_id)
+        if not draft:
+            raise HTTPException(status_code=404, detail="Message draft not found.")
+        if draft.get("review_status") != "approved":
+            raise HTTPException(status_code=422, detail=f"Send logging requires review_status=approved. Current review_status={draft.get('review_status', 'not_set')}.")
+        if draft.get("send_status") == "sent":
+            raise HTTPException(status_code=409, detail="This draft has already been marked sent.")
+
+        event = {
+            "channel": payload.channel,
+            "note": payload.note,
+            "sent_at": sent_at,
+            "logged_at": sent_at,
+            "manual": True,
+            "draft_id": draft["_id"],
+            "recipient_name": draft.get("recipient_name", ""),
+        }
+        db.message_drafts.update_one(
+            {"_id": draft["_id"]},
+            {
+                "$set": {
+                    "send_status": "sent",
+                    "sent_at": sent_at,
+                    "send_channel": payload.channel,
+                    "send_note": payload.note,
+                    "updated_at": sent_at,
+                },
+                "$push": {"send_events": event},
+            },
+        )
+        target_result = send_target_result(db, draft, payload.channel, payload.note, sent_at)
+        append_message_send_log(draft, payload.channel, payload.note, target_result, sent_at)
+        updated = db.message_drafts.find_one({"_id": draft["_id"]})
+        return {"item": serialize(updated), "message": f"Send logged. {target_result} SignalForge did not send this message."}
+    finally:
+        client.close()
+
+
+@app.post("/messages/{message_id}/response")
+def respond_to_message(message_id: str, payload: MessageResponseRequest) -> dict:
+    client = get_client()
+    responded_at = utc_now()
+    try:
+        db = get_database(client)
+        draft = find_message_draft(db, message_id)
+        if not draft:
+            raise HTTPException(status_code=404, detail="Message draft not found.")
+        if draft.get("send_status") != "sent":
+            raise HTTPException(status_code=422, detail=f"Response logging requires send_status=sent. Current send_status={draft.get('send_status', 'not_set')}.")
+
+        event = {
+            "outcome": payload.outcome,
+            "note": payload.note,
+            "responded_at": responded_at,
+            "logged_at": responded_at,
+            "draft_id": draft["_id"],
+            "recipient_name": draft.get("recipient_name", ""),
+        }
+        db.message_drafts.update_one(
+            {"_id": draft["_id"]},
+            {
+                "$set": {
+                    "response_status": payload.outcome,
+                    "response_note": payload.note,
+                    "responded_at": responded_at,
+                    "updated_at": responded_at,
+                },
+                "$push": {"response_events": event},
+            },
+        )
+        target_result = response_target_result(db, draft, payload.outcome, payload.note, responded_at)
+        append_message_response_log(draft, payload.outcome, payload.note, target_result, responded_at)
+        updated = db.message_drafts.find_one({"_id": draft["_id"]})
+        return {"item": serialize(updated), "message": f"Response logged. {target_result} No message sent. No calendar event created."}
     finally:
         client.close()
 
